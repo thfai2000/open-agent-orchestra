@@ -1,5 +1,0 @@
-apiVersion: v2
-name: infrastructure
-description: Shared infrastructure for AI Trader Simulation (Redis + namespace)
-version: 1.0.0
-appVersion: "4.0.0"

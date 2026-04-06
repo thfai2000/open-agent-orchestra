@@ -23,6 +23,16 @@ ui:
   port: 3002
   nodePort: 30002
 
+redis:
+  image: redis:7-alpine
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 100m
+    limits:
+      memory: 128Mi
+      cpu: 250m
+
 # Trading Platform API URL (for agent tools to fetch prices, execute trades, etc.)
 tradingApiUrl: "http://localhost:4001"
 

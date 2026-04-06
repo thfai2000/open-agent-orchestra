@@ -1,38 +1,16 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest';
 
-// Mock database before importing routes
 vi.mock('../src/database/index.js', () => ({
   db: {
     query: {
-      agents: {
-        findFirst: vi.fn(),
-        findMany: vi.fn().mockResolvedValue([]),
-      },
-      workflows: {
-        findFirst: vi.fn(),
-        findMany: vi.fn().mockResolvedValue([]),
-      },
-      workflowSteps: {
-        findMany: vi.fn().mockResolvedValue([]),
-      },
-      triggers: {
-        findFirst: vi.fn(),
-        findMany: vi.fn().mockResolvedValue([]),
-      },
-      workflowExecutions: {
-        findFirst: vi.fn(),
-        findMany: vi.fn().mockResolvedValue([]),
-      },
-      stepExecutions: {
-        findMany: vi.fn().mockResolvedValue([]),
-      },
-      agentCredentials: {
-        findFirst: vi.fn(),
-        findMany: vi.fn().mockResolvedValue([]),
-      },
-      webhookRegistrations: {
-        findFirst: vi.fn(),
-      },
+      agents: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+      workflows: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+      workflowSteps: { findMany: vi.fn().mockResolvedValue([]) },
+      triggers: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+      workflowExecutions: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+      stepExecutions: { findMany: vi.fn().mockResolvedValue([]) },
+      agentCredentials: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+      webhookRegistrations: { findFirst: vi.fn() },
     },
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -67,7 +45,6 @@ vi.mock('../src/database/index.js', () => ({
   },
 }));
 
-// Mock redis
 vi.mock('../src/services/redis.js', () => ({
   getRedisConnection: vi.fn().mockReturnValue({}),
   getRedisConnectionOpts: vi.fn().mockReturnValue({ host: 'localhost', port: 6379 }),
@@ -78,13 +55,8 @@ beforeAll(() => {
   process.env.ENCRYPTION_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 });
 
-describe('Agent API Server', () => {
-  it('should import and create Hono app', async () => {
-    const { app } = await import('../src/server.js');
-    expect(app).toBeDefined();
-  });
-
-  it('should respond to health check', async () => {
+describe('Health & infrastructure', () => {
+  it('responds to /health with status ok', async () => {
     const { app } = await import('../src/server.js');
     const res = await app.request('/health');
     expect(res.status).toBe(200);
@@ -94,15 +66,52 @@ describe('Agent API Server', () => {
     expect(json.version).toBe('4.0.0');
   });
 
-  it('should return 404 for unknown routes', async () => {
+  it('serves OpenAPI spec at /api/openapi.json', async () => {
+    const { app } = await import('../src/server.js');
+    const res = await app.request('/api/openapi.json');
+    expect(res.status).toBe(200);
+    const spec = await res.json();
+    expect(spec.openapi).toBeDefined();
+    expect(spec.info.title).toBeDefined();
+  });
+
+  it('returns 404 for unknown routes', async () => {
     const { app } = await import('../src/server.js');
     const res = await app.request('/api/nonexistent');
     expect(res.status).toBe(404);
   });
 });
 
+describe('Auth routes', () => {
+  it('rejects register with invalid email', async () => {
+    const { app } = await import('../src/server.js');
+    const res = await app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'invalid', password: '12345678', name: 'Test' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects register with short password', async () => {
+    const { app } = await import('../src/server.js');
+    const res = await app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'test@example.com', password: '123', name: 'Test' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects /me without auth token', async () => {
+    const { app } = await import('../src/server.js');
+    const res = await app.request('/api/auth/me');
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('Agent routes', () => {
-  it('should reject creating an agent without auth', async () => {
+  it('rejects creating an agent without auth', async () => {
     const { app } = await import('../src/server.js');
     const res = await app.request('/api/agents', {
       method: 'POST',
@@ -112,25 +121,25 @@ describe('Agent routes', () => {
     expect(res.status).toBe(401);
   });
 
-  it('should reject creating an agent with invalid data', async () => {
+  it('rejects creating an agent with invalid data (missing name after auth)', async () => {
     const { createJwt } = await import('@ai-trader/shared');
-    const token = await createJwt({ userId: '550e8400-e29b-41d4-a716-446655440000', email: 'test@example.com', name: 'Test' });
-
+    const token = await createJwt({
+      userId: '550e8400-e29b-41d4-a716-446655440000',
+      email: 'test@example.com',
+      name: 'Test',
+    });
     const { app } = await import('../src/server.js');
     const res = await app.request('/api/agents', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({}), // missing name
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({}),
     });
     expect(res.status).toBe(400);
   });
 });
 
 describe('Workflow routes', () => {
-  it('should reject creating a workflow without auth', async () => {
+  it('rejects creating a workflow without auth', async () => {
     const { app } = await import('../src/server.js');
     const res = await app.request('/api/workflows', {
       method: 'POST',
@@ -141,28 +150,32 @@ describe('Workflow routes', () => {
   });
 });
 
-describe('Credentials routes', () => {
-  it('should reject credentials without auth', async () => {
+describe('Credential routes', () => {
+  it('rejects credential creation without auth', async () => {
     const { app } = await import('../src/server.js');
     const res = await app.request('/api/credentials', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: '550e8400-e29b-41d4-a716-446655440000', key: 'API_KEY', value: 'test' }),
+      body: JSON.stringify({
+        agentId: '550e8400-e29b-41d4-a716-446655440000',
+        key: 'API_KEY',
+        value: 'test',
+      }),
     });
     expect(res.status).toBe(401);
   });
 
-  it('should reject credentials with invalid key format', async () => {
+  it('rejects credential with invalid key format after auth', async () => {
     const { createJwt } = await import('@ai-trader/shared');
-    const token = await createJwt({ userId: '550e8400-e29b-41d4-a716-446655440000', email: 'test@example.com', name: 'Test' });
-
+    const token = await createJwt({
+      userId: '550e8400-e29b-41d4-a716-446655440000',
+      email: 'test@example.com',
+      name: 'Test',
+    });
     const { app } = await import('../src/server.js');
     const res = await app.request('/api/credentials', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
       body: JSON.stringify({
         agentId: '550e8400-e29b-41d4-a716-446655440000',
         key: 'invalid-key-lowercase',
@@ -174,7 +187,7 @@ describe('Credentials routes', () => {
 });
 
 describe('Trigger routes', () => {
-  it('should reject trigger creation without auth', async () => {
+  it('rejects trigger creation without auth', async () => {
     const { app } = await import('../src/server.js');
     const res = await app.request('/api/triggers', {
       method: 'POST',
@@ -186,9 +199,17 @@ describe('Trigger routes', () => {
 });
 
 describe('Execution routes', () => {
-  it('should reject execution list without auth', async () => {
+  it('requires auth for execution list', async () => {
     const { app } = await import('../src/server.js');
     const res = await app.request('/api/executions');
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('Supervisor routes', () => {
+  it('requires auth for supervisor endpoint', async () => {
+    const { app } = await import('../src/server.js');
+    const res = await app.request('/api/supervisor');
     expect(res.status).toBe(401);
   });
 });
