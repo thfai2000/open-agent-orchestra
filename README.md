@@ -9,7 +9,7 @@ Agents are defined as Git-hosted markdown files with skills. The platform clones
 - **Agent Management** — Define agents as Git repos with markdown instructions and skills
 - **Workflow Engine** — Multi-step workflows with sequential Copilot sessions
 - **5 Built-in Tools** — Self-scheduling, webhook management, decision audit, pgvector memory
-- **13 MCP Trading Tools** — Market data, trading, portfolio, news, blogs via Trading Platform MCP server
+- **MCP Server Integration** — Install and configure any MCP server per-agent for domain-specific tools
 - **Trigger System** — Cron schedules, webhooks (HMAC-SHA256), events, manual triggers
 - **Memory System** — Long-term agent memory with pgvector semantic search
 - **Credential Vault** — AES-256-GCM encrypted credential storage per agent
@@ -25,15 +25,15 @@ Agents are defined as Git-hosted markdown files with skills. The platform clones
 │  port 3002  │     │  port 4002  │     └─────────────────┘
 └─────────────┘     │             │
                     │  ┌────────┐ │     ┌─────────────────┐
-                    │  │BullMQ  │─┤     │  Trading MCP    │
-                    │  │Workers │ │────▶│  Server (stdio) │
-                    │  └────────┘ │     │  13 tools       │
-                    └──────┬──────┘     └───────┬─────────┘
-                           │                    │ HTTP
-              ┌────────────┼───────────┐ ┌──────▼──────────┐
-              │            │           │ │ Trading API     │
-        ┌─────────┐ ┌─────────┐ ┌─────────┐ │ (Hono, :4001)  │
-        │PostgreSQL│ │  Redis  │ │Git Repos│ └────────────────┘
+                    │  │BullMQ  │─┤     │  MCP Servers    │
+                    │  │Workers │ │────▶│  (stdio, any)   │
+                    │  └────────┘ │     │  user-installed  │
+                    └──────┬──────┘     └─────────────────┘
+                           │
+              ┌────────────┼───────────┐
+              │            │           │
+        ┌─────────┐ ┌─────────┐ ┌─────────┐
+        │PostgreSQL│ │  Redis  │ │Git Repos│
         │+pgvector │ │ (Queue) │ │ (Agent  │
         └─────────┘ └─────────┘ │  Files) │
                                 └─────────┘
@@ -42,8 +42,28 @@ Agents are defined as Git-hosted markdown files with skills. The platform clones
 ### Tool Architecture
 
 - **5 Built-in tools** operate on agent_db (triggers, decisions, memory)
-- **13 MCP trading tools** are consumed from the Trading Platform via Model Context Protocol (stdio transport)
-- MCP tools are loaded on-demand only when agent credentials include `TRADING_API_KEY` or `TRADER_ID`
+- **MCP tools** are loaded per-agent from user-configured MCP servers via Model Context Protocol (stdio transport)
+- Each agent can have multiple MCP servers configured, loaded on-demand during workflow execution
+
+### MCP Server Management
+
+Users can install any MCP-compliant server per-agent through the API:
+
+```bash
+# Add an MCP server to an agent
+POST /api/mcp-servers
+{
+  "agentId": "...",
+  "name": "My MCP Server",
+  "command": "node",
+  "args": ["--import", "tsx", "path/to/mcp-server.ts"],
+  "envMapping": { "API_KEY": "API_KEY", "API_URL": "API_URL" },
+  "writeTools": ["dangerous_action"],
+  "isEnabled": true
+}
+```
+
+The `envMapping` maps agent credential keys to environment variables passed to the MCP server process.
 
 ## Quick Start
 

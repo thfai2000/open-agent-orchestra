@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { eq, and, sql } from 'drizzle-orm';
 import { createLogger } from '@ai-trader/shared';
 import { db } from '../database/index.js';
-import { triggers, webhookRegistrations, tradeDecisions, agentMemories } from '../database/schema.js';
+import { triggers, webhookRegistrations, agentDecisions, agentMemories } from '../database/schema.js';
 import { generateEmbedding } from './embedding-service.js';
 
 const logger = createLogger('agent-tools');
@@ -23,11 +23,11 @@ export interface AgentToolContext {
  * Creates the set of **built-in** tools available to agents during Copilot sessions.
  *
  * These tools operate on the agent-orchestra's own database (agent_db).
- * Trading/market-data tools are provided externally via MCP from the Trading Platform.
+ * Domain-specific tools are provided externally via MCP servers configured per-agent.
  *
  * Built-in tools:
- *   - record_trade_decision — Audit trail for trade decisions
- *   - schedule_next_wakeup  — Self-scheduling (cron triggers)
+ *   - record_decision        — Audit trail for agent decisions
+ *   - schedule_next_wakeup   — Self-scheduling (cron triggers)
  *   - manage_webhook_trigger — Webhook lifecycle management
  *   - memory_store           — Store semantic memories (pgvector)
  *   - memory_retrieve        — Retrieve memories via similarity search
@@ -171,70 +171,69 @@ export function createAgentTools(
 
     // ── Decision Audit Trail ─────────────────────────────────────────
 
-    defineTool('record_trade_decision', {
+    defineTool('record_decision', {
       description:
-        'Record a full trade decision with reasoning, signals, confidence level, and outcome. Creates an audit trail for post-analysis.',
+        'Record a decision with reasoning and outcome. Creates an audit trail for post-analysis. Use for any significant agent decision.',
       parameters: z.object({
-        symbol: z.string().describe('Stock symbol'),
-        side: z.enum(['buy', 'sell', 'hold']).describe('Decision direction'),
-        quantity: z.number().int().min(0).describe('Planned quantity (0 for hold)'),
+        category: z.string().describe('Decision category (e.g. "trade", "analysis", "action", "review")'),
+        action: z.string().describe('Action taken or recommended (e.g. "buy", "approve", "escalate")'),
+        summary: z.string().optional().describe('Brief human-readable summary of the decision'),
         confidence: z.number().min(0).max(1).describe('Confidence level (0-1)'),
         signals: z
           .array(z.string())
-          .describe('List of signals that led to this decision'),
+          .describe('List of signals or factors that led to this decision'),
         reasoning: z.string().describe('Full reasoning text'),
-        riskAssessment: z.string().optional().describe('Risk assessment summary'),
+        details: z.record(z.unknown()).optional().describe('Additional structured data specific to this decision'),
         outcome: z
           .enum(['executed', 'rejected', 'skipped'])
           .optional()
           .describe('What happened with this decision'),
-        tradeId: z.string().optional().describe('Trade ID if executed'),
+        referenceId: z.string().optional().describe('External reference ID (e.g. order ID, ticket ID)'),
       }),
       handler: async ({
-        symbol,
-        side,
-        quantity,
+        category,
+        action,
+        summary,
         confidence,
         signals,
         reasoning,
-        riskAssessment,
+        details,
         outcome,
-        tradeId,
+        referenceId,
       }: {
-        symbol: string;
-        side: 'buy' | 'sell' | 'hold';
-        quantity: number;
+        category: string;
+        action: string;
+        summary?: string;
         confidence: number;
         signals: string[];
         reasoning: string;
-        riskAssessment?: string;
+        details?: Record<string, unknown>;
         outcome?: string;
-        tradeId?: string;
+        referenceId?: string;
       }) => {
         if (!context?.agentId) return { error: 'No agent context available' };
-        logger.info({ symbol, side, quantity, confidence, agentId: context.agentId }, 'Tool: record_trade_decision');
+        logger.info({ category, action, confidence, agentId: context.agentId }, 'Tool: record_decision');
 
         const [decision] = await db
-          .insert(tradeDecisions)
+          .insert(agentDecisions)
           .values({
             agentId: context.agentId,
             executionId: context.executionId,
-            symbol,
-            side,
-            quantity,
-            decision: { confidence, signals, reasoning, riskAssessment },
+            category,
+            action,
+            summary: summary ?? null,
+            decision: { confidence, signals, reasoning, details },
             outcome: outcome ?? null,
-            tradeId: tradeId ?? null,
+            referenceId: referenceId ?? null,
           })
-          .returning({ id: tradeDecisions.id, createdAt: tradeDecisions.createdAt });
+          .returning({ id: agentDecisions.id, createdAt: agentDecisions.createdAt });
 
         return {
           recorded: true,
           decisionId: decision.id,
           createdAt: decision.createdAt,
-          symbol,
-          side,
-          quantity,
+          category,
+          action,
           confidence,
         };
       },
@@ -244,14 +243,14 @@ export function createAgentTools(
 
     defineTool('memory_store', {
       description:
-        'Store a memory with semantic embedding for later retrieval. Use this to remember important trade scenarios, market insights, strategy notes, or lessons learned.',
+        'Store a memory with semantic embedding for later retrieval. Use this to remember important observations, insights, strategies, or lessons learned.',
       parameters: z.object({
-        content: z.string().describe('The memory content to store (e.g. market observation, trade reasoning)'),
+        content: z.string().describe('The memory content to store (e.g. observation, reasoning, insight)'),
         memoryType: z
-          .enum(['trade_scenario', 'market_insight', 'strategy_note', 'lesson_learned', 'general'])
+          .enum(['observation', 'insight', 'strategy', 'lesson_learned', 'general'])
           .default('general')
           .describe('Type of memory'),
-        tags: z.array(z.string()).optional().describe('Tags for filtering (e.g. ["AAPL", "bearish", "earnings"])'),
+        tags: z.array(z.string()).optional().describe('Tags for filtering (e.g. ["important", "recurring"])'),
         metadata: z.record(z.unknown()).optional().describe('Additional structured data'),
       }),
       handler: async ({
@@ -261,7 +260,7 @@ export function createAgentTools(
         metadata,
       }: {
         content: string;
-        memoryType: 'trade_scenario' | 'market_insight' | 'strategy_note' | 'lesson_learned' | 'general';
+        memoryType: 'observation' | 'insight' | 'strategy' | 'lesson_learned' | 'general';
         tags?: string[];
         metadata?: Record<string, unknown>;
       }) => {
@@ -295,11 +294,11 @@ export function createAgentTools(
 
     defineTool('memory_retrieve', {
       description:
-        'Retrieve relevant memories using semantic search. Finds memories similar to the query using vector similarity. Use this to recall past trade scenarios, market conditions, or learned strategies.',
+        'Retrieve relevant memories using semantic search. Finds memories similar to the query using vector similarity. Use this to recall past observations, decisions, or strategies.',
       parameters: z.object({
-        query: z.string().describe('Search query describing what you want to remember (e.g. "bearish AAPL earnings miss")'),
+        query: z.string().describe('Search query describing what you want to remember'),
         memoryType: z
-          .enum(['trade_scenario', 'market_insight', 'strategy_note', 'lesson_learned', 'general'])
+          .enum(['observation', 'insight', 'strategy', 'lesson_learned', 'general'])
           .optional()
           .describe('Filter by memory type'),
         tags: z.array(z.string()).optional().describe('Filter by tags (matches any)'),

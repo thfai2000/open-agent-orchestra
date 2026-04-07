@@ -9,32 +9,44 @@
               <NuxtLink to="/agents" class="text-sm text-muted-foreground hover:text-foreground transition">Agents</NuxtLink>
               <NuxtLink to="/workflows" class="text-sm text-muted-foreground hover:text-foreground transition">Workflows</NuxtLink>
               <NuxtLink to="/executions" class="text-sm text-muted-foreground hover:text-foreground transition">Executions</NuxtLink>
-              <NuxtLink to="/credentials" class="text-sm text-muted-foreground hover:text-foreground transition">Credentials</NuxtLink>
+              <NuxtLink to="/variables" class="text-sm text-muted-foreground hover:text-foreground transition">Variables</NuxtLink>
+              <NuxtLink to="/plugins" class="text-sm text-muted-foreground hover:text-foreground transition">Plugins</NuxtLink>
+              <NuxtLink to="/admin/quotas" class="text-sm text-muted-foreground hover:text-foreground transition">Quotas</NuxtLink>
+              <template v-if="user?.role === 'admin'">
+                <span class="text-border">|</span>
+                <NuxtLink to="/admin/users" class="text-sm text-muted-foreground hover:text-foreground transition">Users</NuxtLink>
+                <NuxtLink to="/admin/models" class="text-sm text-muted-foreground hover:text-foreground transition">Models</NuxtLink>
+              </template>
             </div>
           </div>
           <div class="hidden md:flex items-center gap-4">
             <template v-if="isAuthenticated">
-              <span class="text-sm text-muted-foreground">{{ user?.name }}</span>
+              <span class="text-sm text-muted-foreground">{{ user?.name }} <span class="text-xs">({{ user?.role === 'admin' ? 'Admin' : 'Creator' }})</span></span>
               <button @click="logout" class="text-sm text-muted-foreground hover:text-foreground transition">Logout</button>
             </template>
             <template v-else>
               <NuxtLink to="/login" class="text-sm text-muted-foreground hover:text-foreground transition">Login</NuxtLink>
             </template>
           </div>
-          <!-- Mobile menu button -->
           <button v-if="isAuthenticated" @click="mobileMenuOpen = !mobileMenuOpen" class="md:hidden p-2 rounded-md hover:bg-muted">
             <span class="text-lg">☰</span>
           </button>
         </div>
       </div>
-      <!-- Mobile menu -->
       <div v-if="mobileMenuOpen && isAuthenticated" class="md:hidden border-t border-border bg-card px-4 py-3 space-y-2">
         <NuxtLink to="/agents" class="block text-sm py-1.5 text-muted-foreground hover:text-foreground" @click="mobileMenuOpen = false">Agents</NuxtLink>
         <NuxtLink to="/workflows" class="block text-sm py-1.5 text-muted-foreground hover:text-foreground" @click="mobileMenuOpen = false">Workflows</NuxtLink>
         <NuxtLink to="/executions" class="block text-sm py-1.5 text-muted-foreground hover:text-foreground" @click="mobileMenuOpen = false">Executions</NuxtLink>
-        <NuxtLink to="/credentials" class="block text-sm py-1.5 text-muted-foreground hover:text-foreground" @click="mobileMenuOpen = false">Credentials</NuxtLink>
+        <NuxtLink to="/variables" class="block text-sm py-1.5 text-muted-foreground hover:text-foreground" @click="mobileMenuOpen = false">Variables</NuxtLink>
+        <NuxtLink to="/plugins" class="block text-sm py-1.5 text-muted-foreground hover:text-foreground" @click="mobileMenuOpen = false">Plugins</NuxtLink>
+        <NuxtLink to="/admin/quotas" class="block text-sm py-1.5 text-muted-foreground hover:text-foreground" @click="mobileMenuOpen = false">Quotas</NuxtLink>
+        <template v-if="user?.role === 'admin'">
+          <hr class="border-border" />
+          <NuxtLink to="/admin/users" class="block text-sm py-1.5 text-muted-foreground hover:text-foreground" @click="mobileMenuOpen = false">Users</NuxtLink>
+          <NuxtLink to="/admin/models" class="block text-sm py-1.5 text-muted-foreground hover:text-foreground" @click="mobileMenuOpen = false">Models</NuxtLink>
+        </template>
         <hr class="border-border" />
-        <span class="block text-sm text-muted-foreground py-1">{{ user?.name }}</span>
+        <span class="block text-sm text-muted-foreground py-1">{{ user?.name }} <span class="text-xs">({{ user?.role === 'admin' ? 'Admin' : 'Creator' }})</span></span>
         <button @click="logout; mobileMenuOpen = false" class="text-sm text-destructive">Logout</button>
       </div>
     </nav>
@@ -55,6 +67,8 @@ const mobileMenuOpen = ref(false);
   --foreground: 222.2 84% 4.9%;
   --card: 0 0% 100%;
   --card-foreground: 222.2 84% 4.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
   --primary: 262.1 83.3% 57.8%;
   --primary-foreground: 210 40% 98%;
   --secondary: 210 40% 96%;
@@ -66,6 +80,8 @@ const mobileMenuOpen = ref(false);
   --destructive: 0 84.2% 60.2%;
   --destructive-foreground: 210 40% 98%;
   --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 262.1 83.3% 57.8%;
   --radius: 0.5rem;
 }
 </style>

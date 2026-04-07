@@ -1,56 +1,58 @@
 <template>
   <div>
-    <NuxtLink to="/executions" class="text-sm text-muted-foreground hover:text-foreground mb-4 inline-block">← Back to Executions</NuxtLink>
+    <Breadcrumb>
+      <BreadcrumbList>
+        <BreadcrumbItem><BreadcrumbLink href="/">Home</BreadcrumbLink></BreadcrumbItem>
+        <BreadcrumbSeparator />
+        <BreadcrumbItem><BreadcrumbLink href="/executions">Executions</BreadcrumbLink></BreadcrumbItem>
+        <BreadcrumbSeparator />
+        <BreadcrumbItem><BreadcrumbPage>{{ execution?.id?.substring(0, 8) || 'Loading' }}…</BreadcrumbPage></BreadcrumbItem>
+      </BreadcrumbList>
+    </Breadcrumb>
 
-    <div v-if="execution" class="space-y-6">
+    <div v-if="execution" class="space-y-6 mt-4">
       <div class="flex items-center justify-between">
         <h1 class="text-2xl font-bold">Execution {{ execution.id.substring(0, 8) }}…</h1>
-        <span :class="{
-          'text-green-600': execution.status === 'completed',
-          'text-red-600': execution.status === 'failed',
-          'text-yellow-600': execution.status === 'running',
-          'text-gray-500': execution.status === 'pending' || execution.status === 'cancelled',
-        }" class="text-sm font-semibold uppercase px-3 py-1 rounded-full border border-current">
-          {{ execution.status }}
-        </span>
-      </div>
-
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div class="p-3 rounded border border-border bg-card">
-          <p class="text-xs text-muted-foreground">Triggered By</p>
-          <p class="font-medium">{{ execution.triggeredBy }}</p>
-        </div>
-        <div class="p-3 rounded border border-border bg-card">
-          <p class="text-xs text-muted-foreground">Started</p>
-          <p class="font-medium text-sm">{{ execution.startedAt ? new Date(execution.startedAt).toLocaleString() : '—' }}</p>
-        </div>
-        <div class="p-3 rounded border border-border bg-card">
-          <p class="text-xs text-muted-foreground">Completed</p>
-          <p class="font-medium text-sm">{{ execution.completedAt ? new Date(execution.completedAt).toLocaleString() : '—' }}</p>
-        </div>
-        <div class="p-3 rounded border border-border bg-card">
-          <p class="text-xs text-muted-foreground">Steps</p>
-          <p class="font-medium">{{ steps.length }}</p>
+        <div class="flex items-center gap-3">
+          <Button v-if="execution.status === 'failed'" variant="outline" :disabled="retrying" @click="handleRetry">{{ retrying ? 'Retrying…' : 'Retry from Failed Step' }}</Button>
+          <Badge :variant="execution.status === 'completed' ? 'default' : execution.status === 'failed' ? 'destructive' : 'secondary'" class="uppercase text-xs px-3 py-1">{{ execution.status }}</Badge>
         </div>
       </div>
 
-      <div v-if="workflow" class="p-3 rounded border border-border bg-card">
-        <p class="text-xs text-muted-foreground">Workflow</p>
-        <p class="font-medium">{{ workflow.name }}</p>
+      <div v-if="retryResult" class="p-3 rounded-md bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 text-sm">
+        Retry execution created! Execution ID: {{ retryResult.id?.substring(0, 8) }}…
+        <NuxtLink :to="`/executions/${retryResult.id}`" class="text-primary hover:underline ml-2">View →</NuxtLink>
       </div>
 
-      <div v-if="execution.errorMessage" class="p-4 rounded-lg border border-destructive bg-destructive/10">
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <Card><CardContent class="pt-4"><p class="text-xs text-muted-foreground">Triggered By</p><p class="font-medium">{{ execution.triggerMetadata?.type || 'unknown' }}</p></CardContent></Card>
+        <Card><CardContent class="pt-4"><p class="text-xs text-muted-foreground">Workflow Version</p><p class="font-medium font-mono">v{{ execution.workflowVersion || '?' }}</p></CardContent></Card>
+        <Card><CardContent class="pt-4"><p class="text-xs text-muted-foreground">Started</p><p class="font-medium text-sm">{{ execution.startedAt ? new Date(execution.startedAt).toLocaleString() : '—' }}</p></CardContent></Card>
+        <Card><CardContent class="pt-4"><p class="text-xs text-muted-foreground">Completed</p><p class="font-medium text-sm">{{ execution.completedAt ? new Date(execution.completedAt).toLocaleString() : '—' }}</p></CardContent></Card>
+        <Card><CardContent class="pt-4"><p class="text-xs text-muted-foreground">Steps</p><p class="font-medium">{{ execution.currentStep || 0 }} / {{ execution.totalSteps || steps.length }}</p></CardContent></Card>
+      </div>
+
+      <div v-if="execution.triggerMetadata?.retryOf" class="p-3 rounded border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 text-sm">
+        <span class="font-medium">Retry of:</span>
+        <NuxtLink :to="`/executions/${execution.triggerMetadata.retryOf}`" class="text-primary hover:underline ml-1">{{ String(execution.triggerMetadata.retryOf).substring(0, 8) }}…</NuxtLink>
+      </div>
+
+      <Card v-if="workflow">
+        <CardContent class="pt-4">
+          <p class="text-xs text-muted-foreground">Workflow</p>
+          <NuxtLink :to="`/workflows/${workflow.id}`" class="font-medium hover:text-primary">{{ workflow.name }}</NuxtLink>
+        </CardContent>
+      </Card>
+
+      <div v-if="execution.error" class="p-4 rounded-lg border border-destructive bg-destructive/10">
         <p class="font-medium text-destructive">Error</p>
-        <p class="text-sm mt-1">{{ execution.errorMessage }}</p>
+        <p class="text-sm mt-1">{{ execution.error }}</p>
       </div>
 
       <h2 class="text-xl font-bold">Step Execution Trace</h2>
       <div class="space-y-4">
-        <div v-for="(step, idx) in steps" :key="step.id"
-          class="rounded-lg border border-border bg-card overflow-hidden">
-          <!-- Step header -->
-          <div class="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/30"
-            @click="toggleStep(step.id)">
+        <Card v-for="(step, idx) in steps" :key="step.id">
+          <div class="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/30" @click="toggleStep(step.id)">
             <div class="flex items-center gap-3">
               <span class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold"
                 :class="{
@@ -65,79 +67,62 @@
               </div>
             </div>
             <div class="flex items-center gap-3">
-              <span v-if="step.startedAt && step.completedAt" class="text-xs text-muted-foreground">
-                {{ ((new Date(step.completedAt).getTime() - new Date(step.startedAt).getTime()) / 1000).toFixed(1) }}s
-              </span>
-              <span :class="{
-                'text-green-600': step.status === 'completed',
-                'text-red-600': step.status === 'failed',
-                'text-yellow-600': step.status === 'running',
-                'text-gray-500': step.status === 'pending' || step.status === 'skipped',
-              }" class="text-xs font-semibold uppercase">{{ step.status }}</span>
+              <span v-if="step.startedAt && step.completedAt" class="text-xs text-muted-foreground">{{ ((new Date(step.completedAt).getTime() - new Date(step.startedAt).getTime()) / 1000).toFixed(1) }}s</span>
+              <Badge :variant="step.status === 'completed' ? 'default' : step.status === 'failed' ? 'destructive' : 'secondary'" class="uppercase text-xs">{{ step.status }}</Badge>
               <span class="text-muted-foreground text-xs">{{ expandedSteps.has(step.id) ? '▼' : '▶' }}</span>
             </div>
           </div>
 
-          <!-- Step details (collapsible) -->
-          <div v-if="expandedSteps.has(step.id)" class="border-t border-border p-4 space-y-3">
-            <div v-if="step.inputPrompt">
-              <p class="text-xs font-medium text-muted-foreground mb-1">Input Prompt</p>
-              <pre class="bg-muted p-3 rounded text-xs whitespace-pre-wrap max-h-48 overflow-y-auto">{{ step.inputPrompt }}</pre>
+          <CardContent v-if="expandedSteps.has(step.id)" class="border-t border-border space-y-3">
+            <div v-if="step.resolvedPrompt">
+              <p class="text-xs font-medium text-muted-foreground mb-1">Resolved Prompt</p>
+              <pre class="bg-muted p-3 rounded text-xs whitespace-pre-wrap max-h-48 overflow-y-auto">{{ step.resolvedPrompt }}</pre>
             </div>
-
             <div v-if="step.output">
               <p class="text-xs font-medium text-muted-foreground mb-1">Output</p>
               <pre class="bg-muted p-3 rounded text-xs whitespace-pre-wrap max-h-48 overflow-y-auto">{{ step.output }}</pre>
             </div>
-
-            <div v-if="step.reasoning">
-              <p class="text-xs font-medium text-muted-foreground mb-1">Reasoning</p>
-              <pre class="bg-muted p-3 rounded text-xs whitespace-pre-wrap max-h-48 overflow-y-auto">{{ step.reasoning }}</pre>
-            </div>
-
-            <!-- Reasoning Trace (JSONB) -->
             <div v-if="step.reasoningTrace">
               <p class="text-xs font-medium text-muted-foreground mb-1">Reasoning Trace</p>
               <div class="space-y-2">
-                <!-- Tool calls -->
+                <div v-if="getTraceModel(step.reasoningTrace)" class="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>Model: <strong>{{ getTraceModel(step.reasoningTrace) }}</strong></span>
+                  <span v-if="getTraceReasoningEffort(step.reasoningTrace)">| Reasoning: <strong>{{ getTraceReasoningEffort(step.reasoningTrace) }}</strong></span>
+                </div>
                 <div v-if="getTraceToolCalls(step.reasoningTrace).length" class="space-y-2">
                   <p class="text-xs font-medium text-blue-600">Tool Calls</p>
-                  <div v-for="(call, i) in getTraceToolCalls(step.reasoningTrace)" :key="i"
-                    class="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 p-3 rounded text-xs">
-                    <div class="flex items-center gap-2 mb-1">
-                      <span class="font-mono font-bold text-blue-700 dark:text-blue-300">{{ call.tool || call.name || 'unknown' }}</span>
-                      <span v-if="call.duration" class="text-muted-foreground">({{ call.duration }}ms)</span>
-                    </div>
-                    <div v-if="call.input || call.arguments || call.params" class="mt-1">
-                      <span class="text-muted-foreground">Input:</span>
-                      <pre class="mt-1 whitespace-pre-wrap text-[11px]">{{ JSON.stringify(call.input || call.arguments || call.params, null, 2) }}</pre>
-                    </div>
-                    <div v-if="call.output || call.result" class="mt-1">
-                      <span class="text-muted-foreground">Output:</span>
-                      <pre class="mt-1 whitespace-pre-wrap text-[11px] max-h-32 overflow-y-auto">{{ JSON.stringify(call.output || call.result, null, 2) }}</pre>
-                    </div>
-                  </div>
+                  <Card v-for="(call, i) in getTraceToolCalls(step.reasoningTrace)" :key="i" class="bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800">
+                    <CardContent class="pt-3 text-xs">
+                      <div class="flex items-center gap-2 mb-1">
+                        <span class="font-mono font-bold text-blue-700 dark:text-blue-300">{{ call.tool || call.name || 'unknown' }}</span>
+                        <span v-if="call.duration" class="text-muted-foreground">({{ call.duration }}ms)</span>
+                      </div>
+                      <div v-if="call.input || call.arguments || call.params || call.args" class="mt-1">
+                        <span class="text-muted-foreground">Input:</span>
+                        <pre class="mt-1 whitespace-pre-wrap text-[11px]">{{ JSON.stringify(call.input || call.arguments || call.params || call.args, null, 2) }}</pre>
+                      </div>
+                      <div v-if="call.output || call.result" class="mt-1">
+                        <span class="text-muted-foreground">Output:</span>
+                        <pre class="mt-1 whitespace-pre-wrap text-[11px] max-h-32 overflow-y-auto">{{ JSON.stringify(call.output || call.result, null, 2) }}</pre>
+                      </div>
+                    </CardContent>
+                  </Card>
                 </div>
-                <!-- Raw trace fallback -->
-                <div v-else>
-                  <pre class="bg-muted p-3 rounded text-xs whitespace-pre-wrap max-h-64 overflow-y-auto">{{ JSON.stringify(step.reasoningTrace, null, 2) }}</pre>
-                </div>
+                <pre v-else class="bg-muted p-3 rounded text-xs whitespace-pre-wrap max-h-64 overflow-y-auto">{{ JSON.stringify(step.reasoningTrace, null, 2) }}</pre>
               </div>
             </div>
-
-            <div v-if="step.errorMessage" class="p-3 rounded border border-destructive bg-destructive/10">
-              <p class="text-xs text-destructive">{{ step.errorMessage }}</p>
+            <div v-if="step.error" class="p-3 rounded border border-destructive bg-destructive/10">
+              <p class="text-xs text-destructive">{{ step.error }}</p>
             </div>
-
             <div class="flex gap-4 text-xs text-muted-foreground">
               <span v-if="step.startedAt">Started: {{ new Date(step.startedAt).toLocaleString() }}</span>
               <span v-if="step.completedAt">Completed: {{ new Date(step.completedAt).toLocaleString() }}</span>
             </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
-    <p v-else class="text-muted-foreground">Execution not found.</p>
+    <p v-else class="text-muted-foreground mt-4">Execution not found.</p>
   </div>
 </template>
 
@@ -174,5 +159,39 @@ function getTraceToolCalls(trace: unknown): Array<Record<string, unknown>> {
     if (Array.isArray(t.calls)) return t.calls;
   }
   return [];
+}
+
+function getTraceModel(trace: unknown): string | null {
+  if (typeof trace === 'object' && trace !== null) {
+    return (trace as Record<string, unknown>).model as string ?? null;
+  }
+  return null;
+}
+
+function getTraceReasoningEffort(trace: unknown): string | null {
+  if (typeof trace === 'object' && trace !== null) {
+    return (trace as Record<string, unknown>).reasoningEffort as string ?? null;
+  }
+  return null;
+}
+
+// Retry failed execution
+const retrying = ref(false);
+const retryResult = ref<any>(null);
+
+async function handleRetry() {
+  retrying.value = true;
+  retryResult.value = null;
+  try {
+    const res = await $fetch<{ execution: any }>(`/api/executions/${executionId}/retry`, {
+      method: 'POST',
+      headers,
+    });
+    retryResult.value = res.execution;
+  } catch (e: any) {
+    alert(e?.data?.error || 'Failed to retry execution');
+  } finally {
+    retrying.value = false;
+  }
 }
 </script>

@@ -1,10 +1,11 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-nocheck — Copilot SDK's Tool/defineTool generics have incompatible Zod type constraints
 /**
- * MCP Client for connecting to the Trading Platform MCP server.
+ * Generic MCP Client for connecting to any MCP server via stdio transport.
  *
- * Spawns the trading-platform MCP server as a child process (stdio transport)
- * and converts its tools into Copilot SDK Tool[] format for agent sessions.
+ * Spawns an MCP server as a child process and converts its tools into
+ * Copilot SDK Tool[] format for agent sessions. Domain-agnostic — works
+ * with any MCP-compliant server.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -14,12 +15,17 @@ import { createLogger } from '@ai-trader/shared';
 
 const logger = createLogger('mcp-client');
 
-interface McpClientOptions {
-  /** Path to the MCP server entry point (e.g. tsx packages/trading-api/src/mcp-server.ts) */
+export interface McpServerConfig {
+  /** Display name for this MCP server */
+  name: string;
+  /** Command to spawn the MCP server process (e.g. "node", "npx", "python") */
   command: string;
+  /** Arguments for the command (e.g. ["--import", "tsx", "server.ts"]) */
   args: string[];
   /** Environment variables to pass to the MCP server process */
   env: Record<string, string>;
+  /** Tool names that require permission (write operations). Empty = all tools skip permission. */
+  writeTools?: string[];
 }
 
 interface McpToolSchema {
@@ -29,18 +35,18 @@ interface McpToolSchema {
 }
 
 /**
- * Connect to a Trading Platform MCP server via stdio and return Copilot SDK tools.
+ * Connect to an MCP server via stdio and return Copilot SDK tools.
  *
- * The returned tools proxy all calls through the MCP protocol to the trading platform.
+ * The returned tools proxy all calls through the MCP protocol to the server.
  * Call `cleanup()` when done to terminate the child process.
  */
-export async function createMcpTradingTools(
-  options: McpClientOptions,
+export async function connectToMcpServer(
+  config: McpServerConfig,
 ): Promise<{ tools: Tool[]; cleanup: () => Promise<void> }> {
   const transport = new StdioClientTransport({
-    command: options.command,
-    args: options.args,
-    env: { ...process.env, ...options.env } as Record<string, string>,
+    command: config.command,
+    args: config.args,
+    env: { ...process.env, ...config.env } as Record<string, string>,
   });
 
   const client = new Client({ name: 'agent-orchestra', version: '1.0.0' });
@@ -48,7 +54,9 @@ export async function createMcpTradingTools(
 
   // List all tools from the MCP server
   const { tools: mcpTools } = await client.listTools();
-  logger.info({ count: mcpTools.length }, 'Connected to Trading MCP server');
+  logger.info({ server: config.name, count: mcpTools.length }, 'Connected to MCP server');
+
+  const writeToolSet = new Set(config.writeTools ?? []);
 
   // Convert each MCP tool into a Copilot SDK tool
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -85,15 +93,14 @@ export async function createMcpTradingTools(
     }
 
     // Whether this tool needs permission (write operations)
-    const writeTools = ['execute_trade', 'publish_blog_post'];
-    const skipPermission = !writeTools.includes(mcpTool.name);
+    const skipPermission = !writeToolSet.has(mcpTool.name);
 
     return defineTool(mcpTool.name, {
       description: mcpTool.description ?? mcpTool.name,
       parameters: z.object(zodShape),
       skipPermission,
       handler: async (params: Record<string, unknown>) => {
-        logger.info({ tool: mcpTool.name, params }, `MCP tool call: ${mcpTool.name}`);
+        logger.info({ server: config.name, tool: mcpTool.name, params }, `MCP tool call: ${mcpTool.name}`);
         const result = await client.callTool({ name: mcpTool.name, arguments: params });
         // Extract text content from MCP result
         const contents = result.content as Array<{ type: string; text?: string }>;

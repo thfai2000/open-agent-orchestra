@@ -5,6 +5,7 @@ import {
   text,
   boolean,
   integer,
+  decimal,
   date,
   timestamp,
   pgEnum,
@@ -38,6 +39,8 @@ export const stepStatusEnum = pgEnum('step_status', [
   'failed',
   'skipped',
 ]);
+export const reasoningEffortEnum = pgEnum('reasoning_effort', ['high', 'medium', 'low']);
+export const variableTypeEnum = pgEnum('variable_type', ['property', 'credential']);
 
 // ─── Users (independent — Agent Platform owns its own identity) ──────
 
@@ -73,13 +76,15 @@ export const agents = pgTable('agents', {
 
 export const workflows = pgTable('workflows', {
   id: uuid('id').defaultRandom().primaryKey(),
-  agentId: uuid('agent_id')
-    .notNull()
-    .references(() => agents.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull(), // owner — workflows belong to a user, not an agent
   name: varchar('name', { length: 200 }).notNull(),
   description: text('description'),
   isActive: boolean('is_active').notNull().default(true),
   maxConcurrentExecutions: integer('max_concurrent_executions').notNull().default(1),
+  version: integer('version').notNull().default(1),
+  defaultAgentId: uuid('default_agent_id').references(() => agents.id), // workflow-level default agent
+  defaultModel: varchar('default_model', { length: 100 }), // workflow-level default model
+  defaultReasoningEffort: reasoningEffortEnum('default_reasoning_effort'), // workflow-level default
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -96,7 +101,10 @@ export const workflowSteps = pgTable(
     name: varchar('name', { length: 200 }).notNull(),
     promptTemplate: text('prompt_template').notNull(),
     stepOrder: integer('step_order').notNull(),
-    agentId: uuid('agent_id').references(() => agents.id), // optional override
+    agentId: uuid('agent_id')
+      .references(() => agents.id), // optional — falls back to workflow defaultAgentId
+    model: varchar('model', { length: 100 }), // Copilot model override (e.g. 'claude-sonnet-4-5')
+    reasoningEffort: reasoningEffortEnum('reasoning_effort'), // high/medium/low
     timeoutSeconds: integer('timeout_seconds').notNull().default(300),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -132,6 +140,8 @@ export const workflowExecutions = pgTable('workflow_executions', {
     .references(() => workflows.id, { onDelete: 'cascade' }),
   triggerId: uuid('trigger_id').references(() => triggers.id),
   triggerMetadata: jsonb('trigger_metadata'),
+  workflowVersion: integer('workflow_version'), // snapshot of workflow.version at trigger time
+  workflowSnapshot: jsonb('workflow_snapshot'), // full snapshot of workflow + steps config
   status: executionStatusEnum('status').notNull().default('pending'),
   currentStep: integer('current_step'),
   totalSteps: integer('total_steps'),
@@ -161,10 +171,10 @@ export const stepExecutions = pgTable('step_executions', {
   error: text('error'),
 });
 
-// ─── Agent Credentials (key-value store) ─────────────────────────────
+// ─── Agent Variables (key-value store, agent-level) ──────────────────
 
-export const agentCredentials = pgTable(
-  'agent_credentials',
+export const agentVariables = pgTable(
+  'agent_variables',
   {
     id: uuid('id').defaultRandom().primaryKey(),
     agentId: uuid('agent_id')
@@ -172,12 +182,36 @@ export const agentCredentials = pgTable(
       .references(() => agents.id, { onDelete: 'cascade' }),
     key: varchar('key', { length: 100 }).notNull(),
     valueEncrypted: text('value_encrypted').notNull(),
+    variableType: variableTypeEnum('variable_type').notNull().default('credential'),
+    injectAsEnvVariable: boolean('inject_as_env_variable').notNull().default(false),
     description: varchar('description', { length: 300 }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
-    agentKeyIdx: uniqueIndex('agent_credentials_agent_key_idx').on(table.agentId, table.key),
+    agentKeyIdx: uniqueIndex('agent_variables_agent_key_idx').on(table.agentId, table.key),
+  }),
+);
+
+// ─── User Variables (key-value store, user-level) ───────────────────
+
+export const userVariables = pgTable(
+  'user_variables',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    key: varchar('key', { length: 100 }).notNull(),
+    valueEncrypted: text('value_encrypted').notNull(),
+    variableType: variableTypeEnum('variable_type').notNull().default('credential'),
+    injectAsEnvVariable: boolean('inject_as_env_variable').notNull().default(false),
+    description: varchar('description', { length: 300 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userKeyIdx: uniqueIndex('user_variables_user_key_idx').on(table.userId, table.key),
   }),
 );
 
@@ -217,21 +251,82 @@ export const webhookRegistrations = pgTable('webhook_registrations', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// ─── Trade Decisions (Agent audit trail) ─────────────────────────────
+// ─── MCP Server Configurations (per-agent) ──────────────────────────
 
-export const tradeDecisions = pgTable('trade_decisions', {
+export const mcpServerConfigs = pgTable(
+  'mcp_server_configs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 100 }).notNull(),
+    description: varchar('description', { length: 500 }),
+    command: varchar('command', { length: 200 }).notNull(), // e.g. "node", "npx", "python"
+    args: jsonb('args').notNull().default([]), // e.g. ["--import", "tsx", "server.ts"]
+    envMapping: jsonb('env_mapping').notNull().default({}), // credential key → env var name mapping
+    isEnabled: boolean('is_enabled').notNull().default(true),
+    writeTools: jsonb('write_tools').notNull().default([]), // tool names that require permission
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    mcpServerAgentIdx: index('mcp_server_configs_agent_idx').on(table.agentId),
+  }),
+);
+
+// ─── Plugins (admin-managed registry) ────────────────────────────────
+
+export const plugins = pgTable('plugins', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 100 }).notNull(),
+  description: text('description'),
+  gitRepoUrl: varchar('git_repo_url', { length: 500 }).notNull(),
+  gitBranch: varchar('git_branch', { length: 100 }).notNull().default('main'),
+  githubTokenEncrypted: text('github_token_encrypted'),
+  manifestCache: jsonb('manifest_cache'), // cached plugin.json contents
+  isAllowed: boolean('is_allowed').notNull().default(false),
+  createdBy: uuid('created_by')
+    .notNull()
+    .references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ─── Agent Plugins (per-agent toggle) ────────────────────────────────
+
+export const agentPlugins = pgTable(
+  'agent_plugins',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    pluginId: uuid('plugin_id')
+      .notNull()
+      .references(() => plugins.id, { onDelete: 'cascade' }),
+    isEnabled: boolean('is_enabled').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    agentPluginIdx: uniqueIndex('agent_plugins_agent_plugin_idx').on(table.agentId, table.pluginId),
+  }),
+);
+
+// ─── Agent Decisions (audit trail) ───────────────────────────────────
+
+export const agentDecisions = pgTable('agent_decisions', {
   id: uuid('id').defaultRandom().primaryKey(),
   agentId: uuid('agent_id')
     .notNull()
     .references(() => agents.id, { onDelete: 'cascade' }),
   executionId: uuid('execution_id').references(() => workflowExecutions.id),
-  symbol: varchar('symbol', { length: 10 }).notNull(),
-  side: varchar('side', { length: 10 }).notNull(),
-  quantity: integer('quantity').notNull(),
-  price: varchar('price', { length: 30 }),
-  decision: jsonb('decision').notNull(), // full reasoning: signals, indicators, confidence, risk
+  category: varchar('category', { length: 50 }).notNull(), // e.g. "trade", "analysis", "action"
+  action: varchar('action', { length: 50 }).notNull(), // e.g. "buy", "sell", "approve", "reject"
+  summary: text('summary'), // brief human-readable summary
+  decision: jsonb('decision').notNull(), // full reasoning: signals, confidence, risk, etc.
   outcome: varchar('outcome', { length: 20 }), // executed, rejected, skipped
-  tradeId: varchar('trade_id', { length: 100 }), // reference to trading-api trade ID
+  referenceId: varchar('reference_id', { length: 100 }), // external reference ID
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -256,9 +351,9 @@ const vector = customType<{ data: number[]; driverData: string }>({
 // ─── Memory Type Enum ────────────────────────────────────────────────
 
 export const memoryTypeEnum = pgEnum('memory_type', [
-  'trade_scenario',
-  'market_insight',
-  'strategy_note',
+  'observation',
+  'insight',
+  'strategy',
   'lesson_learned',
   'general',
 ]);
@@ -283,5 +378,66 @@ export const agentMemories = pgTable(
   (table) => ({
     agentMemoriesAgentIdx: index('agent_memories_agent_idx').on(table.agentId),
     agentMemoriesTypeIdx: index('agent_memories_type_idx').on(table.agentId, table.memoryType),
+  }),
+);
+
+// ─── Models (admin-managed model registry with credit costs) ─────────
+
+export const models = pgTable('models', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 100 }).notNull().unique(),
+  provider: varchar('provider', { length: 50 }).notNull().default('github'),
+  description: text('description'),
+  creditCost: decimal('credit_cost', { precision: 10, scale: 2 }).notNull().default('1.00'),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ─── Global Quota Settings (admin-managed) ───────────────────────────
+
+export const globalQuotaSettings = pgTable('global_quota_settings', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  dailyCreditLimit: decimal('daily_credit_limit', { precision: 10, scale: 2 }),
+  monthlyCreditLimit: decimal('monthly_credit_limit', { precision: 10, scale: 2 }),
+  updatedBy: uuid('updated_by').references(() => users.id),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ─── User Quota Settings (self-managed per user) ─────────────────────
+
+export const userQuotaSettings = pgTable('user_quota_settings', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' })
+    .unique(),
+  dailyCreditLimit: decimal('daily_credit_limit', { precision: 10, scale: 2 }),
+  monthlyCreditLimit: decimal('monthly_credit_limit', { precision: 10, scale: 2 }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ─── Credit Usage (per-user, per-model, per-date tracking) ──────────
+
+export const creditUsage = pgTable(
+  'credit_usage',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    modelName: varchar('model_name', { length: 100 }).notNull(),
+    creditsConsumed: decimal('credits_consumed', { precision: 10, scale: 2 }).notNull().default('0'),
+    sessionCount: integer('session_count').notNull().default(0),
+    date: date('date').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    creditUsageUserModelDateIdx: uniqueIndex('credit_usage_user_model_date_idx').on(
+      table.userId,
+      table.modelName,
+      table.date,
+    ),
+    creditUsageUserDateIdx: index('credit_usage_user_date_idx').on(table.userId, table.date),
   }),
 );

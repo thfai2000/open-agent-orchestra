@@ -1,47 +1,58 @@
 <template>
   <div>
-    <h1 class="text-3xl font-bold mb-6">Workflow Executions</h1>
+    <Breadcrumb>
+      <BreadcrumbList>
+        <BreadcrumbItem><BreadcrumbLink href="/">Home</BreadcrumbLink></BreadcrumbItem>
+        <BreadcrumbSeparator />
+        <BreadcrumbItem><BreadcrumbPage>Executions</BreadcrumbPage></BreadcrumbItem>
+      </BreadcrumbList>
+    </Breadcrumb>
 
-    <div class="overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="border-b border-border">
-            <th class="text-left py-3 px-4 font-medium">Execution ID</th>
-            <th class="text-left py-3 px-4 font-medium">Workflow</th>
-            <th class="text-left py-3 px-4 font-medium">Trigger</th>
-            <th class="text-center py-3 px-4 font-medium">Status</th>
-            <th class="text-left py-3 px-4 font-medium">Started</th>
-            <th class="text-left py-3 px-4 font-medium">Completed</th>
-            <th class="text-left py-3 px-4 font-medium">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="exec in executions" :key="exec.id" class="border-b border-border hover:bg-muted/50">
-            <td class="py-3 px-4 font-mono text-xs">{{ exec.id.substring(0, 8) }}…</td>
-            <td class="py-3 px-4">{{ exec.workflowId?.substring(0, 8) }}…</td>
-            <td class="py-3 px-4 text-muted-foreground">{{ exec.triggeredBy }}</td>
-            <td class="py-3 px-4 text-center">
-              <span :class="{
-                'text-green-600': exec.status === 'completed',
-                'text-red-600': exec.status === 'failed',
-                'text-yellow-600': exec.status === 'running',
-                'text-gray-500': exec.status === 'pending' || exec.status === 'cancelled',
-              }" class="text-xs font-semibold uppercase">{{ exec.status }}</span>
-            </td>
-            <td class="py-3 px-4 text-muted-foreground text-xs">
-              {{ exec.startedAt ? new Date(exec.startedAt).toLocaleString() : '—' }}
-            </td>
-            <td class="py-3 px-4 text-muted-foreground text-xs">
-              {{ exec.completedAt ? new Date(exec.completedAt).toLocaleString() : '—' }}
-            </td>
-            <td class="py-3 px-4">
-              <NuxtLink :to="`/executions/${exec.id}`" class="text-primary hover:underline text-xs">Detail →</NuxtLink>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <p v-if="executions.length === 0" class="text-center text-muted-foreground py-8">No executions yet.</p>
-    </div>
+    <h1 class="text-3xl font-bold mt-4 mb-6">Workflow Executions</h1>
+
+    <Card>
+      <CardContent class="pt-6">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-border">
+                <th class="text-left py-3 px-4 font-medium">Execution ID</th>
+                <th class="text-left py-3 px-4 font-medium">Workflow</th>
+                <th class="text-center py-3 px-4 font-medium">Version</th>
+                <th class="text-left py-3 px-4 font-medium">Trigger</th>
+                <th class="text-center py-3 px-4 font-medium">Status</th>
+                <th class="text-left py-3 px-4 font-medium">Started</th>
+                <th class="text-left py-3 px-4 font-medium">Completed</th>
+                <th class="text-left py-3 px-4 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="exec in executions" :key="exec.id" class="border-b border-border hover:bg-muted/50">
+                <td class="py-3 px-4 font-mono text-xs">{{ exec.id.substring(0, 8) }}…</td>
+                <td class="py-3 px-4">{{ exec.workflowId?.substring(0, 8) }}…</td>
+                <td class="py-3 px-4 text-center">
+                  <Badge v-if="exec.workflowVersion" variant="outline" class="font-mono text-xs">v{{ exec.workflowVersion }}</Badge>
+                  <span v-else class="text-muted-foreground">—</span>
+                </td>
+                <td class="py-3 px-4 text-xs">
+                  <Badge variant="secondary">{{ exec.triggerMetadata?.type || 'manual' }}</Badge>
+                  <Badge v-if="exec.triggerMetadata?.retryOf" variant="outline" class="ml-1 text-amber-600">retry</Badge>
+                </td>
+                <td class="py-3 px-4 text-center">
+                  <Badge :variant="exec.status === 'completed' ? 'default' : exec.status === 'failed' ? 'destructive' : 'secondary'">{{ exec.status }}</Badge>
+                </td>
+                <td class="py-3 px-4 text-muted-foreground text-xs">{{ exec.startedAt ? new Date(exec.startedAt).toLocaleString() : '—' }}</td>
+                <td class="py-3 px-4 text-muted-foreground text-xs">{{ exec.completedAt ? new Date(exec.completedAt).toLocaleString() : '—' }}</td>
+                <td class="py-3 px-4">
+                  <NuxtLink :to="`/executions/${exec.id}`"><Button variant="ghost" size="sm" class="text-xs h-7">Detail →</Button></NuxtLink>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-if="executions.length === 0" class="text-center text-muted-foreground py-8">No executions yet.</p>
+        </div>
+      </CardContent>
+    </Card>
   </div>
 </template>
 

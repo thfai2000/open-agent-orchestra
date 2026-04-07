@@ -21,6 +21,7 @@ export async function authMiddleware(c: Context, next: Next): Promise<Response |
       userId: payload.userId,
       email: payload.email,
       name: payload.name,
+      role: payload.role,
     });
     await next();
   } catch {

@@ -30,7 +30,7 @@ auth.post('/register', async (c) => {
     .values({ email: body.email, passwordHash, name: body.name })
     .returning({ id: users.id, email: users.email, name: users.name, role: users.role });
 
-  const token = await createJwt({ userId: user.id, email: user.email, name: user.name });
+  const token = await createJwt({ userId: user.id, email: user.email, name: user.name, role: user.role });
   return c.json({ user, token }, 201);
 });
 
@@ -54,7 +54,7 @@ auth.post('/login', async (c) => {
     return c.json({ error: 'Invalid credentials' }, 401);
   }
 
-  const token = await createJwt({ userId: user.id, email: user.email, name: user.name });
+  const token = await createJwt({ userId: user.id, email: user.email, name: user.name, role: user.role });
   return c.json({
     user: { id: user.id, email: user.email, name: user.name, role: user.role },
     token,

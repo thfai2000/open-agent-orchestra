@@ -1,5 +1,5 @@
 import { db } from './index.js';
-import { agents, workflows, workflowSteps, triggers } from './schema.js';
+import { agents, workflows, workflowSteps, triggers, mcpServerConfigs } from './schema.js';
 import { createLogger } from '@ai-trader/shared';
 
 const logger = createLogger('agent-seed');
@@ -12,12 +12,12 @@ async function seed() {
     .insert(agents)
     .values({
       userId: '00000000-0000-0000-0000-000000000001', // placeholder user id
-      name: 'VeritasTrader',
-      description: 'A methodical trading agent that relies on verified information.',
-      gitRepoUrl: 'https://github.com/example/ai-trader-agent-normal',
+      name: 'SampleAgent',
+      description: 'A sample agent to demonstrate the platform capabilities.',
+      gitRepoUrl: 'https://github.com/example/my-agent',
       gitBranch: 'main',
       agentFilePath: '.github/agents/normal.md',
-      skillsPaths: ['skills/trading.md'],
+      skillsPaths: ['skills/domain.md'],
       status: 'active',
     })
     .onConflictDoNothing()
@@ -26,61 +26,74 @@ async function seed() {
   if (agent) {
     logger.info(`Created agent: ${agent.name}`);
 
-    // Create a sample workflow
+    // Create a sample MCP server config (example: Trading Platform)
+    await db.insert(mcpServerConfigs).values({
+      agentId: agent.id,
+      name: 'Trading Platform',
+      description: 'AI Trader Simulation MCP server for market data and trading',
+      command: 'node',
+      args: ['--import', 'tsx', 'packages/trading-api/src/mcp-server.ts'],
+      envMapping: {
+        TRADING_API_URL: 'TRADING_API_URL',
+        TRADING_API_KEY: 'TRADING_API_KEY',
+        TRADER_ID: 'TRADER_ID',
+      },
+      isEnabled: true,
+      writeTools: ['execute_trade', 'publish_blog_post'],
+    });
+
+    // Create a sample workflow (belongs to user, not agent)
     const [workflow] = await db
       .insert(workflows)
       .values({
-        agentId: agent.id,
-        name: 'Morning Trading Analysis',
-        description: 'Analyze market conditions and make trading decisions every weekday morning.',
+        userId: '00000000-0000-0000-0000-000000000001',
+        name: 'Morning Analysis',
+        description: 'Analyze data and generate a report every weekday morning.',
         isActive: true,
+        defaultAgentId: agent.id,
+        defaultModel: 'claude-sonnet-4',
+        defaultReasoningEffort: 'medium',
       })
       .returning();
 
-    // Create workflow steps
+    // Create workflow steps (each step references an agent)
     await db.insert(workflowSteps).values([
       {
         workflowId: workflow.id,
-        name: 'Analyze Market Conditions',
-        promptTemplate: `Analyze the current market conditions for the following symbols: AAPL, GOOG, MSFT, NVDA, TSLA.
+        agentId: agent.id,
+        name: 'Gather Data',
+        promptTemplate: `Gather and analyze the latest data relevant to your domain.
 
-For each symbol, provide:
-1. Current trend (bullish/bearish/neutral)
-2. Key support/resistance levels
-3. Recent news impact
-4. Technical indicator signals
+Provide a comprehensive analysis including:
+1. Current status and trends
+2. Key observations
+3. Notable changes since last analysis
 
-Use the Trading Platform API to fetch current prices and news.`,
+Use the available tools to fetch current data.`,
         stepOrder: 1,
         timeoutSeconds: 300,
       },
       {
         workflowId: workflow.id,
-        name: 'Make Trade Decisions',
-        promptTemplate: `Based on the following market analysis, decide which trades to make:
+        agentId: agent.id,
+        name: 'Make Decisions',
+        promptTemplate: `Based on the following analysis, decide what actions to take:
 
 <PRECEDENT_OUTPUT>
 
-Consider risk management rules:
-- No more than 3% of portfolio in a single trade
-- Maximum 5 trades per session
-- Always set mental stop-loss levels
-
-For each recommended trade, provide: symbol, side (buy/sell), quantity, and detailed reasoning.`,
+Consider risk management and constraints. For each recommended action, provide detailed reasoning.`,
         stepOrder: 2,
         timeoutSeconds: 300,
       },
       {
         workflowId: workflow.id,
-        name: 'Write Market Commentary',
-        promptTemplate: `Write a brief market commentary blog post based on the following analysis and trade decisions:
+        agentId: agent.id,
+        name: 'Generate Report',
+        promptTemplate: `Write a brief summary report based on the following analysis and decisions:
 
 <PRECEDENT_OUTPUT>
 
-Write in a professional but approachable tone. Include:
-- Key market observations
-- Rationale behind any trades made
-- Outlook for the rest of the day`,
+Write in a professional tone. Include key observations, actions taken, and outlook.`,
         stepOrder: 3,
         timeoutSeconds: 300,
       },

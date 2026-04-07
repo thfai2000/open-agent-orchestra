@@ -1,157 +1,235 @@
 <template>
   <div>
-    <NuxtLink to="/agents" class="text-sm text-muted-foreground hover:text-foreground mb-4 inline-block">← Back to Agents</NuxtLink>
+    <Breadcrumb>
+      <BreadcrumbList>
+        <BreadcrumbItem><BreadcrumbLink href="/">Home</BreadcrumbLink></BreadcrumbItem>
+        <BreadcrumbSeparator />
+        <BreadcrumbItem><BreadcrumbLink href="/agents">Agents</BreadcrumbLink></BreadcrumbItem>
+        <BreadcrumbSeparator />
+        <BreadcrumbItem><BreadcrumbPage>{{ agent?.name || 'Agent' }}</BreadcrumbPage></BreadcrumbItem>
+      </BreadcrumbList>
+    </Breadcrumb>
 
-    <div v-if="agent" class="space-y-6">
+    <div v-if="agent" class="space-y-6 mt-4">
+      <!-- Header -->
       <div class="flex items-center justify-between">
         <div>
           <h1 class="text-3xl font-bold">{{ agent.name }}</h1>
-          <p v-if="agent.description" class="text-muted-foreground mt-1">{{ agent.description }}</p>
+          <p v-if="agent.description && !editing" class="text-muted-foreground mt-1">{{ agent.description }}</p>
         </div>
         <div class="flex items-center gap-3">
-          <button @click="toggleStatus"
-            :class="agent.status === 'active' ? 'border-yellow-500 text-yellow-600' : 'border-green-500 text-green-600'"
-            class="px-3 py-1.5 rounded-md border text-sm font-medium hover:opacity-80 transition">
+          <Button v-if="!editing" @click="startEdit">✏️ Edit Agent</Button>
+          <Button variant="outline" @click="toggleStatus"
+            :class="agent.status === 'active' ? 'border-yellow-500 text-yellow-600' : 'border-green-500 text-green-600'">
             {{ agent.status === 'active' ? 'Pause' : 'Activate' }}
-          </button>
-          <button @click="handleDelete"
-            class="px-3 py-1.5 rounded-md border border-destructive text-destructive text-sm font-medium hover:bg-destructive hover:text-destructive-foreground transition">
-            Delete
-          </button>
-          <span :class="{
-            'text-green-600': agent.status === 'active',
-            'text-yellow-600': agent.status === 'paused',
-            'text-red-600': agent.status === 'error',
-            'text-gray-500': agent.status === 'inactive',
-          }" class="text-sm font-semibold uppercase px-3 py-1 rounded-full border border-current">
+          </Button>
+          <Button variant="destructive" size="sm" @click="handleDelete">Delete</Button>
+          <Badge :variant="agent.status === 'active' ? 'default' : agent.status === 'paused' ? 'secondary' : 'destructive'">
             {{ agent.status }}
-          </span>
+          </Badge>
         </div>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div class="p-4 rounded-lg border border-border bg-card">
-          <h3 class="font-medium mb-2">Configuration</h3>
-          <dl class="space-y-1 text-sm">
-            <div class="flex justify-between">
-              <dt class="text-muted-foreground">Git Repo</dt>
-              <dd class="font-mono text-xs truncate max-w-[200px]">{{ agent.gitRepoUrl || '—' }}</dd>
-            </div>
-            <div class="flex justify-between">
-              <dt class="text-muted-foreground">Branch</dt>
-              <dd class="font-mono text-xs">{{ agent.gitBranch || 'main' }}</dd>
-            </div>
-            <div class="flex justify-between">
-              <dt class="text-muted-foreground">Agent File</dt>
-              <dd class="font-mono text-xs">{{ agent.agentFilePath || '—' }}</dd>
-            </div>
-            <div class="flex justify-between">
-              <dt class="text-muted-foreground">Copilot Model</dt>
-              <dd>{{ agent.copilotModel || 'default' }}</dd>
-            </div>
-          </dl>
-        </div>
-        <div class="p-4 rounded-lg border border-border bg-card">
-          <h3 class="font-medium mb-2">Quota Usage</h3>
-          <dl class="space-y-1 text-sm">
-            <div class="flex justify-between">
-              <dt class="text-muted-foreground">Daily Limit</dt>
-              <dd>{{ agent.dailyQuotaLimit ?? 50 }}</dd>
-            </div>
-            <div class="flex justify-between">
-              <dt class="text-muted-foreground">Monthly Limit</dt>
-              <dd>{{ agent.monthlyQuotaLimit ?? 1000 }}</dd>
-            </div>
-            <div class="flex justify-between">
-              <dt class="text-muted-foreground">Created</dt>
-              <dd>{{ new Date(agent.createdAt).toLocaleDateString() }}</dd>
-            </div>
-          </dl>
-        </div>
-      </div>
-
-      <!-- Agent Credentials Section -->
-      <div>
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="text-xl font-bold">Credentials</h2>
-          <button @click="showCredForm = true"
-            class="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition">
-            + Add Credential
-          </button>
-        </div>
-
-        <div v-if="showCredForm" class="mb-4 p-4 rounded-lg border border-border bg-card">
-          <div v-if="credError" class="mb-3 p-2 rounded-md bg-destructive/10 text-destructive text-sm">{{ credError }}</div>
-          <form @submit.prevent="handleAddCred" class="space-y-3">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label class="block text-xs font-medium mb-1">Key (UPPER_SNAKE_CASE) *</label>
-                <input v-model="credForm.key" type="text" required pattern="^[A-Z_][A-Z0-9_]*$"
-                  class="w-full px-3 py-2 rounded-md border border-border bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary"
-                  placeholder="API_KEY" />
+      <!-- Inline Edit Form -->
+      <Card v-if="editing" class="border-primary/30">
+        <CardHeader><CardTitle>Edit Agent</CardTitle></CardHeader>
+        <CardContent>
+          <div v-if="editError" class="mb-4 p-3 rounded-md bg-destructive/10 text-destructive text-sm">{{ editError }}</div>
+          <form @submit.prevent="handleSave" class="space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="space-y-2">
+                <Label>Name *</Label>
+                <Input v-model="editForm.name" required />
               </div>
-              <div>
-                <label class="block text-xs font-medium mb-1">Value *</label>
-                <input v-model="credForm.value" type="password" required
-                  class="w-full px-3 py-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  placeholder="Secret value (encrypted at rest)" />
+              <div class="space-y-2">
+                <Label>Git Repository URL *</Label>
+                <Input v-model="editForm.gitRepoUrl" type="url" required />
+              </div>
+              <div class="space-y-2">
+                <Label>Git Branch</Label>
+                <Input v-model="editForm.gitBranch" />
+              </div>
+              <div class="space-y-2">
+                <Label>Agent File Path *</Label>
+                <Input v-model="editForm.agentFilePath" required />
               </div>
             </div>
-            <div>
-              <label class="block text-xs font-medium mb-1">Description</label>
-              <input v-model="credForm.description" type="text"
-                class="w-full px-3 py-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                placeholder="What is this credential for?" />
+            <div class="space-y-2">
+              <Label>Description</Label>
+              <Textarea v-model="editForm.description" rows="2" />
             </div>
-            <div class="flex gap-2">
-              <button type="submit" :disabled="savingCred"
-                class="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition disabled:opacity-50">
-                {{ savingCred ? 'Saving...' : 'Save Credential' }}
-              </button>
-              <button type="button" @click="showCredForm = false"
-                class="px-3 py-1.5 rounded-md border border-border text-sm hover:bg-muted transition">Cancel</button>
+            <div class="space-y-2">
+              <Label>GitHub Token (leave blank to keep current)</Label>
+              <Input v-model="editForm.githubToken" type="password" class="max-w-md" placeholder="ghp_..." />
+            </div>
+            <div class="flex gap-3 pt-2">
+              <Button type="submit" :disabled="saving">{{ saving ? 'Saving...' : 'Save Changes' }}</Button>
+              <Button variant="outline" type="button" @click="editing = false">Cancel</Button>
             </div>
           </form>
-        </div>
+        </CardContent>
+      </Card>
 
-        <div class="space-y-2">
-          <div v-for="cred in agentCredentials" :key="cred.id"
-            class="p-3 rounded-lg border border-border bg-card flex items-center justify-between">
-            <div>
-              <p class="font-mono font-semibold text-sm">{{ cred.key }}</p>
-              <p v-if="cred.description" class="text-xs text-muted-foreground">{{ cred.description }}</p>
-            </div>
-            <div class="flex items-center gap-3">
-              <span class="text-xs text-muted-foreground font-mono">••••••••</span>
-              <button @click="handleDeleteCred(cred.id, cred.key)"
-                class="text-xs text-destructive hover:underline">Delete</button>
-            </div>
-          </div>
-          <p v-if="agentCredentials.length === 0 && !showCredForm" class="text-muted-foreground text-sm">
-            No credentials stored. Add credentials that will be injected into agent sessions.
-          </p>
-        </div>
+      <!-- View Configuration -->
+      <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader><CardTitle class="text-base">Configuration</CardTitle></CardHeader>
+          <CardContent>
+            <dl class="space-y-2 text-sm">
+              <div class="flex justify-between"><dt class="text-muted-foreground">Git Repo</dt><dd class="font-mono text-xs truncate max-w-[250px]">{{ agent.gitRepoUrl }}</dd></div>
+              <div class="flex justify-between"><dt class="text-muted-foreground">Branch</dt><dd class="font-mono text-xs">{{ agent.gitBranch || 'main' }}</dd></div>
+              <div class="flex justify-between"><dt class="text-muted-foreground">Agent File</dt><dd class="font-mono text-xs">{{ agent.agentFilePath }}</dd></div>
+              <div class="flex justify-between"><dt class="text-muted-foreground">Last Session</dt><dd>{{ agent.lastSessionAt ? new Date(agent.lastSessionAt).toLocaleString() : 'Never' }}</dd></div>
+            </dl>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle class="text-base">Info</CardTitle></CardHeader>
+          <CardContent>
+            <dl class="space-y-2 text-sm">
+              <div class="flex justify-between"><dt class="text-muted-foreground">ID</dt><dd class="font-mono text-xs">{{ agent.id?.substring(0, 8) }}…</dd></div>
+              <div class="flex justify-between"><dt class="text-muted-foreground">Created</dt><dd>{{ new Date(agent.createdAt).toLocaleDateString() }}</dd></div>
+              <div class="flex justify-between"><dt class="text-muted-foreground">Updated</dt><dd>{{ new Date(agent.updatedAt).toLocaleDateString() }}</dd></div>
+            </dl>
+          </CardContent>
+        </Card>
       </div>
 
-      <!-- Workflows Section -->
-      <div>
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="text-xl font-bold">Workflows</h2>
-          <NuxtLink :to="`/workflows?agentId=${agentId}`"
-            class="text-sm text-primary hover:underline">Manage Workflows →</NuxtLink>
-        </div>
-        <div v-for="wf in workflows" :key="wf.id"
-          class="p-4 rounded-lg border border-border bg-card mb-3">
+      <!-- Agent Variables Section -->
+      <Card>
+        <CardHeader>
           <div class="flex items-center justify-between">
-            <NuxtLink :to="`/workflows/${wf.id}`" class="font-semibold hover:text-primary">{{ wf.name }}</NuxtLink>
-            <span class="text-xs text-muted-foreground">{{ wf.isActive ? 'Active' : 'Inactive' }}</span>
+            <div>
+              <CardTitle>Agent Variables</CardTitle>
+              <CardDescription>Agent-level variables available to all workflow steps using this agent. They override user-level variables with the same key.</CardDescription>
+            </div>
+            <Button size="sm" @click="showVarForm = true">+ Add Variable</Button>
           </div>
-          <p v-if="wf.description" class="text-sm text-muted-foreground mt-1">{{ wf.description }}</p>
-        </div>
-        <p v-if="workflows.length === 0" class="text-muted-foreground text-sm">No workflows for this agent.</p>
-      </div>
+        </CardHeader>
+        <CardContent>
+          <div v-if="showVarForm" class="mb-4 p-4 rounded-lg border border-border bg-muted/30">
+            <div v-if="varError" class="mb-3 p-2 rounded-md bg-destructive/10 text-destructive text-sm">{{ varError }}</div>
+            <form @submit.prevent="handleAddVar" class="space-y-3">
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="space-y-1.5">
+                  <Label class="text-xs">Key (UPPER_SNAKE_CASE) *</Label>
+                  <Input v-model="varForm.key" required pattern="^[A-Z_][A-Z0-9_]*$" class="font-mono" placeholder="API_KEY" />
+                </div>
+                <div class="space-y-1.5">
+                  <Label class="text-xs">Value *</Label>
+                  <Input v-model="varForm.value" type="password" required placeholder="Secret value (encrypted at rest)" />
+                </div>
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="space-y-1.5">
+                  <Label class="text-xs">Type *</Label>
+                  <select v-model="varForm.variableType"
+                    class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+                    <option value="credential">Credential (secret, masked)</option>
+                    <option value="property">Property (can be used in prompts)</option>
+                  </select>
+                </div>
+                <div class="space-y-1.5">
+                  <Label class="text-xs">Description</Label>
+                  <Input v-model="varForm.description" placeholder="What is this variable for?" />
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <Switch :checked="varForm.injectAsEnvVariable" @update:checked="varForm.injectAsEnvVariable = $event" />
+                <Label class="text-xs">Inject as .env variable in Copilot session workspace</Label>
+              </div>
+              <div v-if="varForm.variableType === 'property'" class="p-3 rounded-md bg-blue-50 dark:bg-blue-950/30 text-xs text-blue-700 dark:text-blue-300">
+                💡 <strong>Tip:</strong> Properties can be referenced in agent prompt templates using <code class="bg-blue-100 dark:bg-blue-900 px-1 rounded">{{ propertyHint }}</code>
+              </div>
+              <div class="flex gap-2">
+                <Button type="submit" size="sm" :disabled="savingVar">{{ savingVar ? 'Saving...' : 'Save Variable' }}</Button>
+                <Button variant="outline" size="sm" type="button" @click="showVarForm = false">Cancel</Button>
+              </div>
+            </form>
+          </div>
+
+          <div class="space-y-2">
+            <div v-for="v in agentVariables" :key="v.id"
+              class="p-3 rounded-lg border border-border flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <Badge :variant="v.variableType === 'credential' ? 'destructive' : 'secondary'" class="text-[10px]">{{ v.variableType }}</Badge>
+                <div>
+                  <p class="font-mono font-semibold text-sm">{{ v.key }}</p>
+                  <p v-if="v.description" class="text-xs text-muted-foreground">{{ v.description }}</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <Badge v-if="v.injectAsEnvVariable" variant="outline" class="text-[10px]">.env</Badge>
+                <span class="text-xs text-muted-foreground font-mono">••••••••</span>
+                <Button variant="ghost" size="sm" class="text-destructive h-7 text-xs" @click="handleDeleteVar(v.id, v.key)">Delete</Button>
+              </div>
+            </div>
+            <p v-if="agentVariables.length === 0 && !showVarForm" class="text-muted-foreground text-sm">No agent-level variables stored.</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <!-- MCP Servers Section -->
+      <Card>
+        <CardHeader><CardTitle>MCP Servers</CardTitle></CardHeader>
+        <CardContent>
+          <div v-for="mcp in mcpServers" :key="mcp.id" class="p-3 rounded-lg border border-border mb-2 flex items-center justify-between">
+            <div>
+              <p class="font-semibold text-sm">{{ mcp.name }}</p>
+              <p v-if="mcp.description" class="text-xs text-muted-foreground">{{ mcp.description }}</p>
+              <p class="text-xs text-muted-foreground font-mono mt-1">{{ mcp.command }} {{ (mcp.args || []).join(' ') }}</p>
+            </div>
+            <Badge :variant="mcp.isEnabled ? 'default' : 'secondary'">{{ mcp.isEnabled ? 'Enabled' : 'Disabled' }}</Badge>
+          </div>
+          <p v-if="mcpServers.length === 0" class="text-muted-foreground text-sm">No MCP servers configured.</p>
+        </CardContent>
+      </Card>
+
+      <!-- Plugins Section -->
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>Plugins</CardTitle>
+            <CardDescription>Enable or disable available plugins for this agent. Plugins add tools, skills, and MCP servers to Copilot sessions.</CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div v-if="pluginsLoading" class="text-muted-foreground text-sm">Loading plugins...</div>
+          <div class="space-y-2">
+            <div v-for="p in agentPlugins" :key="p.id"
+              class="p-3 rounded-lg border border-border flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div>
+                  <p class="font-semibold text-sm">{{ p.name }}</p>
+                  <p v-if="p.description" class="text-xs text-muted-foreground">{{ p.description }}</p>
+                  <div class="flex gap-2 mt-1">
+                    <Badge v-if="(p.manifestCache as any)?.tools?.length" variant="outline" class="text-[10px]">
+                      {{ (p.manifestCache as any).tools.length }} tools
+                    </Badge>
+                    <Badge v-if="(p.manifestCache as any)?.skills?.length" variant="outline" class="text-[10px]">
+                      {{ (p.manifestCache as any).skills.length }} skills
+                    </Badge>
+                    <Badge v-if="(p.manifestCache as any)?.mcpServers?.length" variant="outline" class="text-[10px]">
+                      {{ (p.manifestCache as any).mcpServers.length }} MCP servers
+                    </Badge>
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <Switch :checked="p.isEnabled" @update:checked="togglePlugin(p.id, $event)" />
+                <Badge :variant="p.isEnabled ? 'default' : 'secondary'" class="w-16 justify-center">
+                  {{ p.isEnabled ? 'On' : 'Off' }}
+                </Badge>
+              </div>
+            </div>
+          </div>
+          <p v-if="agentPlugins.length === 0 && !pluginsLoading" class="text-muted-foreground text-sm">
+            No plugins available. Admin must register and allow plugins first.
+          </p>
+        </CardContent>
+      </Card>
     </div>
-    <p v-else class="text-muted-foreground">Agent not found.</p>
+    <p v-else class="text-muted-foreground mt-4">Agent not found.</p>
   </div>
 </template>
 
@@ -163,67 +241,98 @@ const router = useRouter();
 const agentId = route.params.id as string;
 
 const { data: agentData, refresh: refreshAgent } = await useFetch(`/api/agents/${agentId}`, { headers });
-const { data: wfData } = await useFetch(`/api/workflows?agentId=${agentId}`, { headers });
-const { data: credData, refresh: refreshCreds } = await useFetch(`/api/credentials?agentId=${agentId}`, { headers });
+const { data: varData, refresh: refreshVars } = await useFetch(`/api/variables?agentId=${agentId}`, { headers });
+const { data: mcpData } = await useFetch(`/api/mcp-servers?agentId=${agentId}`, { headers });
+const { data: pluginData, pending: pluginsLoading, refresh: refreshPlugins } = await useFetch(`/api/plugins/agent/${agentId}`, { headers });
 
 const agent = computed(() => agentData.value?.agent);
-const workflows = computed(() => wfData.value?.workflows ?? []);
-const agentCredentials = computed(() => credData.value?.credentials ?? []);
+const agentVariables = computed(() => varData.value?.variables ?? []);
+const mcpServers = computed(() => mcpData.value?.servers ?? []);
+const agentPlugins = computed(() => (pluginData.value as any)?.plugins ?? []);
 
-// Status toggle
+// ── Inline Edit ─────────────────────────────────────────────────
+const editing = ref(false);
+const saving = ref(false);
+const editError = ref('');
+const editForm = reactive({ name: '', description: '', gitRepoUrl: '', gitBranch: '', agentFilePath: '', githubToken: '' });
+
+function startEdit() {
+  Object.assign(editForm, {
+    name: agent.value?.name || '', description: agent.value?.description || '',
+    gitRepoUrl: agent.value?.gitRepoUrl || '', gitBranch: agent.value?.gitBranch || 'main',
+    agentFilePath: agent.value?.agentFilePath || '', githubToken: '',
+  });
+  editError.value = '';
+  editing.value = true;
+}
+
+async function handleSave() {
+  editError.value = '';
+  saving.value = true;
+  try {
+    const body: Record<string, unknown> = {
+      name: editForm.name, description: editForm.description || undefined,
+      gitRepoUrl: editForm.gitRepoUrl, gitBranch: editForm.gitBranch, agentFilePath: editForm.agentFilePath,
+    };
+    if (editForm.githubToken) body.githubToken = editForm.githubToken;
+    await $fetch(`/api/agents/${agentId}`, { method: 'PUT', headers, body });
+    editing.value = false;
+    await refreshAgent();
+  } catch (e: any) { editError.value = e?.data?.error || 'Failed to save agent'; }
+  finally { saving.value = false; }
+}
+
 async function toggleStatus() {
   const newStatus = agent.value?.status === 'active' ? 'paused' : 'active';
-  try {
-    await $fetch(`/api/agents/${agentId}`, { method: 'PUT', headers, body: { status: newStatus } });
-    await refreshAgent();
-  } catch {
-    alert('Failed to update agent status');
-  }
+  try { await $fetch(`/api/agents/${agentId}`, { method: 'PUT', headers, body: { status: newStatus } }); await refreshAgent(); }
+  catch { alert('Failed to update agent status'); }
 }
 
-// Delete agent
 async function handleDelete() {
   if (!confirm(`Delete agent "${agent.value?.name}"? This cannot be undone.`)) return;
-  try {
-    await $fetch(`/api/agents/${agentId}`, { method: 'DELETE', headers });
-    router.push('/agents');
-  } catch {
-    alert('Failed to delete agent');
-  }
+  try { await $fetch(`/api/agents/${agentId}`, { method: 'DELETE', headers }); router.push('/agents'); }
+  catch { alert('Failed to delete agent'); }
 }
 
-// Credential management
-const showCredForm = ref(false);
-const savingCred = ref(false);
-const credError = ref('');
-const credForm = reactive({ key: '', value: '', description: '' });
+// ── Variable management ─────────────────────────────────────────
+const showVarForm = ref(false);
+const savingVar = ref(false);
+const varError = ref('');
+const varForm = reactive({ key: '', value: '', description: '', variableType: 'credential' as string, injectAsEnvVariable: false });
+const propertyHint = computed(() => `{{ Properties.${varForm.key || 'KEY_NAME'} }}`);
 
-async function handleAddCred() {
-  credError.value = '';
-  savingCred.value = true;
+async function handleAddVar() {
+  varError.value = '';
+  savingVar.value = true;
   try {
-    await $fetch('/api/credentials', {
-      method: 'POST',
-      headers,
-      body: { agentId, key: credForm.key, value: credForm.value, description: credForm.description || undefined },
+    await $fetch('/api/variables', {
+      method: 'POST', headers,
+      body: { agentId, key: varForm.key, value: varForm.value, description: varForm.description || undefined, variableType: varForm.variableType, injectAsEnvVariable: varForm.injectAsEnvVariable },
     });
-    showCredForm.value = false;
-    Object.assign(credForm, { key: '', value: '', description: '' });
-    await refreshCreds();
-  } catch (e: any) {
-    credError.value = e?.data?.error || 'Failed to save credential';
-  } finally {
-    savingCred.value = false;
-  }
+    showVarForm.value = false;
+    Object.assign(varForm, { key: '', value: '', description: '', variableType: 'credential', injectAsEnvVariable: false });
+    await refreshVars();
+  } catch (e: any) { varError.value = e?.data?.error || 'Failed to save variable'; }
+  finally { savingVar.value = false; }
 }
 
-async function handleDeleteCred(id: string, key: string) {
-  if (!confirm(`Delete credential "${key}"?`)) return;
+async function handleDeleteVar(id: string, key: string) {
+  if (!confirm(`Delete variable "${key}"?`)) return;
+  try { await $fetch(`/api/variables/${id}`, { method: 'DELETE', headers }); await refreshVars(); }
+  catch { alert('Failed to delete variable'); }
+}
+
+// ── Plugin management ───────────────────────────────────────────
+async function togglePlugin(pluginId: string, enabled: boolean) {
   try {
-    await $fetch(`/api/credentials/${id}`, { method: 'DELETE', headers });
-    await refreshCreds();
+    await $fetch(`/api/plugins/agent/${agentId}/${pluginId}`, {
+      method: 'PUT',
+      headers,
+      body: { isEnabled: enabled },
+    });
+    await refreshPlugins();
   } catch {
-    alert('Failed to delete credential');
+    alert('Failed to update plugin');
   }
 }
 </script>

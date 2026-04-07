@@ -4,6 +4,7 @@ import { eq, and, desc, sql } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { workflowExecutions, stepExecutions, workflows } from '../database/schema.js';
 import { authMiddleware, paginationSchema, uuidSchema } from '@ai-trader/shared';
+import { retryWorkflowExecution } from '../services/workflow-engine.js';
 
 const executionsRouter = new Hono();
 executionsRouter.use('/*', authMiddleware);
@@ -92,6 +93,23 @@ executionsRouter.post('/:id/cancel', async (c) => {
     .where(and(eq(stepExecutions.workflowExecutionId, id), eq(stepExecutions.status, 'pending')));
 
   return c.json({ execution: updated });
+});
+
+// POST /:id/retry — retry a failed execution from the last failed step
+executionsRouter.post('/:id/retry', async (c) => {
+  const id = uuidSchema.parse(c.req.param('id'));
+
+  const execution = await db.query.workflowExecutions.findFirst({
+    where: eq(workflowExecutions.id, id),
+  });
+  if (!execution) return c.json({ error: 'Execution not found' }, 404);
+
+  if (execution.status !== 'failed') {
+    return c.json({ error: 'Only failed executions can be retried' }, 400);
+  }
+
+  const newExecution = await retryWorkflowExecution(id);
+  return c.json({ execution: newExecution }, 201);
 });
 
 export default executionsRouter;

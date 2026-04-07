@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { triggers, workflows } from '../database/schema.js';
 import { authMiddleware, uuidSchema } from '@ai-trader/shared';
@@ -22,7 +22,7 @@ triggersRouter.get('/', async (c) => {
 // POST / — create trigger
 const createTriggerSchema = z.object({
   workflowId: z.string().uuid(),
-  triggerType: z.enum(['time_schedule', 'webhook', 'event', 'manual']),
+  triggerType: z.enum(['time_schedule', 'webhook', 'event']),
   configuration: z.record(z.unknown()).default({}),
 });
 
@@ -34,6 +34,19 @@ triggersRouter.post('/', async (c) => {
     where: eq(workflows.id, body.workflowId),
   });
   if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+
+  // Validate webhook path uniqueness
+  if (body.triggerType === 'webhook' && body.configuration.path) {
+    const existingTrigger = await db.query.triggers.findFirst({
+      where: and(
+        eq(triggers.triggerType, 'webhook'),
+        sql`configuration->>'path' = ${String(body.configuration.path)}`,
+      ),
+    });
+    if (existingTrigger) {
+      return c.json({ error: `Webhook path "${body.configuration.path}" is already in use` }, 409);
+    }
+  }
 
   const [trigger] = await db
     .insert(triggers)

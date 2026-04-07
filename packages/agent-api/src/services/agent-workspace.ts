@@ -21,7 +21,7 @@ export interface AgentWorkspace {
 }
 
 /**
- * Clone an agent's Git repo into a temporary directory, read trader.json + agent.md + skills.
+ * Clone an agent's Git repo into a temporary directory, read agent.json + agent.md + skills.
  * Returns an AgentWorkspace with the parsed content and a cleanup function.
  */
 export async function prepareAgentWorkspace(opts: {
@@ -77,13 +77,13 @@ export async function prepareAgentWorkspace(opts: {
       }
     }
 
-    // Try to read trader.json config
+    // Try to read agent.json config
     let config: AgentConfig | null = null;
     try {
-      const configRaw = await readFile(join(workdir, 'trader.json'), 'utf-8');
+      const configRaw = await readFile(join(workdir, 'agent.json'), 'utf-8');
       config = JSON.parse(configRaw) as AgentConfig;
     } catch {
-      logger.debug('No trader.json found, using agent definition defaults');
+      logger.debug('No agent.json found, using agent definition defaults');
     }
 
     logger.info(

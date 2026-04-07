@@ -14,6 +14,7 @@ export async function createJwt(user: AuthUser): Promise<string> {
     userId: user.userId,
     email: user.email,
     name: user.name,
+    role: user.role,
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()

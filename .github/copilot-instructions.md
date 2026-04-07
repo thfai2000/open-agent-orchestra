@@ -108,7 +108,7 @@ deploy.sh             # Deploy to local K8s via Helm
 - **Auth**: Uses `GITHUB_TOKEN` env var or GitHub CLI auth
 - **Important**: Do NOT use Vercel AI SDK (`ai` package) or `@github/models`. Use `@github/copilot-sdk` only.
 
-## Database Schema (13 tables)
+## Database Schema (14 tables)
 
 | Table | Purpose |
 |-------|---------|
@@ -122,7 +122,8 @@ deploy.sh             # Deploy to local K8s via Helm
 | `agent_credentials` | AES-256-GCM encrypted key-value store |
 | `agent_quota_usage` | Daily token usage tracking per agent |
 | `webhook_registrations` | HMAC secrets for webhook auth |
-| `trade_decisions` | Audit trail of agent trade decisions |
+| `mcp_server_configs` | Per-agent MCP server configurations |
+| `agent_decisions` | Generic audit trail of agent decisions |
 | `agent_memories` | Long-term memory with pgvector embeddings |
 
 ## Security Rules
@@ -143,4 +144,3 @@ See `.env.example`. Critical:
 - `JWT_SECRET` — Secret for JWT signing/verification
 - `ENCRYPTION_KEY` — 32-byte hex for AES-256-GCM
 - `GITHUB_TOKEN` — For Copilot SDK
-- `TRADING_API_URL` — Trading Platform API base URL (optional integration)

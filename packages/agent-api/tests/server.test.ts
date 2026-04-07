@@ -10,7 +10,9 @@ vi.mock('../src/database/index.js', () => ({
       workflowExecutions: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
       stepExecutions: { findMany: vi.fn().mockResolvedValue([]) },
       agentCredentials: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+      userCredentials: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
       webhookRegistrations: { findFirst: vi.fn() },
+      mcpServerConfigs: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
     },
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -127,6 +129,7 @@ describe('Agent routes', () => {
       userId: '550e8400-e29b-41d4-a716-446655440000',
       email: 'test@example.com',
       name: 'Test',
+      role: 'user',
     });
     const { app } = await import('../src/server.js');
     const res = await app.request('/api/agents', {
@@ -150,10 +153,10 @@ describe('Workflow routes', () => {
   });
 });
 
-describe('Credential routes', () => {
-  it('rejects credential creation without auth', async () => {
+describe('Variable routes', () => {
+  it('rejects variable creation without auth', async () => {
     const { app } = await import('../src/server.js');
-    const res = await app.request('/api/credentials', {
+    const res = await app.request('/api/variables', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -165,15 +168,16 @@ describe('Credential routes', () => {
     expect(res.status).toBe(401);
   });
 
-  it('rejects credential with invalid key format after auth', async () => {
+  it('rejects variable with invalid key format after auth', async () => {
     const { createJwt } = await import('@ai-trader/shared');
     const token = await createJwt({
       userId: '550e8400-e29b-41d4-a716-446655440000',
       email: 'test@example.com',
       name: 'Test',
+      role: 'user',
     });
     const { app } = await import('../src/server.js');
-    const res = await app.request('/api/credentials', {
+    const res = await app.request('/api/variables', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
       body: JSON.stringify({
@@ -211,5 +215,36 @@ describe('Supervisor routes', () => {
     const { app } = await import('../src/server.js');
     const res = await app.request('/api/supervisor');
     expect(res.status).toBe(401);
+  });
+});
+
+describe('MCP server routes', () => {
+  it('rejects MCP server creation without auth', async () => {
+    const { app } = await import('../src/server.js');
+    const res = await app.request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: '550e8400-e29b-41d4-a716-446655440000',
+        name: 'Test Server',
+        command: 'node',
+      }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects MCP server listing without agentId', async () => {
+    const { createJwt } = await import('@ai-trader/shared');
+    const token = await createJwt({
+      userId: '550e8400-e29b-41d4-a716-446655440000',
+      email: 'test@example.com',
+      name: 'Test',
+      role: 'user',
+    });
+    const { app } = await import('../src/server.js');
+    const res = await app.request('/api/mcp-servers', {
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    expect(res.status).toBe(400);
   });
 });
