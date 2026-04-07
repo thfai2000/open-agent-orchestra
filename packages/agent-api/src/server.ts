@@ -17,6 +17,8 @@ import mcpServersRouter from './routes/mcp-servers.js';
 import pluginsRouter from './routes/plugins.js';
 import adminRouter from './routes/admin.js';
 import quotaRouter from './routes/quota.js';
+import workspacesRouter from './routes/workspaces.js';
+import eventsRouter from './routes/events.js';
 
 const logger = createLogger('agent-api');
 const port = Number(process.env.AGENT_API_PORT) || 4002;
@@ -39,6 +41,8 @@ const app = createApp({
     ['/api/plugins', pluginsRouter],
     ['/api/admin', adminRouter],
     ['/api/quota', quotaRouter],
+    ['/api/workspaces', workspacesRouter],
+    ['/api/events', eventsRouter],
   ],
 });
 

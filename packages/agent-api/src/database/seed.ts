@@ -1,5 +1,5 @@
 import { db } from './index.js';
-import { agents, workflows, workflowSteps, triggers, mcpServerConfigs } from './schema.js';
+import { agents, workflows, workflowSteps, triggers, mcpServerConfigs, workspaces } from './schema.js';
 import { createLogger } from '@ai-trader/shared';
 
 const logger = createLogger('agent-seed');
@@ -7,10 +7,30 @@ const logger = createLogger('agent-seed');
 async function seed() {
   logger.info('Seeding agent database...');
 
+  // Create the Default Workspace (cannot be deleted)
+  const [workspace] = await db
+    .insert(workspaces)
+    .values({
+      name: 'Default Workspace',
+      slug: 'default',
+      description: 'The default workspace for the platform.',
+      isDefault: true,
+    })
+    .onConflictDoNothing()
+    .returning();
+
+  const workspaceId = workspace?.id;
+  if (workspace) {
+    logger.info(`Created workspace: ${workspace.name} (slug: ${workspace.slug})`);
+  } else {
+    logger.info('Default workspace already exists, skipping');
+  }
+
   // Create a sample agent
   const [agent] = await db
     .insert(agents)
     .values({
+      workspaceId: workspaceId ?? '00000000-0000-0000-0000-000000000000',
       userId: '00000000-0000-0000-0000-000000000001', // placeholder user id
       name: 'SampleAgent',
       description: 'A sample agent to demonstrate the platform capabilities.',
@@ -46,6 +66,7 @@ async function seed() {
     const [workflow] = await db
       .insert(workflows)
       .values({
+        workspaceId: workspaceId ?? '00000000-0000-0000-0000-000000000000',
         userId: '00000000-0000-0000-0000-000000000001',
         name: 'Morning Analysis',
         description: 'Analyze data and generate a report every weekday morning.',

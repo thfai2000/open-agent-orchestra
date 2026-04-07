@@ -17,7 +17,9 @@ import {
 
 // ─── Enums ───────────────────────────────────────────────────────────
 
-export const userRoleEnum = pgEnum('user_role', ['user', 'admin']);
+export const userRoleEnum = pgEnum('user_role', ['super_admin', 'workspace_admin', 'creator_user', 'view_user']);
+export const resourceScopeEnum = pgEnum('resource_scope', ['user', 'workspace']);
+export const eventScopeEnum = pgEnum('event_scope', ['workspace', 'user']);
 export const agentStatusEnum = pgEnum('agent_status', ['active', 'paused', 'error']);
 export const triggerTypeEnum = pgEnum('trigger_type', [
   'time_schedule',
@@ -42,6 +44,18 @@ export const stepStatusEnum = pgEnum('step_status', [
 export const reasoningEffortEnum = pgEnum('reasoning_effort', ['high', 'medium', 'low']);
 export const variableTypeEnum = pgEnum('variable_type', ['property', 'credential']);
 
+// ─── Workspaces ──────────────────────────────────────────────────────
+
+export const workspaces = pgTable('workspaces', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 100 }).notNull(),
+  slug: varchar('slug', { length: 50 }).notNull().unique(), // URL segment: /slug/...
+  description: text('description'),
+  isDefault: boolean('is_default').notNull().default(false), // Default Workspace cannot be deleted
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // ─── Users (independent — Agent Platform owns its own identity) ──────
 
 export const users = pgTable('users', {
@@ -49,7 +63,8 @@ export const users = pgTable('users', {
   email: varchar('email', { length: 255 }).notNull().unique(),
   passwordHash: varchar('password_hash', { length: 255 }).notNull(),
   name: varchar('name', { length: 100 }).notNull(),
-  role: userRoleEnum('role').notNull().default('user'),
+  role: userRoleEnum('role').notNull().default('creator_user'),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id), // null only for super_admin before joining
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -58,7 +73,11 @@ export const users = pgTable('users', {
 
 export const agents = pgTable('agents', {
   id: uuid('id').defaultRandom().primaryKey(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull(), // from JWT, no FK to trading_db
+  scope: resourceScopeEnum('scope').notNull().default('user'), // 'user' or 'workspace'
   name: varchar('name', { length: 100 }).notNull(),
   description: text('description'),
   gitRepoUrl: varchar('git_repo_url', { length: 500 }).notNull(),
@@ -66,6 +85,11 @@ export const agents = pgTable('agents', {
   agentFilePath: varchar('agent_file_path', { length: 300 }).notNull(),
   skillsPaths: varchar('skills_paths', { length: 300 }).array().notNull().default([]),
   githubTokenEncrypted: text('github_token_encrypted'),
+  builtinToolsEnabled: jsonb('builtin_tools_enabled').notNull().default([
+    'schedule_next_wakeup', 'manage_webhook_trigger', 'record_decision',
+    'memory_store', 'memory_retrieve',
+    'edit_workflow', 'read_variables', 'edit_variables',
+  ]), // array of enabled built-in tool names
   status: agentStatusEnum('status').notNull().default('active'),
   lastSessionAt: timestamp('last_session_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -76,7 +100,11 @@ export const agents = pgTable('agents', {
 
 export const workflows = pgTable('workflows', {
   id: uuid('id').defaultRandom().primaryKey(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull(), // owner — workflows belong to a user, not an agent
+  scope: resourceScopeEnum('scope').notNull().default('user'), // 'user' or 'workspace'
   name: varchar('name', { length: 200 }).notNull(),
   description: text('description'),
   isActive: boolean('is_active').notNull().default(true),
@@ -275,10 +303,35 @@ export const mcpServerConfigs = pgTable(
   }),
 );
 
-// ─── Plugins (admin-managed registry) ────────────────────────────────
+// ─── Workspace Variables (key-value store, workspace-level) ─────────
+
+export const workspaceVariables = pgTable(
+  'workspace_variables',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    key: varchar('key', { length: 100 }).notNull(),
+    valueEncrypted: text('value_encrypted').notNull(),
+    variableType: variableTypeEnum('variable_type').notNull().default('credential'),
+    injectAsEnvVariable: boolean('inject_as_env_variable').notNull().default(false),
+    description: varchar('description', { length: 300 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    workspaceKeyIdx: uniqueIndex('workspace_variables_ws_key_idx').on(table.workspaceId, table.key),
+  }),
+);
+
+// ─── Plugins (workspace-managed registry) ────────────────────────────
 
 export const plugins = pgTable('plugins', {
   id: uuid('id').defaultRandom().primaryKey(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 100 }).notNull(),
   description: text('description'),
   gitRepoUrl: varchar('git_repo_url', { length: 500 }).notNull(),
@@ -381,11 +434,14 @@ export const agentMemories = pgTable(
   }),
 );
 
-// ─── Models (admin-managed model registry with credit costs) ─────────
+// ─── Models (workspace-managed model registry with credit costs) ─────
 
 export const models = pgTable('models', {
   id: uuid('id').defaultRandom().primaryKey(),
-  name: varchar('name', { length: 100 }).notNull().unique(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 100 }).notNull(),
   provider: varchar('provider', { length: 50 }).notNull().default('github'),
   description: text('description'),
   creditCost: decimal('credit_cost', { precision: 10, scale: 2 }).notNull().default('1.00'),
@@ -394,10 +450,14 @@ export const models = pgTable('models', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// ─── Global Quota Settings (admin-managed) ───────────────────────────
+// ─── Workspace Quota Settings (per-workspace) ──────────────────────
 
-export const globalQuotaSettings = pgTable('global_quota_settings', {
+export const workspaceQuotaSettings = pgTable('workspace_quota_settings', {
   id: uuid('id').defaultRandom().primaryKey(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' })
+    .unique(),
   dailyCreditLimit: decimal('daily_credit_limit', { precision: 10, scale: 2 }),
   monthlyCreditLimit: decimal('monthly_credit_limit', { precision: 10, scale: 2 }),
   updatedBy: uuid('updated_by').references(() => users.id),
@@ -423,6 +483,9 @@ export const creditUsage = pgTable(
   'credit_usage',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -439,5 +502,25 @@ export const creditUsage = pgTable(
       table.date,
     ),
     creditUsageUserDateIdx: index('credit_usage_user_date_idx').on(table.userId, table.date),
+  }),
+);
+
+// ─── System Events (audit + event triggers) ─────────────────────────
+
+export const systemEvents = pgTable(
+  'system_events',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    eventScope: eventScopeEnum('event_scope').notNull(), // 'workspace' or 'user'
+    scopeId: uuid('scope_id').notNull(), // workspace_id or user_id depending on scope
+    eventName: varchar('event_name', { length: 100 }).notNull(), // predefined event name
+    eventData: jsonb('event_data').notNull().default({}), // flexible payload
+    actorId: uuid('actor_id'), // user who triggered the action (null for system events)
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    systemEventsScopeIdx: index('system_events_scope_idx').on(table.eventScope, table.scopeId),
+    systemEventsNameIdx: index('system_events_name_idx').on(table.eventName),
+    systemEventsCreatedIdx: index('system_events_created_idx').on(table.createdAt),
   }),
 );

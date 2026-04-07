@@ -5,6 +5,7 @@ import { db } from '../database/index.js';
 import {
   creditUsage,
   userQuotaSettings,
+  workspaceQuotaSettings,
   models,
 } from '../database/schema.js';
 import { authMiddleware } from '@ai-trader/shared';
@@ -12,20 +13,24 @@ import { authMiddleware } from '@ai-trader/shared';
 const quotaRouter = new Hono();
 quotaRouter.use('/*', authMiddleware);
 
-// GET /settings — get current user's quota settings + global defaults
+// GET /settings — get current user's quota settings + workspace defaults
 quotaRouter.get('/settings', async (c) => {
   const user = c.get('user');
 
-  const [userSettings, globalSettings] = await Promise.all([
+  const [userSettings, wsSettings] = await Promise.all([
     db.query.userQuotaSettings.findFirst({
       where: eq(userQuotaSettings.userId, user.userId),
     }),
-    db.query.globalQuotaSettings.findFirst(),
+    user.workspaceId
+      ? db.query.workspaceQuotaSettings.findFirst({
+          where: eq(workspaceQuotaSettings.workspaceId, user.workspaceId),
+        })
+      : null,
   ]);
 
   return c.json({
     userSettings: userSettings ?? { dailyCreditLimit: null, monthlyCreditLimit: null },
-    globalSettings: globalSettings ?? { dailyCreditLimit: null, monthlyCreditLimit: null },
+    workspaceSettings: wsSettings ?? { dailyCreditLimit: null, monthlyCreditLimit: null },
   });
 });
 
@@ -129,10 +134,13 @@ quotaRouter.get('/usage', async (c) => {
   });
 });
 
-// GET /models — list active models (for display in UI)
+// GET /models — list active models in user's workspace
 quotaRouter.get('/models', async (c) => {
+  const user = c.get('user');
+  if (!user.workspaceId) return c.json({ models: [] });
+
   const allModels = await db.query.models.findMany({
-    where: eq(models.isActive, true),
+    where: and(eq(models.workspaceId, user.workspaceId), eq(models.isActive, true)),
     orderBy: models.name,
   });
   return c.json({ models: allModels });

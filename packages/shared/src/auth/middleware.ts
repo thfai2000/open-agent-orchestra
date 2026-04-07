@@ -22,6 +22,8 @@ export async function authMiddleware(c: Context, next: Next): Promise<Response |
       email: payload.email,
       name: payload.name,
       role: payload.role,
+      workspaceId: payload.workspaceId ?? null,
+      workspaceSlug: payload.workspaceSlug ?? null,
     });
     await next();
   } catch {

@@ -9,20 +9,22 @@ import { syncPluginManifest } from '../services/plugin-loader.js';
 const pluginsRouter = new Hono();
 pluginsRouter.use('/*', authMiddleware);
 
-// GET / — list plugins (admin sees all, users see only allowed)
+// GET / — list plugins (workspace_admin sees all, users see only allowed)
 pluginsRouter.get('/', async (c) => {
   const user = c.get('user');
-  const admin = user.role === 'admin';
+  if (!user.workspaceId) return c.json({ plugins: [] });
+  const isAdmin = user.role === 'workspace_admin' || user.role === 'super_admin';
 
   const allPlugins = await db.query.plugins.findMany({
+    where: eq(plugins.workspaceId, user.workspaceId),
     columns: { githubTokenEncrypted: false },
   });
 
-  const result = admin ? allPlugins : allPlugins.filter((p) => p.isAllowed);
+  const result = isAdmin ? allPlugins : allPlugins.filter((p) => p.isAllowed);
   return c.json({ plugins: result });
 });
 
-// POST / — register plugin (admin only)
+// POST / — register plugin (workspace_admin only)
 const createPluginSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(1000).optional(),
@@ -34,7 +36,8 @@ const createPluginSchema = z.object({
 
 pluginsRouter.post('/', async (c) => {
   const user = c.get('user');
-  if (user.role !== 'admin') return c.json({ error: 'Admin access required' }, 403);
+  if (user.role !== 'workspace_admin' && user.role !== 'super_admin') return c.json({ error: 'Workspace admin access required' }, 403);
+  if (!user.workspaceId) return c.json({ error: 'No workspace context' }, 403);
 
   const body = createPluginSchema.parse(await c.req.json());
 
@@ -48,6 +51,7 @@ pluginsRouter.post('/', async (c) => {
       githubTokenEncrypted: body.githubToken ? encrypt(body.githubToken) : null,
       isAllowed: body.isAllowed,
       createdBy: user.userId,
+      workspaceId: user.workspaceId!,
     })
     .returning();
 
@@ -73,7 +77,7 @@ pluginsRouter.get('/:id', async (c) => {
 
   if (!plugin) return c.json({ error: 'Plugin not found' }, 404);
 
-  const admin = user.role === 'admin';
+  const admin = user.role === 'workspace_admin' || user.role === 'super_admin';
   if (!admin && !plugin.isAllowed) return c.json({ error: 'Plugin not found' }, 404);
 
   return c.json({ plugin });
@@ -91,7 +95,7 @@ const updatePluginSchema = z.object({
 
 pluginsRouter.put('/:id', async (c) => {
   const user = c.get('user');
-  if (user.role !== 'admin') return c.json({ error: 'Admin access required' }, 403);
+  if (user.role !== 'workspace_admin' && user.role !== 'super_admin') return c.json({ error: 'Workspace admin access required' }, 403);
 
   const id = uuidSchema.parse(c.req.param('id'));
   const body = updatePluginSchema.parse(await c.req.json());
@@ -116,10 +120,10 @@ pluginsRouter.put('/:id', async (c) => {
   return c.json({ plugin: { ...updated, githubTokenEncrypted: undefined } });
 });
 
-// DELETE /:id — remove plugin (admin only)
+// DELETE /:id — remove plugin (workspace_admin only)
 pluginsRouter.delete('/:id', async (c) => {
   const user = c.get('user');
-  if (user.role !== 'admin') return c.json({ error: 'Admin access required' }, 403);
+  if (user.role !== 'workspace_admin' && user.role !== 'super_admin') return c.json({ error: 'Workspace admin access required' }, 403);
 
   const id = uuidSchema.parse(c.req.param('id'));
   const existing = await db.query.plugins.findFirst({ where: eq(plugins.id, id) });
@@ -129,10 +133,10 @@ pluginsRouter.delete('/:id', async (c) => {
   return c.json({ success: true });
 });
 
-// POST /:id/sync — re-clone and refresh manifest cache (admin only)
+// POST /:id/sync — re-clone and refresh manifest cache (workspace_admin only)
 pluginsRouter.post('/:id/sync', async (c) => {
   const user = c.get('user');
-  if (user.role !== 'admin') return c.json({ error: 'Admin access required' }, 403);
+  if (user.role !== 'workspace_admin' && user.role !== 'super_admin') return c.json({ error: 'Workspace admin access required' }, 403);
 
   const id = uuidSchema.parse(c.req.param('id'));
   const existing = await db.query.plugins.findFirst({ where: eq(plugins.id, id) });

@@ -1,18 +1,27 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { eq, and, or } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { agents } from '../database/schema.js';
 import { authMiddleware, encrypt, uuidSchema } from '@ai-trader/shared';
+import { emitEvent, EVENT_NAMES } from '../services/system-events.js';
 
 const agentsRouter = new Hono();
 agentsRouter.use('/*', authMiddleware);
 
-// GET / — list agents for current user
+// GET / — list agents visible to user: user-scoped (own) + workspace-scoped
 agentsRouter.get('/', async (c) => {
   const user = c.get('user');
+  if (!user.workspaceId) return c.json({ agents: [] });
+
   const agentList = await db.query.agents.findMany({
-    where: eq(agents.userId, user.userId),
+    where: and(
+      eq(agents.workspaceId, user.workspaceId),
+      or(
+        eq(agents.scope, 'workspace'),
+        eq(agents.userId, user.userId),
+      ),
+    ),
     columns: {
       githubTokenEncrypted: false,
     },
@@ -21,6 +30,12 @@ agentsRouter.get('/', async (c) => {
 });
 
 // POST / — create agent
+const BUILTIN_TOOL_NAMES = [
+  'schedule_next_wakeup', 'manage_webhook_trigger', 'record_decision',
+  'memory_store', 'memory_retrieve',
+  'edit_workflow', 'read_variables', 'edit_variables',
+] as const;
+
 const createAgentSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(1000).optional(),
@@ -29,16 +44,28 @@ const createAgentSchema = z.object({
   agentFilePath: z.string().min(1).max(300),
   skillsPaths: z.array(z.string().max(300)).max(20).default([]),
   githubToken: z.string().max(500).optional(),
+  scope: z.enum(['user', 'workspace']).default('user'),
+  builtinToolsEnabled: z.array(z.enum(BUILTIN_TOOL_NAMES)).default([...BUILTIN_TOOL_NAMES]),
 });
 
 agentsRouter.post('/', async (c) => {
   const user = c.get('user');
+  if (!user.workspaceId) return c.json({ error: 'No workspace context' }, 403);
+  if (user.role === 'view_user') return c.json({ error: 'View-only users cannot create agents' }, 403);
+
   const body = createAgentSchema.parse(await c.req.json());
+
+  // Only workspace_admin/super_admin can create workspace-scoped agents
+  if (body.scope === 'workspace' && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Only admins can create workspace-level agents' }, 403);
+  }
 
   const [agent] = await db
     .insert(agents)
     .values({
+      workspaceId: user.workspaceId,
       userId: user.userId,
+      scope: body.scope,
       name: body.name,
       description: body.description,
       gitRepoUrl: body.gitRepoUrl,
@@ -46,8 +73,17 @@ agentsRouter.post('/', async (c) => {
       agentFilePath: body.agentFilePath,
       skillsPaths: body.skillsPaths,
       githubTokenEncrypted: body.githubToken ? encrypt(body.githubToken) : null,
+      builtinToolsEnabled: body.builtinToolsEnabled,
     })
     .returning();
+
+  emitEvent({
+    eventScope: body.scope === 'workspace' ? 'workspace' : 'user',
+    scopeId: body.scope === 'workspace' ? user.workspaceId : user.userId,
+    eventName: EVENT_NAMES.AGENT_CREATED,
+    eventData: { agentId: agent.id, agentName: agent.name, scope: body.scope },
+    actorId: user.userId,
+  });
 
   return c.json(
     {
@@ -71,7 +107,7 @@ agentsRouter.get('/:id', async (c) => {
   });
 
   if (!agent) return c.json({ error: 'Agent not found' }, 404);
-  if (agent.userId !== user.userId) return c.json({ error: 'Forbidden' }, 403);
+  if (agent.workspaceId !== user.workspaceId) return c.json({ error: 'Forbidden' }, 403);
 
   return c.json({ agent });
 });
@@ -86,6 +122,7 @@ const updateAgentSchema = z.object({
   skillsPaths: z.array(z.string().max(300)).max(20).optional(),
   githubToken: z.string().max(500).optional(),
   status: z.enum(['active', 'paused']).optional(),
+  builtinToolsEnabled: z.array(z.enum(BUILTIN_TOOL_NAMES)).optional(),
 });
 
 agentsRouter.put('/:id', async (c) => {
@@ -95,7 +132,17 @@ agentsRouter.put('/:id', async (c) => {
 
   const existing = await db.query.agents.findFirst({ where: eq(agents.id, id) });
   if (!existing) return c.json({ error: 'Agent not found' }, 404);
-  if (existing.userId !== user.userId) return c.json({ error: 'Forbidden' }, 403);
+  if (existing.workspaceId !== user.workspaceId) return c.json({ error: 'Forbidden' }, 403);
+  if (user.role === 'view_user') return c.json({ error: 'View-only users cannot modify agents' }, 403);
+
+  // Workspace-scoped agents can only be modified by admins
+  if (existing.scope === 'workspace' && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Only admins can modify workspace-level agents' }, 403);
+  }
+  // User-scoped agents can only be modified by the owner (or admins)
+  if (existing.scope === 'user' && existing.userId !== user.userId && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
 
   const updateData: Record<string, unknown> = { updatedAt: new Date() };
   if (body.name) updateData.name = body.name;
@@ -106,8 +153,17 @@ agentsRouter.put('/:id', async (c) => {
   if (body.skillsPaths) updateData.skillsPaths = body.skillsPaths;
   if (body.githubToken) updateData.githubTokenEncrypted = encrypt(body.githubToken);
   if (body.status) updateData.status = body.status;
+  if (body.builtinToolsEnabled) updateData.builtinToolsEnabled = body.builtinToolsEnabled;
 
   const [updated] = await db.update(agents).set(updateData).where(eq(agents.id, id)).returning();
+
+  emitEvent({
+    eventScope: existing.scope === 'workspace' ? 'workspace' : 'user',
+    scopeId: existing.scope === 'workspace' ? existing.workspaceId : existing.userId,
+    eventName: body.status ? EVENT_NAMES.AGENT_STATUS_CHANGED : EVENT_NAMES.AGENT_UPDATED,
+    eventData: { agentId: id, changes: Object.keys(body) },
+    actorId: user.userId,
+  });
 
   return c.json({
     agent: { ...updated, githubTokenEncrypted: undefined },
@@ -121,9 +177,28 @@ agentsRouter.delete('/:id', async (c) => {
 
   const existing = await db.query.agents.findFirst({ where: eq(agents.id, id) });
   if (!existing) return c.json({ error: 'Agent not found' }, 404);
-  if (existing.userId !== user.userId) return c.json({ error: 'Forbidden' }, 403);
+  if (existing.workspaceId !== user.workspaceId) return c.json({ error: 'Forbidden' }, 403);
+  if (user.role === 'view_user') return c.json({ error: 'View-only users cannot delete agents' }, 403);
+
+  // Workspace-scoped agents can only be deleted by admins
+  if (existing.scope === 'workspace' && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Only admins can delete workspace-level agents' }, 403);
+  }
+  // User-scoped agents can only be deleted by the owner (or admins)
+  if (existing.scope === 'user' && existing.userId !== user.userId && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
 
   await db.delete(agents).where(eq(agents.id, id));
+
+  emitEvent({
+    eventScope: existing.scope === 'workspace' ? 'workspace' : 'user',
+    scopeId: existing.scope === 'workspace' ? existing.workspaceId : existing.userId,
+    eventName: EVENT_NAMES.AGENT_DELETED,
+    eventData: { agentId: id, agentName: existing.name },
+    actorId: user.userId,
+  });
+
   return c.json({ success: true });
 });
 

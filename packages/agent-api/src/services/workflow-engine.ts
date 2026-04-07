@@ -9,6 +9,7 @@ import {
   agents,
   agentVariables,
   userVariables,
+  workspaceVariables,
   agentQuotaUsage,
   mcpServerConfigs,
   creditUsage,
@@ -274,13 +275,24 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
     orderBy: stepExecutions.stepOrder,
   });
 
-  // Load user-level variables (shared across all steps)
+  // Load workspace-level variables (lowest priority)
+  const workspaceVars = workflow.workspaceId
+    ? await db.query.workspaceVariables.findMany({
+        where: eq(workspaceVariables.workspaceId, workflow.workspaceId),
+      })
+    : [];
+  const wsCredentialMap = new Map(workspaceVars.filter(v => v.variableType === 'credential').map((c) => [c.key, decrypt(c.valueEncrypted)]));
+  const wsPropertyMap = new Map(workspaceVars.filter(v => v.variableType === 'property').map((c) => [c.key, decrypt(c.valueEncrypted)]));
+  const wsEnvVarMap = new Map(workspaceVars.filter(v => v.injectAsEnvVariable).map((c) => [c.key, decrypt(c.valueEncrypted)]));
+
+  // Load user-level variables (overrides workspace)
   const userVars = await db.query.userVariables.findMany({
     where: eq(userVariables.userId, workflow.userId),
   });
-  const userCredentialMap = new Map(userVars.filter(v => v.variableType === 'credential').map((c) => [c.key, decrypt(c.valueEncrypted)]));
-  const userPropertyMap = new Map(userVars.filter(v => v.variableType === 'property').map((c) => [c.key, decrypt(c.valueEncrypted)]));
-  const userEnvVarMap = new Map(userVars.filter(v => v.injectAsEnvVariable).map((c) => [c.key, decrypt(c.valueEncrypted)]));
+  // Start with workspace maps, then overlay user maps (user overrides workspace)
+  const userCredentialMap = new Map([...wsCredentialMap, ...userVars.filter(v => v.variableType === 'credential').map((c) => [c.key, decrypt(c.valueEncrypted)] as [string, string])]);
+  const userPropertyMap = new Map([...wsPropertyMap, ...userVars.filter(v => v.variableType === 'property').map((c) => [c.key, decrypt(c.valueEncrypted)] as [string, string])]);
+  const userEnvVarMap = new Map([...wsEnvVarMap, ...userVars.filter(v => v.injectAsEnvVariable).map((c) => [c.key, decrypt(c.valueEncrypted)] as [string, string])]);
 
   // Mark execution as running
   await db
@@ -356,6 +368,7 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
         properties: mergedProperties,
         envVariables: mergedEnvVars,
         workflowId: workflow.id,
+        workspaceId: workflow.workspaceId ?? '',
         executionId,
         userId: workflow.userId,
         workflowDefaultModel: workflow.defaultModel,
@@ -435,12 +448,13 @@ async function executeCopilotSession(params: {
   properties: Map<string, string>;
   envVariables: Map<string, string>;
   workflowId: string;
+  workspaceId: string;
   executionId: string;
   userId: string;
   workflowDefaultModel?: string | null;
   workflowDefaultReasoningEffort?: string | null;
 }): Promise<{ output: string; reasoningTrace: Record<string, unknown> }> {
-  const { agent, step, resolvedPrompt: rawPrompt, credentials, properties, envVariables, workflowId, executionId, userId, workflowDefaultModel, workflowDefaultReasoningEffort } = params;
+  const { agent, step, resolvedPrompt: rawPrompt, credentials, properties, envVariables, workflowId, workspaceId, executionId, userId, workflowDefaultModel, workflowDefaultReasoningEffort } = params;
 
   // Replace {{ Properties.KEY }} tokens in the prompt with property values
   let resolvedPrompt = rawPrompt;
@@ -500,7 +514,8 @@ async function executeCopilotSession(params: {
       agentId: agent.id,
       workflowId,
       executionId,
-    });
+      userId: agent.userId,
+    }, (agent.builtinToolsEnabled as string[]) ?? undefined);
 
     // 3.1 Load MCP server configurations for this agent from DB
     const mcpConfigs = await db.query.mcpServerConfigs.findMany({
@@ -684,16 +699,19 @@ async function executeCopilotSession(params: {
     // 9. Track credit usage per user per model (best-effort)
     try {
       const today = new Date().toISOString().split('T')[0];
-      // Look up model's credit cost from the models table
-      const modelRecord = await db.query.models.findFirst({
-        where: eq(models.name, model),
-      });
+      // Look up model's credit cost from the models table (scoped to workspace)
+      const modelRecord = workspaceId
+        ? await db.query.models.findFirst({
+            where: eq(models.name, model),
+          })
+        : null;
       const cost = modelRecord ? modelRecord.creditCost : '1.00';
 
       await db
         .insert(creditUsage)
         .values({
           userId,
+          workspaceId,
           modelName: model,
           creditsConsumed: cost,
           sessionCount: 1,

@@ -1,7 +1,7 @@
-import { eq, and } from 'drizzle-orm';
+import { eq, and, gt } from 'drizzle-orm';
 import { createLogger } from '@ai-trader/shared';
 import { db } from '../database/index.js';
-import { triggers, workflows } from '../database/schema.js';
+import { triggers, workflows, systemEvents } from '../database/schema.js';
 import { enqueueWorkflowExecution } from '../services/workflow-engine.js';
 import { getRedisConnection } from '../services/redis.js';
 
@@ -9,6 +9,7 @@ const logger = createLogger('scheduler');
 const POLL_INTERVAL = 30_000; // 30 seconds
 const LEADER_LOCK_KEY = 'scheduler:leader';
 const LEADER_LOCK_TTL = 60; // seconds
+const LAST_EVENT_CURSOR_KEY = 'scheduler:last-event-cursor';
 
 /**
  * Simple cron parser: checks if a cron expression matches the current time.
@@ -117,6 +118,100 @@ async function pollTriggers() {
   }
 }
 
+/**
+ * Poll for new system events and match against event triggers.
+ * Uses a Redis cursor to track which events have been processed.
+ */
+async function pollEventTriggers() {
+  try {
+    const redis = getRedisConnection();
+
+    // Get cursor (last processed event timestamp)
+    const cursorStr = await redis.get(LAST_EVENT_CURSOR_KEY);
+    const cursor = cursorStr ? new Date(cursorStr) : new Date(Date.now() - POLL_INTERVAL);
+
+    // Fetch new events since last cursor
+    const newEvents = await db.query.systemEvents.findMany({
+      where: gt(systemEvents.createdAt, cursor),
+      orderBy: systemEvents.createdAt,
+      limit: 100,
+    });
+
+    if (newEvents.length === 0) return;
+
+    // Get all active event triggers
+    const eventTriggers = await db.query.triggers.findMany({
+      where: and(eq(triggers.triggerType, 'event'), eq(triggers.isActive, true)),
+    });
+
+    if (eventTriggers.length === 0) {
+      // Still update cursor even if no triggers
+      await redis.set(LAST_EVENT_CURSOR_KEY, newEvents[newEvents.length - 1].createdAt.toISOString());
+      return;
+    }
+
+    for (const event of newEvents) {
+      for (const trigger of eventTriggers) {
+        const config = trigger.configuration as Record<string, unknown>;
+        const conditions = config.conditions as Record<string, unknown> | undefined;
+
+        // Match: eventName must match
+        if (config.eventName && config.eventName !== event.eventName) continue;
+
+        // Match: eventScope (optional filter)
+        if (config.eventScope && config.eventScope !== event.eventScope) continue;
+
+        // Match: additional conditions against eventData
+        if (conditions && typeof conditions === 'object') {
+          const eventData = event.eventData as Record<string, unknown>;
+          let match = true;
+          for (const [key, value] of Object.entries(conditions)) {
+            if (eventData[key] !== value) {
+              match = false;
+              break;
+            }
+          }
+          if (!match) continue;
+        }
+
+        // Check workflow is active
+        const workflow = await db.query.workflows.findFirst({
+          where: eq(workflows.id, trigger.workflowId),
+        });
+        if (!workflow?.isActive) continue;
+
+        // Check scope compatibility: workspace event should match workflow workspace
+        if (event.eventScope === 'workspace') {
+          if (workflow.workspaceId !== event.scopeId) continue;
+        }
+
+        // Enqueue workflow execution
+        await enqueueWorkflowExecution(trigger.workflowId, trigger.id, {
+          type: 'event',
+          eventId: event.id,
+          eventName: event.eventName,
+          eventScope: event.eventScope,
+          eventData: event.eventData,
+          firedAt: new Date().toISOString(),
+        });
+
+        // Update last fired time
+        await db.update(triggers).set({ lastFiredAt: new Date() }).where(eq(triggers.id, trigger.id));
+
+        logger.info(
+          { triggerId: trigger.id, workflowId: trigger.workflowId, eventName: event.eventName },
+          'Event trigger fired',
+        );
+      }
+    }
+
+    // Update cursor to latest processed event
+    await redis.set(LAST_EVENT_CURSOR_KEY, newEvents[newEvents.length - 1].createdAt.toISOString());
+  } catch (error) {
+    logger.error({ error }, 'Error polling event triggers');
+  }
+}
+
 async function run() {
   logger.info('Scheduler starting...');
 
@@ -128,7 +223,10 @@ async function run() {
       return;
     }
 
-    await pollTriggers();
+    await Promise.all([
+      pollTriggers(),
+      pollEventTriggers(),
+    ]);
   };
 
   // Initial tick

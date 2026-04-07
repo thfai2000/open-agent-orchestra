@@ -1,55 +1,91 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { eq, desc, sql, gte } from 'drizzle-orm';
+import { eq, desc, sql, gte, and } from 'drizzle-orm';
+import bcrypt from 'bcryptjs';
 import type { Context, Next } from 'hono';
 import { db } from '../database/index.js';
 import {
   users,
   models,
-  globalQuotaSettings,
+  workspaceQuotaSettings,
   creditUsage,
 } from '../database/schema.js';
-import { authMiddleware, uuidSchema } from '@ai-trader/shared';
+import { authMiddleware, uuidSchema, emailSchema, passwordSchema } from '@ai-trader/shared';
 
 const adminRouter = new Hono();
 adminRouter.use('/*', authMiddleware);
 
-// ── Admin middleware ─────────────────────────────────────────────────
+// ── Admin middleware (workspace_admin or super_admin) ─────────────────
 
-async function requireAdmin(c: Context, next: Next): Promise<Response | void> {
+async function requireWorkspaceAdmin(c: Context, next: Next): Promise<Response | void> {
   const user = c.get('user');
-  if (user.role !== 'admin') {
-    return c.json({ error: 'Admin access required' }, 403);
+  if (user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Workspace admin access required' }, 403);
+  }
+  if (!user.workspaceId) {
+    return c.json({ error: 'No workspace context' }, 403);
   }
   await next();
 }
 
-adminRouter.use('/*', requireAdmin);
+adminRouter.use('/*', requireWorkspaceAdmin);
 
 // ═══════════════════════════════════════════════════════════════════════
-// User Management
+// User Management (within workspace)
 // ═══════════════════════════════════════════════════════════════════════
 
-// GET /users — list all users
+// GET /users — list users in current workspace
 adminRouter.get('/users', async (c) => {
+  const user = c.get('user');
   const allUsers = await db.query.users.findMany({
+    where: eq(users.workspaceId, user.workspaceId!),
     columns: { passwordHash: false },
     orderBy: desc(users.createdAt),
   });
   return c.json({ users: allUsers });
 });
 
-// PUT /users/:id/role — update user role
+// POST /users — create user in current workspace
+const createUserSchema = z.object({
+  email: emailSchema,
+  password: passwordSchema,
+  name: z.string().min(1).max(100),
+  role: z.enum(['workspace_admin', 'creator_user', 'view_user']).default('creator_user'),
+});
+
+adminRouter.post('/users', async (c) => {
+  const currentUser = c.get('user');
+  const body = createUserSchema.parse(await c.req.json());
+
+  const existing = await db.query.users.findFirst({ where: eq(users.email, body.email) });
+  if (existing) return c.json({ error: 'Email already registered' }, 409);
+
+  const passwordHash = await bcrypt.hash(body.password, 12);
+  const [newUser] = await db.insert(users).values({
+    email: body.email,
+    passwordHash,
+    name: body.name,
+    role: body.role,
+    workspaceId: currentUser.workspaceId,
+  }).returning({ id: users.id, email: users.email, name: users.name, role: users.role });
+
+  return c.json({ user: newUser }, 201);
+});
+
+// PUT /users/:id/role — update user role within workspace
 const updateRoleSchema = z.object({
-  role: z.enum(['user', 'admin']),
+  role: z.enum(['workspace_admin', 'creator_user', 'view_user']),
 });
 
 adminRouter.put('/users/:id/role', async (c) => {
+  const user = c.get('user');
   const id = uuidSchema.parse(c.req.param('id'));
   const body = updateRoleSchema.parse(await c.req.json());
 
   const existing = await db.query.users.findFirst({ where: eq(users.id, id) });
   if (!existing) return c.json({ error: 'User not found' }, 404);
+  if (existing.workspaceId !== user.workspaceId) return c.json({ error: 'User not in your workspace' }, 403);
+  if (existing.role === 'super_admin') return c.json({ error: 'Cannot modify super_admin role' }, 403);
 
   const [updated] = await db
     .update(users)
@@ -61,12 +97,14 @@ adminRouter.put('/users/:id/role', async (c) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// Model Management
+// Model Management (workspace-scoped)
 // ═══════════════════════════════════════════════════════════════════════
 
-// GET /models — list all models
+// GET /models — list models in current workspace
 adminRouter.get('/models', async (c) => {
+  const user = c.get('user');
   const allModels = await db.query.models.findMany({
+    where: eq(models.workspaceId, user.workspaceId!),
     orderBy: desc(models.createdAt),
   });
   return c.json({ models: allModels });
@@ -82,11 +120,13 @@ const createModelSchema = z.object({
 });
 
 adminRouter.post('/models', async (c) => {
+  const user = c.get('user');
   const body = createModelSchema.parse(await c.req.json());
 
   const [model] = await db
     .insert(models)
     .values({
+      workspaceId: user.workspaceId!,
       name: body.name,
       provider: body.provider,
       description: body.description,
@@ -108,11 +148,13 @@ const updateModelSchema = z.object({
 });
 
 adminRouter.put('/models/:id', async (c) => {
+  const user = c.get('user');
   const id = uuidSchema.parse(c.req.param('id'));
   const body = updateModelSchema.parse(await c.req.json());
 
   const existing = await db.query.models.findFirst({ where: eq(models.id, id) });
   if (!existing) return c.json({ error: 'Model not found' }, 404);
+  if (existing.workspaceId !== user.workspaceId) return c.json({ error: 'Model not in your workspace' }, 403);
 
   const updateData: Record<string, unknown> = { updatedAt: new Date() };
   if (body.name !== undefined) updateData.name = body.name;
@@ -132,26 +174,31 @@ adminRouter.put('/models/:id', async (c) => {
 
 // DELETE /models/:id — delete model
 adminRouter.delete('/models/:id', async (c) => {
+  const user = c.get('user');
   const id = uuidSchema.parse(c.req.param('id'));
 
   const existing = await db.query.models.findFirst({ where: eq(models.id, id) });
   if (!existing) return c.json({ error: 'Model not found' }, 404);
+  if (existing.workspaceId !== user.workspaceId) return c.json({ error: 'Model not in your workspace' }, 403);
 
   await db.delete(models).where(eq(models.id, id));
   return c.json({ success: true });
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// Global Quota Settings
+// Workspace Quota Settings
 // ═══════════════════════════════════════════════════════════════════════
 
-// GET /quota — get global quota settings
+// GET /quota — get workspace quota settings
 adminRouter.get('/quota', async (c) => {
-  const settings = await db.query.globalQuotaSettings.findFirst();
+  const user = c.get('user');
+  const settings = await db.query.workspaceQuotaSettings.findFirst({
+    where: eq(workspaceQuotaSettings.workspaceId, user.workspaceId!),
+  });
   return c.json({ settings: settings ?? { dailyCreditLimit: null, monthlyCreditLimit: null } });
 });
 
-// PUT /quota — update global quota settings
+// PUT /quota — update workspace quota settings
 const updateQuotaSchema = z.object({
   dailyCreditLimit: z.string().regex(/^\d+(\.\d{1,2})?$/).nullable().optional(),
   monthlyCreditLimit: z.string().regex(/^\d+(\.\d{1,2})?$/).nullable().optional(),
@@ -161,25 +208,28 @@ adminRouter.put('/quota', async (c) => {
   const user = c.get('user');
   const body = updateQuotaSchema.parse(await c.req.json());
 
-  const existing = await db.query.globalQuotaSettings.findFirst();
+  const existing = await db.query.workspaceQuotaSettings.findFirst({
+    where: eq(workspaceQuotaSettings.workspaceId, user.workspaceId!),
+  });
 
   if (existing) {
     const [updated] = await db
-      .update(globalQuotaSettings)
+      .update(workspaceQuotaSettings)
       .set({
         dailyCreditLimit: body.dailyCreditLimit ?? existing.dailyCreditLimit,
         monthlyCreditLimit: body.monthlyCreditLimit ?? existing.monthlyCreditLimit,
         updatedBy: user.userId,
         updatedAt: new Date(),
       })
-      .where(eq(globalQuotaSettings.id, existing.id))
+      .where(eq(workspaceQuotaSettings.id, existing.id))
       .returning();
     return c.json({ settings: updated });
   }
 
   const [created] = await db
-    .insert(globalQuotaSettings)
+    .insert(workspaceQuotaSettings)
     .values({
+      workspaceId: user.workspaceId!,
       dailyCreditLimit: body.dailyCreditLimit ?? null,
       monthlyCreditLimit: body.monthlyCreditLimit ?? null,
       updatedBy: user.userId,
@@ -189,11 +239,12 @@ adminRouter.put('/quota', async (c) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// Credit Usage Stats (admin view — all users)
+// Credit Usage Stats (workspace view — all users in workspace)
 // ═══════════════════════════════════════════════════════════════════════
 
-// GET /usage/summary — aggregated credit usage across all users
+// GET /usage/summary — aggregated credit usage within workspace
 adminRouter.get('/usage/summary', async (c) => {
+  const user = c.get('user');
   const days = z.coerce.number().min(1).max(90).default(30).parse(c.req.query('days'));
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - days);
@@ -207,7 +258,7 @@ adminRouter.get('/usage/summary', async (c) => {
       totalSessions: sql<number>`sum(${creditUsage.sessionCount})::int`,
     })
     .from(creditUsage)
-    .where(gte(creditUsage.date, startDateStr))
+    .where(and(eq(creditUsage.workspaceId, user.workspaceId!), gte(creditUsage.date, startDateStr)))
     .groupBy(creditUsage.date)
     .orderBy(creditUsage.date);
 
@@ -219,7 +270,7 @@ adminRouter.get('/usage/summary', async (c) => {
       totalSessions: sql<number>`sum(${creditUsage.sessionCount})::int`,
     })
     .from(creditUsage)
-    .where(gte(creditUsage.date, startDateStr))
+    .where(and(eq(creditUsage.workspaceId, user.workspaceId!), gte(creditUsage.date, startDateStr)))
     .groupBy(creditUsage.modelName);
 
   // Per-user totals
@@ -233,7 +284,7 @@ adminRouter.get('/usage/summary', async (c) => {
     })
     .from(creditUsage)
     .innerJoin(users, eq(creditUsage.userId, users.id))
-    .where(gte(creditUsage.date, startDateStr))
+    .where(and(eq(creditUsage.workspaceId, user.workspaceId!), gte(creditUsage.date, startDateStr)))
     .groupBy(creditUsage.userId, users.name, users.email);
 
   return c.json({ dailyUsage, modelUsage, userUsage, days });

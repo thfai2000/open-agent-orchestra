@@ -3,9 +3,12 @@
 import { defineTool, type Tool } from '@github/copilot-sdk';
 import { z } from 'zod';
 import { eq, and, sql } from 'drizzle-orm';
-import { createLogger } from '@ai-trader/shared';
+import { createLogger, encrypt } from '@ai-trader/shared';
 import { db } from '../database/index.js';
-import { triggers, webhookRegistrations, agentDecisions, agentMemories } from '../database/schema.js';
+import {
+  triggers, webhookRegistrations, agentDecisions, agentMemories,
+  workflows, workflowSteps, agentVariables, userVariables,
+} from '../database/schema.js';
 import { generateEmbedding } from './embedding-service.js';
 
 const logger = createLogger('agent-tools');
@@ -17,6 +20,7 @@ export interface AgentToolContext {
   agentId: string;
   workflowId: string;
   executionId?: string;
+  userId?: string;
 }
 
 /**
@@ -31,15 +35,20 @@ export interface AgentToolContext {
  *   - manage_webhook_trigger — Webhook lifecycle management
  *   - memory_store           — Store semantic memories (pgvector)
  *   - memory_retrieve        — Retrieve memories via similarity search
+ *   - edit_workflow           — Edit workflow triggers and steps
+ *   - read_variables          — Read agent/user variables
+ *   - edit_variables          — Create/update/delete variables
  */
 export function createAgentTools(
   _credentials: Map<string, string>,
   context?: AgentToolContext,
+  enabledTools?: string[],
 ): Tool[] {
-  return [
-    // ── Self-Scheduling Tools ────────────────────────────────────────
+  const toolMap: Record<string, Tool> = {};
 
-    defineTool('schedule_next_wakeup', {
+  // ── Self-Scheduling Tools ────────────────────────────────────────
+
+  toolMap['schedule_next_wakeup'] = defineTool('schedule_next_wakeup', {
       description:
         'Schedule the agent to wake up and run again at a future time. Creates or updates a time_schedule trigger for this workflow.',
       parameters: z.object({
@@ -89,9 +98,9 @@ export function createAgentTools(
 
         return { created: true, triggerId: newTrigger.id, cronExpression, reason };
       },
-    }),
+    });
 
-    defineTool('manage_webhook_trigger', {
+    toolMap['manage_webhook_trigger'] = defineTool('manage_webhook_trigger', {
       description:
         'Create, update, or deactivate a webhook trigger for this agent. Webhook triggers allow external systems to invoke agent workflows.',
       parameters: z.object({
@@ -167,11 +176,11 @@ export function createAgentTools(
           hmacSecret, // returned once for the caller to configure
         };
       },
-    }),
+    });
 
     // ── Decision Audit Trail ─────────────────────────────────────────
 
-    defineTool('record_decision', {
+    toolMap['record_decision'] = defineTool('record_decision', {
       description:
         'Record a decision with reasoning and outcome. Creates an audit trail for post-analysis. Use for any significant agent decision.',
       parameters: z.object({
@@ -237,11 +246,11 @@ export function createAgentTools(
           confidence,
         };
       },
-    }),
+    });
 
     // ── Vector Memory Tools ──────────────────────────────────────────
 
-    defineTool('memory_store', {
+    toolMap['memory_store'] = defineTool('memory_store', {
       description:
         'Store a memory with semantic embedding for later retrieval. Use this to remember important observations, insights, strategies, or lessons learned.',
       parameters: z.object({
@@ -290,9 +299,9 @@ export function createAgentTools(
           createdAt: memory.createdAt,
         };
       },
-    }),
+    });
 
-    defineTool('memory_retrieve', {
+    toolMap['memory_retrieve'] = defineTool('memory_retrieve', {
       description:
         'Retrieve relevant memories using semantic search. Finds memories similar to the query using vector similarity. Use this to recall past observations, decisions, or strategies.',
       parameters: z.object({
@@ -374,6 +383,188 @@ export function createAgentTools(
           })),
         };
       },
-    }),
-  ];
+    });
+
+    // ── Workflow Editing Tools ────────────────────────────────────────
+
+    toolMap['edit_workflow'] = defineTool('edit_workflow', {
+      description:
+        'Edit workflow configuration: update triggers or steps for the current workflow. Use to modify schedule, add/remove steps, or change trigger settings.',
+      parameters: z.object({
+        action: z.enum(['list_triggers', 'add_trigger', 'update_trigger', 'delete_trigger', 'list_steps', 'update_steps'])
+          .describe('Action to perform'),
+        triggerData: z.object({
+          triggerId: z.string().optional(),
+          triggerType: z.enum(['time_schedule', 'webhook', 'event']).optional(),
+          configuration: z.record(z.unknown()).optional(),
+          isActive: z.boolean().optional(),
+        }).optional().describe('Trigger data for add/update/delete actions'),
+        steps: z.array(z.object({
+          name: z.string(),
+          promptTemplate: z.string(),
+          stepOrder: z.number(),
+          agentId: z.string().optional(),
+          model: z.string().optional(),
+          timeoutSeconds: z.number().optional(),
+        })).optional().describe('Steps array for update_steps action'),
+      }),
+      handler: async ({ action, triggerData, steps }: {
+        action: string;
+        triggerData?: { triggerId?: string; triggerType?: string; configuration?: Record<string, unknown>; isActive?: boolean };
+        steps?: Array<{ name: string; promptTemplate: string; stepOrder: number; agentId?: string; model?: string; timeoutSeconds?: number }>;
+      }) => {
+        if (!context?.workflowId) return { error: 'No workflow context available' };
+        logger.info({ action, workflowId: context.workflowId }, 'Tool: edit_workflow');
+
+        if (action === 'list_triggers') {
+          const trigs = await db.query.triggers.findMany({ where: eq(triggers.workflowId, context.workflowId) });
+          return { triggers: trigs };
+        }
+        if (action === 'add_trigger' && triggerData?.triggerType) {
+          const [t] = await db.insert(triggers).values({
+            workflowId: context.workflowId,
+            triggerType: triggerData.triggerType as 'time_schedule' | 'webhook' | 'event',
+            configuration: triggerData.configuration ?? {},
+            isActive: triggerData.isActive ?? true,
+          }).returning();
+          return { created: true, trigger: t };
+        }
+        if (action === 'update_trigger' && triggerData?.triggerId) {
+          const updateData: Record<string, unknown> = {};
+          if (triggerData.configuration) updateData.configuration = triggerData.configuration;
+          if (triggerData.isActive !== undefined) updateData.isActive = triggerData.isActive;
+          const [t] = await db.update(triggers).set(updateData).where(eq(triggers.id, triggerData.triggerId)).returning();
+          return { updated: true, trigger: t };
+        }
+        if (action === 'delete_trigger' && triggerData?.triggerId) {
+          await db.delete(triggers).where(eq(triggers.id, triggerData.triggerId));
+          return { deleted: true };
+        }
+        if (action === 'list_steps') {
+          const s = await db.query.workflowSteps.findMany({ where: eq(workflowSteps.workflowId, context.workflowId) });
+          return { steps: s };
+        }
+        if (action === 'update_steps' && steps) {
+          await db.delete(workflowSteps).where(eq(workflowSteps.workflowId, context.workflowId));
+          const inserted = [];
+          for (const step of steps) {
+            const [s] = await db.insert(workflowSteps).values({
+              workflowId: context.workflowId,
+              name: step.name,
+              promptTemplate: step.promptTemplate,
+              stepOrder: step.stepOrder,
+              agentId: step.agentId ?? null,
+              model: step.model ?? null,
+              timeoutSeconds: step.timeoutSeconds ?? 300,
+            }).returning();
+            inserted.push(s);
+          }
+          // Increment workflow version
+          await db.update(workflows).set({
+            version: sql`version + 1`,
+            updatedAt: new Date(),
+          }).where(eq(workflows.id, context.workflowId));
+          return { updated: true, steps: inserted };
+        }
+        return { error: 'Invalid action or missing data' };
+      },
+    });
+
+    // ── Variable Reading Tools ───────────────────────────────────────
+
+    toolMap['read_variables'] = defineTool('read_variables', {
+      description:
+        'Read agent-level or user-level variables (properties and credentials). Credential values are masked for security.',
+      parameters: z.object({
+        scope: z.enum(['agent', 'user']).describe('Read agent-level or user-level variables'),
+        variableType: z.enum(['property', 'credential', 'all']).default('all').describe('Filter by variable type'),
+      }),
+      skipPermission: true,
+      handler: async ({ scope, variableType }: { scope: 'agent' | 'user'; variableType: string }) => {
+        logger.info({ scope, variableType, agentId: context?.agentId }, 'Tool: read_variables');
+
+        if (scope === 'agent' && context?.agentId) {
+          let vars = await db.query.agentVariables.findMany({ where: eq(agentVariables.agentId, context.agentId) });
+          if (variableType !== 'all') vars = vars.filter(v => v.variableType === variableType);
+          return {
+            variables: vars.map(v => ({
+              id: v.id, key: v.key, variableType: v.variableType,
+              description: v.description, injectAsEnvVariable: v.injectAsEnvVariable,
+              value: v.variableType === 'property' ? '(use {{ Properties.' + v.key + ' }} in prompts)' : '••••••••',
+            })),
+          };
+        }
+        if (scope === 'user' && context?.userId) {
+          let vars = await db.query.userVariables.findMany({ where: eq(userVariables.userId, context.userId) });
+          if (variableType !== 'all') vars = vars.filter(v => v.variableType === variableType);
+          return {
+            variables: vars.map(v => ({
+              id: v.id, key: v.key, variableType: v.variableType,
+              description: v.description, injectAsEnvVariable: v.injectAsEnvVariable,
+              value: v.variableType === 'property' ? '(use {{ Properties.' + v.key + ' }} in prompts)' : '••••••••',
+            })),
+          };
+        }
+        return { error: 'No context available for the requested scope' };
+      },
+    });
+
+    // ── Variable Editing Tools ───────────────────────────────────────
+
+    toolMap['edit_variables'] = defineTool('edit_variables', {
+      description:
+        'Create, update, or delete agent-level variables (properties and credentials). Values are encrypted at rest.',
+      parameters: z.object({
+        action: z.enum(['create', 'update', 'delete']).describe('Action to perform'),
+        key: z.string().describe('Variable key (UPPER_SNAKE_CASE)'),
+        value: z.string().optional().describe('Variable value (required for create/update)'),
+        description: z.string().optional().describe('Description of the variable'),
+        variableType: z.enum(['property', 'credential']).optional().describe('Type of variable'),
+        injectAsEnvVariable: z.boolean().optional().describe('Whether to inject as .env variable'),
+        variableId: z.string().optional().describe('Variable ID for update/delete'),
+      }),
+      handler: async ({ action, key, value, description, variableType, injectAsEnvVariable, variableId }: {
+        action: string; key: string; value?: string; description?: string;
+        variableType?: string; injectAsEnvVariable?: boolean; variableId?: string;
+      }) => {
+        if (!context?.agentId) return { error: 'No agent context available' };
+        logger.info({ action, key, agentId: context.agentId }, 'Tool: edit_variables');
+
+        if (action === 'create') {
+          if (!value) return { error: 'Value is required for create' };
+          const [v] = await db.insert(agentVariables).values({
+            agentId: context.agentId,
+            key,
+            valueEncrypted: encrypt(value),
+            variableType: (variableType as 'property' | 'credential') ?? 'credential',
+            injectAsEnvVariable: injectAsEnvVariable ?? false,
+            description: description ?? null,
+          }).returning({ id: agentVariables.id, key: agentVariables.key });
+          return { created: true, variable: v };
+        }
+        if (action === 'update' && variableId) {
+          const updateData: Record<string, unknown> = { updatedAt: new Date() };
+          if (value) updateData.valueEncrypted = encrypt(value);
+          if (description !== undefined) updateData.description = description;
+          if (variableType) updateData.variableType = variableType;
+          if (injectAsEnvVariable !== undefined) updateData.injectAsEnvVariable = injectAsEnvVariable;
+          const [v] = await db.update(agentVariables).set(updateData).where(eq(agentVariables.id, variableId)).returning({ id: agentVariables.id, key: agentVariables.key });
+          return { updated: true, variable: v };
+        }
+        if (action === 'delete' && variableId) {
+          await db.delete(agentVariables).where(eq(agentVariables.id, variableId));
+          return { deleted: true };
+        }
+        return { error: 'Invalid action or missing data' };
+      },
+    });
+
+    // ── Filter by enabled tools ──────────────────────────────────────
+
+    if (enabledTools && enabledTools.length > 0) {
+      return enabledTools
+        .filter((name) => toolMap[name])
+        .map((name) => toolMap[name]);
+    }
+    return Object.values(toolMap);
 }

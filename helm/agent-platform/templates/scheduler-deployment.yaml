@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: scheduler
+spec:
+  replicas: {{ .Values.scheduler.replicas }}
+  selector:
+    matchLabels:
+      app: scheduler
+  template:
+    metadata:
+      labels:
+        app: scheduler
+    spec:
+      containers:
+        - name: scheduler
+          image: {{ .Values.api.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["node", "--import", "tsx", "packages/agent-api/src/workers/scheduler.ts"]
+          envFrom:
+            - configMapRef:
+                name: agent-platform-config
+            - secretRef:
+                name: agent-platform-secrets
+          resources:
+            requests:
+              memory: {{ .Values.scheduler.resources.requests.memory }}
+              cpu: {{ .Values.scheduler.resources.requests.cpu }}
+            limits:
+              memory: {{ .Values.scheduler.resources.limits.memory }}
+              cpu: {{ .Values.scheduler.resources.limits.cpu }}

@@ -3,6 +3,8 @@ export interface AuthUser {
   email: string;
   name: string;
   role: string;
+  workspaceId: string | null;
+  workspaceSlug: string | null;
 }
 
 export interface JwtPayload {
@@ -10,6 +12,8 @@ export interface JwtPayload {
   email: string;
   name: string;
   role: string;
+  workspaceId: string | null;
+  workspaceSlug: string | null;
   iat: number;
   exp: number;
 }

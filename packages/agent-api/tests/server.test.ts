@@ -13,6 +13,7 @@ vi.mock('../src/database/index.js', () => ({
       userCredentials: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
       webhookRegistrations: { findFirst: vi.fn() },
       mcpServerConfigs: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+      systemEvents: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
     },
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -129,7 +130,9 @@ describe('Agent routes', () => {
       userId: '550e8400-e29b-41d4-a716-446655440000',
       email: 'test@example.com',
       name: 'Test',
-      role: 'user',
+      role: 'creator_user',
+      workspaceId: '550e8400-e29b-41d4-a716-446655440001',
+      workspaceSlug: 'default',
     });
     const { app } = await import('../src/server.js');
     const res = await app.request('/api/agents', {
@@ -174,7 +177,9 @@ describe('Variable routes', () => {
       userId: '550e8400-e29b-41d4-a716-446655440000',
       email: 'test@example.com',
       name: 'Test',
-      role: 'user',
+      role: 'creator_user',
+      workspaceId: '550e8400-e29b-41d4-a716-446655440001',
+      workspaceSlug: 'default',
     });
     const { app } = await import('../src/server.js');
     const res = await app.request('/api/variables', {
@@ -239,12 +244,51 @@ describe('MCP server routes', () => {
       userId: '550e8400-e29b-41d4-a716-446655440000',
       email: 'test@example.com',
       name: 'Test',
-      role: 'user',
+      role: 'creator_user',
+      workspaceId: '550e8400-e29b-41d4-a716-446655440001',
+      workspaceSlug: 'default',
     });
     const { app } = await import('../src/server.js');
     const res = await app.request('/api/mcp-servers', {
       headers: { Authorization: 'Bearer ' + token },
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('Event routes', () => {
+  it('requires auth for events list', async () => {
+    const { app } = await import('../src/server.js');
+    const res = await app.request('/api/events');
+    expect(res.status).toBe(401);
+  });
+
+  it('requires auth for event names', async () => {
+    const { app } = await import('../src/server.js');
+    const res = await app.request('/api/events/names');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns event names with auth', async () => {
+    const { createJwt } = await import('@ai-trader/shared');
+    const token = await createJwt({
+      userId: '550e8400-e29b-41d4-a716-446655440000',
+      email: 'test@example.com',
+      name: 'Test',
+      role: 'creator_user',
+      workspaceId: '550e8400-e29b-41d4-a716-446655440001',
+      workspaceSlug: 'default',
+    });
+    const { app } = await import('../src/server.js');
+    const res = await app.request('/api/events/names', {
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.eventNames).toBeDefined();
+    expect(Array.isArray(json.eventNames)).toBe(true);
+    expect(json.eventNames.length).toBeGreaterThan(0);
+    expect(json.eventNames).toContain('agent.created');
+    expect(json.eventNames).toContain('execution.completed');
   });
 });

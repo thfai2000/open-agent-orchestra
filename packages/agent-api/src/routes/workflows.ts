@@ -1,20 +1,28 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { eq, desc, and, sql } from 'drizzle-orm';
+import { eq, desc, and, or, sql } from 'drizzle-orm';
 import { db } from '../database/index.js';
-import { workflows, workflowSteps, triggers, workflowExecutions, users } from '../database/schema.js';
+import { workflows, workflowSteps, triggers, workflowExecutions, users, agents } from '../database/schema.js';
 import { authMiddleware, uuidSchema } from '@ai-trader/shared';
 import { enqueueWorkflowExecution } from '../services/workflow-engine.js';
+import { emitEvent, EVENT_NAMES } from '../services/system-events.js';
 
 const workflowsRouter = new Hono();
 workflowsRouter.use('/*', authMiddleware);
 
-// GET / — list workflows for current user
+// GET / — list workflows visible to user: user-scoped (own) + workspace-scoped
 workflowsRouter.get('/', async (c) => {
   const user = c.get('user');
+  if (!user.workspaceId) return c.json({ workflows: [] });
 
   const workflowList = await db.query.workflows.findMany({
-    where: eq(workflows.userId, user.userId),
+    where: and(
+      eq(workflows.workspaceId, user.workspaceId),
+      or(
+        eq(workflows.scope, 'workspace'),
+        eq(workflows.userId, user.userId),
+      ),
+    ),
   });
 
   // Fetch last execution time for each workflow
@@ -70,13 +78,30 @@ const createWorkflowSchema = z.object({
   defaultAgentId: z.string().uuid().optional(),
   defaultModel: z.string().max(100).optional(),
   defaultReasoningEffort: z.enum(['high', 'medium', 'low']).optional(),
+  scope: z.enum(['user', 'workspace']).default('user'),
   steps: z.array(stepSchema).min(1).max(20),
   triggers: z.array(triggerSchema).optional(),
 });
 
 workflowsRouter.post('/', async (c) => {
   const user = c.get('user');
+  if (!user.workspaceId) return c.json({ error: 'No workspace context' }, 403);
+  if (user.role === 'view_user') return c.json({ error: 'View-only users cannot create workflows' }, 403);
   const body = createWorkflowSchema.parse(await c.req.json());
+
+  // Only workspace_admin/super_admin can create workspace-scoped workflows
+  if (body.scope === 'workspace' && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Only admins can create workspace-level workflows' }, 403);
+  }
+
+  // Validate that referenced agentId belongs to same workspace and is accessible
+  // Workspace-scoped workflows can only use workspace-scoped agents
+  if (body.defaultAgentId) {
+    const agent = await db.query.agents.findFirst({ where: eq(agents.id, body.defaultAgentId) });
+    if (!agent || agent.workspaceId !== user.workspaceId) {
+      return c.json({ error: 'Default agent not found in this workspace' }, 400);
+    }
+  }
 
   // Validate webhook path uniqueness if any webhook triggers
   if (body.triggers) {
@@ -99,7 +124,9 @@ workflowsRouter.post('/', async (c) => {
     const [workflow] = await tx
       .insert(workflows)
       .values({
+        workspaceId: user.workspaceId!,
         userId: user.userId,
+        scope: body.scope,
         name: body.name,
         description: body.description,
         defaultAgentId: body.defaultAgentId,
@@ -141,6 +168,14 @@ workflowsRouter.post('/', async (c) => {
     }
 
     return { workflow, steps, triggers: workflowTriggers };
+  });
+
+  emitEvent({
+    eventScope: body.scope === 'workspace' ? 'workspace' : 'user',
+    scopeId: body.scope === 'workspace' ? user.workspaceId! : user.userId,
+    eventName: EVENT_NAMES.WORKFLOW_CREATED,
+    eventData: { workflowId: result.workflow.id, workflowName: body.name, scope: body.scope },
+    actorId: user.userId,
   });
 
   return c.json(result, 201);
@@ -196,8 +231,21 @@ const updateWorkflowSchema = z.object({
 });
 
 workflowsRouter.put('/:id', async (c) => {
+  const user = c.get('user');
   const id = uuidSchema.parse(c.req.param('id'));
   const body = updateWorkflowSchema.parse(await c.req.json());
+
+  const existing = await db.query.workflows.findFirst({ where: eq(workflows.id, id) });
+  if (!existing) return c.json({ error: 'Workflow not found' }, 404);
+  if (existing.workspaceId !== user.workspaceId) return c.json({ error: 'Forbidden' }, 403);
+
+  // Scope-based authorization
+  if (existing.scope === 'workspace' && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Only admins can modify workspace-level workflows' }, 403);
+  }
+  if (existing.scope === 'user' && existing.userId !== user.userId && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
 
   const [updated] = await db
     .update(workflows)
@@ -209,7 +257,14 @@ workflowsRouter.put('/:id', async (c) => {
     .where(eq(workflows.id, id))
     .returning();
 
-  if (!updated) return c.json({ error: 'Workflow not found' }, 404);
+  emitEvent({
+    eventScope: existing.scope === 'workspace' ? 'workspace' : 'user',
+    scopeId: existing.scope === 'workspace' ? existing.workspaceId : existing.userId,
+    eventName: EVENT_NAMES.WORKFLOW_UPDATED,
+    eventData: { workflowId: id, changes: Object.keys(body) },
+    actorId: user.userId,
+  });
+
   return c.json({ workflow: updated });
 });
 
@@ -252,8 +307,30 @@ workflowsRouter.put('/:id/steps', async (c) => {
 
 // DELETE /:id
 workflowsRouter.delete('/:id', async (c) => {
+  const user = c.get('user');
   const id = uuidSchema.parse(c.req.param('id'));
+
+  const existing = await db.query.workflows.findFirst({ where: eq(workflows.id, id) });
+  if (!existing) return c.json({ error: 'Workflow not found' }, 404);
+  if (existing.workspaceId !== user.workspaceId) return c.json({ error: 'Forbidden' }, 403);
+
+  if (existing.scope === 'workspace' && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Only admins can delete workspace-level workflows' }, 403);
+  }
+  if (existing.scope === 'user' && existing.userId !== user.userId && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+
   await db.delete(workflows).where(eq(workflows.id, id));
+
+  emitEvent({
+    eventScope: existing.scope === 'workspace' ? 'workspace' : 'user',
+    scopeId: existing.scope === 'workspace' ? existing.workspaceId : existing.userId,
+    eventName: EVENT_NAMES.WORKFLOW_DELETED,
+    eventData: { workflowId: id, workflowName: existing.name },
+    actorId: user.userId,
+  });
+
   return c.json({ success: true });
 });
 
