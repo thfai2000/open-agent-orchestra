@@ -119,6 +119,57 @@ async function pollTriggers() {
 }
 
 /**
+ * Poll for exact datetime triggers that have reached their scheduled time.
+ * Fires once and deactivates the trigger.
+ */
+async function pollExactDatetimeTriggers() {
+  try {
+    const activeTriggers = await db.query.triggers.findMany({
+      where: and(eq(triggers.triggerType, 'exact_datetime'), eq(triggers.isActive, true)),
+    });
+
+    const now = new Date();
+
+    for (const trigger of activeTriggers) {
+      const config = trigger.configuration as Record<string, unknown>;
+      const datetimeStr = config.datetime as string | undefined;
+
+      if (!datetimeStr) continue;
+
+      const scheduledTime = new Date(datetimeStr);
+      if (isNaN(scheduledTime.getTime())) continue;
+
+      // Check if scheduled time has passed
+      if (scheduledTime > now) continue;
+
+      // Check workflow is active
+      const workflow = await db.query.workflows.findFirst({
+        where: eq(workflows.id, trigger.workflowId),
+      });
+      if (!workflow?.isActive) continue;
+
+      // Enqueue workflow execution
+      await enqueueWorkflowExecution(trigger.workflowId, trigger.id, {
+        type: 'exact_datetime',
+        datetime: datetimeStr,
+        reason: config.reason as string | undefined,
+        firedAt: now.toISOString(),
+      });
+
+      // Deactivate trigger (one-shot) and update last fired
+      await db.update(triggers).set({ isActive: false, lastFiredAt: now }).where(eq(triggers.id, trigger.id));
+
+      logger.info(
+        { triggerId: trigger.id, workflowId: trigger.workflowId, datetime: datetimeStr },
+        'Exact datetime trigger fired',
+      );
+    }
+  } catch (error) {
+    logger.error({ error }, 'Error polling exact datetime triggers');
+  }
+}
+
+/**
  * Poll for new system events and match against event triggers.
  * Uses a Redis cursor to track which events have been processed.
  */
@@ -225,6 +276,7 @@ async function run() {
 
     await Promise.all([
       pollTriggers(),
+      pollExactDatetimeTriggers(),
       pollEventTriggers(),
     ]);
   };

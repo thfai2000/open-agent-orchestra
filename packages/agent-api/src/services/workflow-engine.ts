@@ -19,7 +19,7 @@ import { decrypt, createLogger } from '@ai-trader/shared';
 import { getRedisConnection } from './redis.js';
 import { CopilotClient, approveAll, defineTool } from '@github/copilot-sdk';
 import { z } from 'zod';
-import { prepareAgentWorkspace } from './agent-workspace.js';
+import { prepareAgentWorkspace, prepareDbAgentWorkspace } from './agent-workspace.js';
 import { createAgentTools } from './agent-tools.js';
 import { connectToMcpServer } from './mcp-client.js';
 import { loadAgentPlugins, readPluginSkills, getPluginMcpServers, getPluginToolDefs } from './plugin-loader.js';
@@ -480,14 +480,17 @@ async function executeCopilotSession(params: {
     );
   }
 
-  // 1. Prepare agent workspace (clone repo, read agent.md + skills)
-  const workspace = await prepareAgentWorkspace({
-    gitRepoUrl: agent.gitRepoUrl,
-    gitBranch: agent.gitBranch,
-    agentFilePath: agent.agentFilePath,
-    skillsPaths: agent.skillsPaths ?? [],
-    githubTokenEncrypted: agent.githubTokenEncrypted,
-  });
+  // 1. Prepare agent workspace based on source type
+  const workspace = agent.sourceType === 'database'
+    ? await prepareDbAgentWorkspace(agent.id)
+    : await prepareAgentWorkspace({
+      gitRepoUrl: agent.gitRepoUrl!,
+      gitBranch: agent.gitBranch,
+      agentFilePath: agent.agentFilePath!,
+      skillsPaths: agent.skillsPaths ?? [],
+      skillsDirectory: agent.skillsDirectory,
+      githubTokenEncrypted: agent.githubTokenEncrypted,
+    });
 
   const toolCalls: Array<{ tool: string; args: unknown }> = [];
   const mcpCleanups: Array<() => Promise<void>> = [];

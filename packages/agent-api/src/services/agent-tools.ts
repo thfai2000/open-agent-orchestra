@@ -30,9 +30,9 @@ export interface AgentToolContext {
  * Domain-specific tools are provided externally via MCP servers configured per-agent.
  *
  * Built-in tools:
- *   - record_decision        — Audit trail for agent decisions
- *   - schedule_next_wakeup   — Self-scheduling (cron triggers)
- *   - manage_webhook_trigger — Webhook lifecycle management
+ *   - record_decision                    — Audit trail for agent decisions
+ *   - schedule_next_workflow_execution  — Self-scheduling (exact datetime triggers)
+ *   - manage_webhook_trigger             — Webhook lifecycle management
  *   - memory_store           — Store semantic memories (pgvector)
  *   - memory_retrieve        — Retrieve memories via similarity search
  *   - edit_workflow           — Edit workflow triggers and steps
@@ -48,30 +48,36 @@ export function createAgentTools(
 
   // ── Self-Scheduling Tools ────────────────────────────────────────
 
-  toolMap['schedule_next_wakeup'] = defineTool('schedule_next_wakeup', {
+  toolMap['schedule_next_workflow_execution'] = defineTool('schedule_next_workflow_execution', {
       description:
-        'Schedule the agent to wake up and run again at a future time. Creates or updates a time_schedule trigger for this workflow.',
+        'Schedule the next workflow execution at an exact future datetime. Creates or updates an exact_datetime trigger for this workflow. The trigger fires once at the specified time and then deactivates.',
       parameters: z.object({
-        cronExpression: z
+        datetime: z
           .string()
-          .describe('Cron expression for when to run next (e.g. "0 9 * * 1-5" for weekdays at 9am)'),
+          .describe('ISO 8601 datetime for when to run next (e.g. "2025-01-15T09:00:00Z")'),
         reason: z.string().optional().describe('Why this schedule was chosen'),
       }),
       handler: async ({
-        cronExpression,
+        datetime,
         reason,
       }: {
-        cronExpression: string;
+        datetime: string;
         reason?: string;
       }) => {
         if (!context?.workflowId) return { error: 'No workflow context available' };
-        logger.info({ cronExpression, workflowId: context.workflowId, reason }, 'Tool: schedule_next_wakeup');
 
-        // Check for existing time_schedule trigger
+        // Validate the datetime
+        const scheduledTime = new Date(datetime);
+        if (isNaN(scheduledTime.getTime())) return { error: 'Invalid datetime format. Use ISO 8601 format.' };
+        if (scheduledTime <= new Date()) return { error: 'Datetime must be in the future.' };
+
+        logger.info({ datetime, workflowId: context.workflowId, reason }, 'Tool: schedule_next_workflow_execution');
+
+        // Check for existing exact_datetime trigger and update it, or create new
         const existing = await db.query.triggers.findFirst({
           where: and(
             eq(triggers.workflowId, context.workflowId),
-            eq(triggers.triggerType, 'time_schedule'),
+            eq(triggers.triggerType, 'exact_datetime'),
           ),
         });
 
@@ -79,24 +85,24 @@ export function createAgentTools(
           await db
             .update(triggers)
             .set({
-              configuration: { cron: cronExpression, reason },
+              configuration: { datetime, reason },
               isActive: true,
             })
             .where(eq(triggers.id, existing.id));
-          return { updated: true, triggerId: existing.id, cronExpression, reason };
+          return { updated: true, triggerId: existing.id, datetime, reason };
         }
 
         const [newTrigger] = await db
           .insert(triggers)
           .values({
             workflowId: context.workflowId,
-            triggerType: 'time_schedule',
-            configuration: { cron: cronExpression, reason },
+            triggerType: 'exact_datetime',
+            configuration: { datetime, reason },
             isActive: true,
           })
           .returning({ id: triggers.id });
 
-        return { created: true, triggerId: newTrigger.id, cronExpression, reason };
+        return { created: true, triggerId: newTrigger.id, datetime, reason };
       },
     });
 
@@ -330,6 +336,10 @@ export function createAgentTools(
 
         // Generate query embedding for similarity search
         const queryEmbedding = await generateEmbedding(query);
+        // Validate embedding values are actual numbers to prevent SQL injection
+        if (!queryEmbedding.every((v) => typeof v === 'number' && Number.isFinite(v))) {
+          return { error: 'Invalid embedding generated' };
+        }
         const embeddingStr = `[${queryEmbedding.join(',')}]`;
 
         // Build pgvector cosine distance query with parameterized conditions
@@ -395,7 +405,7 @@ export function createAgentTools(
           .describe('Action to perform'),
         triggerData: z.object({
           triggerId: z.string().optional(),
-          triggerType: z.enum(['time_schedule', 'webhook', 'event']).optional(),
+          triggerType: z.enum(['time_schedule', 'exact_datetime', 'webhook', 'event']).optional(),
           configuration: z.record(z.unknown()).optional(),
           isActive: z.boolean().optional(),
         }).optional().describe('Trigger data for add/update/delete actions'),
@@ -423,7 +433,7 @@ export function createAgentTools(
         if (action === 'add_trigger' && triggerData?.triggerType) {
           const [t] = await db.insert(triggers).values({
             workflowId: context.workflowId,
-            triggerType: triggerData.triggerType as 'time_schedule' | 'webhook' | 'event',
+            triggerType: triggerData.triggerType as 'time_schedule' | 'exact_datetime' | 'webhook' | 'event',
             configuration: triggerData.configuration ?? {},
             isActive: triggerData.isActive ?? true,
           }).returning();

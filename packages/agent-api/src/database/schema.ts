@@ -23,10 +23,12 @@ export const eventScopeEnum = pgEnum('event_scope', ['workspace', 'user']);
 export const agentStatusEnum = pgEnum('agent_status', ['active', 'paused', 'error']);
 export const triggerTypeEnum = pgEnum('trigger_type', [
   'time_schedule',
+  'exact_datetime',
   'webhook',
   'event',
   'manual',
 ]);
+export const agentSourceTypeEnum = pgEnum('agent_source_type', ['github_repo', 'database']);
 export const executionStatusEnum = pgEnum('execution_status', [
   'pending',
   'running',
@@ -80,13 +82,15 @@ export const agents = pgTable('agents', {
   scope: resourceScopeEnum('scope').notNull().default('user'), // 'user' or 'workspace'
   name: varchar('name', { length: 100 }).notNull(),
   description: text('description'),
-  gitRepoUrl: varchar('git_repo_url', { length: 500 }).notNull(),
+  sourceType: agentSourceTypeEnum('source_type').notNull().default('github_repo'),
+  gitRepoUrl: varchar('git_repo_url', { length: 500 }), // required for github_repo source
   gitBranch: varchar('git_branch', { length: 100 }).notNull().default('main'),
-  agentFilePath: varchar('agent_file_path', { length: 300 }).notNull(),
+  agentFilePath: varchar('agent_file_path', { length: 300 }), // required for github_repo source
   skillsPaths: varchar('skills_paths', { length: 300 }).array().notNull().default([]),
+  skillsDirectory: varchar('skills_directory', { length: 300 }), // e.g. "skills/" — loads all .md files from this directory (github_repo only)
   githubTokenEncrypted: text('github_token_encrypted'),
   builtinToolsEnabled: jsonb('builtin_tools_enabled').notNull().default([
-    'schedule_next_wakeup', 'manage_webhook_trigger', 'record_decision',
+    'schedule_next_workflow_execution', 'manage_webhook_trigger', 'record_decision',
     'memory_store', 'memory_retrieve',
     'edit_workflow', 'read_variables', 'edit_variables',
   ]), // array of enabled built-in tool names
@@ -95,6 +99,25 @@ export const agents = pgTable('agents', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ─── Agent Files (DB-stored agent instruction/skill files) ───────────
+
+export const agentFiles = pgTable(
+  'agent_files',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    filePath: varchar('file_path', { length: 500 }).notNull(), // e.g. "agent.md", "skills/trading.md"
+    content: text('content').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    agentFilePathIdx: uniqueIndex('agent_files_agent_path_idx').on(table.agentId, table.filePath),
+  }),
+);
 
 // ─── Workflows ───────────────────────────────────────────────────────
 

@@ -172,7 +172,8 @@
                 <div class="space-y-1">
                   <Label class="text-xs">Type *</Label>
                   <select v-model="trigger.triggerType" class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                    <option value="time_schedule">Time Schedule (Cron)</option>
+                    <option value="time_schedule">Repeatable Schedule (Cron)</option>
+                    <option value="exact_datetime">Exact Datetime</option>
                     <option value="webhook">Webhook</option>
                     <option value="event">Event</option>
                   </select>
@@ -181,6 +182,11 @@
                   <Label class="text-xs">Cron Expression *</Label>
                   <Input v-model="trigger.cron" class="font-mono" placeholder="0 9 * * 1-5" />
                   <p class="text-xs text-muted-foreground">e.g. "0 9 * * 1-5" = 9am weekdays</p>
+                </div>
+                <div v-if="trigger.triggerType === 'exact_datetime'" class="space-y-1">
+                  <Label class="text-xs">Datetime *</Label>
+                  <Input v-model="trigger.datetime" type="datetime-local" />
+                  <p class="text-xs text-muted-foreground">Fires once at this exact datetime then deactivates.</p>
                 </div>
                 <div v-if="trigger.triggerType === 'webhook'" class="space-y-1">
                   <Label class="text-xs">Webhook Path *</Label>
@@ -210,7 +216,7 @@
 
 <script setup lang="ts">
 interface StepForm { name: string; promptTemplate: string; agentId: string; model: string; reasoningEffort: string; timeoutSeconds: number; }
-interface TriggerForm { triggerType: string; cron: string; webhookPath: string; eventType: string; }
+interface TriggerForm { triggerType: string; cron: string; webhookPath: string; eventType: string; datetime: string; }
 
 const { authHeaders, user } = useAuth();
 const headers = authHeaders();
@@ -242,7 +248,7 @@ function addStep() {
   form.steps.push({ name: '', promptTemplate: '', agentId: '', model: '', reasoningEffort: '', timeoutSeconds: 300 });
 }
 function addTrigger() {
-  form.triggers.push({ triggerType: 'time_schedule', cron: '', webhookPath: '', eventType: '' });
+  form.triggers.push({ triggerType: 'time_schedule', cron: '', webhookPath: '', eventType: '', datetime: '' });
 }
 
 async function handleCreate() {
@@ -252,6 +258,7 @@ async function handleCreate() {
     const triggerPayloads = form.triggers.map((t) => {
       const configuration: Record<string, unknown> = {};
       if (t.triggerType === 'time_schedule') configuration.cron = t.cron;
+      if (t.triggerType === 'exact_datetime') configuration.datetime = new Date(t.datetime).toISOString();
       if (t.triggerType === 'webhook') configuration.path = t.webhookPath;
       if (t.triggerType === 'event') configuration.eventType = t.eventType;
       return { triggerType: t.triggerType, configuration };

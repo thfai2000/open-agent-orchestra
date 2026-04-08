@@ -31,7 +31,7 @@ agentsRouter.get('/', async (c) => {
 
 // POST / — create agent
 const BUILTIN_TOOL_NAMES = [
-  'schedule_next_wakeup', 'manage_webhook_trigger', 'record_decision',
+  'schedule_next_workflow_execution', 'manage_webhook_trigger', 'record_decision',
   'memory_store', 'memory_retrieve',
   'edit_workflow', 'read_variables', 'edit_variables',
 ] as const;
@@ -39,14 +39,24 @@ const BUILTIN_TOOL_NAMES = [
 const createAgentSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(1000).optional(),
-  gitRepoUrl: z.string().url().max(500),
+  sourceType: z.enum(['github_repo', 'database']).default('github_repo'),
+  gitRepoUrl: z.string().url().max(500).optional(),
   gitBranch: z.string().max(100).default('main'),
-  agentFilePath: z.string().min(1).max(300),
+  agentFilePath: z.string().min(1).max(300).optional(),
   skillsPaths: z.array(z.string().max(300)).max(20).default([]),
+  skillsDirectory: z.string().max(300).optional(),
   githubToken: z.string().max(500).optional(),
   scope: z.enum(['user', 'workspace']).default('user'),
   builtinToolsEnabled: z.array(z.enum(BUILTIN_TOOL_NAMES)).default([...BUILTIN_TOOL_NAMES]),
-});
+}).refine(
+  (data) => {
+    if (data.sourceType === 'github_repo') {
+      return !!data.gitRepoUrl && !!data.agentFilePath;
+    }
+    return true;
+  },
+  { message: 'gitRepoUrl and agentFilePath are required for github_repo source type' },
+);
 
 agentsRouter.post('/', async (c) => {
   const user = c.get('user');
@@ -68,10 +78,12 @@ agentsRouter.post('/', async (c) => {
       scope: body.scope,
       name: body.name,
       description: body.description,
-      gitRepoUrl: body.gitRepoUrl,
+      sourceType: body.sourceType,
+      gitRepoUrl: body.gitRepoUrl ?? null,
       gitBranch: body.gitBranch,
-      agentFilePath: body.agentFilePath,
+      agentFilePath: body.agentFilePath ?? null,
       skillsPaths: body.skillsPaths,
+      skillsDirectory: body.skillsDirectory ?? null,
       githubTokenEncrypted: body.githubToken ? encrypt(body.githubToken) : null,
       builtinToolsEnabled: body.builtinToolsEnabled,
     })
@@ -116,10 +128,12 @@ agentsRouter.get('/:id', async (c) => {
 const updateAgentSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(1000).optional(),
+  sourceType: z.enum(['github_repo', 'database']).optional(),
   gitRepoUrl: z.string().url().max(500).optional(),
   gitBranch: z.string().max(100).optional(),
   agentFilePath: z.string().min(1).max(300).optional(),
   skillsPaths: z.array(z.string().max(300)).max(20).optional(),
+  skillsDirectory: z.string().max(300).nullable().optional(),
   githubToken: z.string().max(500).optional(),
   status: z.enum(['active', 'paused']).optional(),
   builtinToolsEnabled: z.array(z.enum(BUILTIN_TOOL_NAMES)).optional(),
@@ -147,10 +161,12 @@ agentsRouter.put('/:id', async (c) => {
   const updateData: Record<string, unknown> = { updatedAt: new Date() };
   if (body.name) updateData.name = body.name;
   if (body.description !== undefined) updateData.description = body.description;
+  if (body.sourceType) updateData.sourceType = body.sourceType;
   if (body.gitRepoUrl) updateData.gitRepoUrl = body.gitRepoUrl;
   if (body.gitBranch) updateData.gitBranch = body.gitBranch;
   if (body.agentFilePath) updateData.agentFilePath = body.agentFilePath;
   if (body.skillsPaths) updateData.skillsPaths = body.skillsPaths;
+  if (body.skillsDirectory !== undefined) updateData.skillsDirectory = body.skillsDirectory;
   if (body.githubToken) updateData.githubTokenEncrypted = encrypt(body.githubToken);
   if (body.status) updateData.status = body.status;
   if (body.builtinToolsEnabled) updateData.builtinToolsEnabled = body.builtinToolsEnabled;

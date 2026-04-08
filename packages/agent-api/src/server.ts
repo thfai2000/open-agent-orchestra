@@ -19,6 +19,7 @@ import adminRouter from './routes/admin.js';
 import quotaRouter from './routes/quota.js';
 import workspacesRouter from './routes/workspaces.js';
 import eventsRouter from './routes/events.js';
+import agentFilesRouter from './routes/agent-files.js';
 
 const logger = createLogger('agent-api');
 const port = Number(process.env.AGENT_API_PORT) || 4002;
@@ -28,6 +29,9 @@ const app = createApp({
   port,
   eventBus: agentEventBus,
   apiSpec: agentApiSpec,
+  extraRateLimits: [
+    { path: '/api/auth/*', windowMs: 60_000, max: 10 },
+  ],
   routes: [
     ['/api/auth', authRouter],
     ['/api/agents', agentsRouter],
@@ -43,6 +47,7 @@ const app = createApp({
     ['/api/quota', quotaRouter],
     ['/api/workspaces', workspacesRouter],
     ['/api/events', eventsRouter],
+    ['/api/agent-files', agentFilesRouter],
   ],
 });
 

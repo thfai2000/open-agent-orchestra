@@ -44,25 +44,43 @@
                 <Input v-model="editForm.name" required />
               </div>
               <div class="space-y-2">
-                <Label>Git Repository URL *</Label>
-                <Input v-model="editForm.gitRepoUrl" type="url" required />
-              </div>
-              <div class="space-y-2">
-                <Label>Git Branch</Label>
-                <Input v-model="editForm.gitBranch" />
-              </div>
-              <div class="space-y-2">
-                <Label>Agent File Path *</Label>
-                <Input v-model="editForm.agentFilePath" required />
+                <Label>Source Type</Label>
+                <select v-model="editForm.sourceType" disabled
+                  class="w-full px-3 py-2 rounded-md border border-input bg-muted text-sm">
+                  <option value="github_repo">GitHub Repository</option>
+                  <option value="database">Database Storage</option>
+                </select>
+                <p class="text-xs text-muted-foreground">Source type cannot be changed after creation.</p>
               </div>
             </div>
+            <template v-if="editForm.sourceType === 'github_repo'">
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="space-y-2">
+                  <Label>Git Repository URL *</Label>
+                  <Input v-model="editForm.gitRepoUrl" type="url" required />
+                </div>
+                <div class="space-y-2">
+                  <Label>Git Branch</Label>
+                  <Input v-model="editForm.gitBranch" />
+                </div>
+                <div class="space-y-2">
+                  <Label>Agent File Path *</Label>
+                  <Input v-model="editForm.agentFilePath" required />
+                </div>
+                <div class="space-y-2">
+                  <Label>Skills Directory</Label>
+                  <Input v-model="editForm.skillsDirectory" placeholder="skills/" />
+                  <p class="text-xs text-muted-foreground">Directory containing .md skill files (relative to repo root)</p>
+                </div>
+              </div>
+              <div class="space-y-2">
+                <Label>GitHub Token (leave blank to keep current)</Label>
+                <Input v-model="editForm.githubToken" type="password" class="max-w-md" placeholder="ghp_..." />
+              </div>
+            </template>
             <div class="space-y-2">
               <Label>Description</Label>
               <Textarea v-model="editForm.description" rows="2" />
-            </div>
-            <div class="space-y-2">
-              <Label>GitHub Token (leave blank to keep current)</Label>
-              <Input v-model="editForm.githubToken" type="password" class="max-w-md" placeholder="ghp_..." />
             </div>
             <div class="flex gap-3 pt-2">
               <Button type="submit" :disabled="saving">{{ saving ? 'Saving...' : 'Save Changes' }}</Button>
@@ -78,9 +96,13 @@
           <CardHeader><CardTitle class="text-base">Configuration</CardTitle></CardHeader>
           <CardContent>
             <dl class="space-y-2 text-sm">
-              <div class="flex justify-between"><dt class="text-muted-foreground">Git Repo</dt><dd class="font-mono text-xs truncate max-w-[250px]">{{ agent.gitRepoUrl }}</dd></div>
-              <div class="flex justify-between"><dt class="text-muted-foreground">Branch</dt><dd class="font-mono text-xs">{{ agent.gitBranch || 'main' }}</dd></div>
-              <div class="flex justify-between"><dt class="text-muted-foreground">Agent File</dt><dd class="font-mono text-xs">{{ agent.agentFilePath }}</dd></div>
+              <div class="flex justify-between"><dt class="text-muted-foreground">Source Type</dt><dd><Badge variant="outline">{{ (agent as any).sourceType === 'database' ? 'Database' : 'GitHub Repo' }}</Badge></dd></div>
+              <template v-if="(agent as any).sourceType !== 'database'">
+                <div class="flex justify-between"><dt class="text-muted-foreground">Git Repo</dt><dd class="font-mono text-xs truncate max-w-[250px]">{{ agent.gitRepoUrl }}</dd></div>
+                <div class="flex justify-between"><dt class="text-muted-foreground">Branch</dt><dd class="font-mono text-xs">{{ agent.gitBranch || 'main' }}</dd></div>
+                <div class="flex justify-between"><dt class="text-muted-foreground">Agent File</dt><dd class="font-mono text-xs">{{ agent.agentFilePath }}</dd></div>
+                <div v-if="(agent as any).skillsDirectory" class="flex justify-between"><dt class="text-muted-foreground">Skills Dir</dt><dd class="font-mono text-xs">{{ (agent as any).skillsDirectory }}</dd></div>
+              </template>
               <div class="flex justify-between"><dt class="text-muted-foreground">Last Session</dt><dd>{{ agent.lastSessionAt ? new Date(agent.lastSessionAt).toLocaleString() : 'Never' }}</dd></div>
             </dl>
           </CardContent>
@@ -97,6 +119,75 @@
           </CardContent>
         </Card>
       </div>
+
+      <!-- Agent Files Section (Database source only) -->
+      <Card v-if="(agent as any).sourceType === 'database'">
+        <CardHeader>
+          <div class="flex items-center justify-between">
+            <div>
+              <CardTitle>Agent Files</CardTitle>
+              <CardDescription>Markdown files stored in database. The first root-level .md file is the main agent instruction.</CardDescription>
+            </div>
+            <Button size="sm" @click="showFileForm = true">+ Add File</Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <!-- New File Form -->
+          <div v-if="showFileForm" class="mb-4 p-4 rounded-lg border border-border bg-muted/30">
+            <div v-if="fileError" class="mb-3 p-2 rounded-md bg-destructive/10 text-destructive text-sm">{{ fileError }}</div>
+            <form @submit.prevent="handleCreateFile" class="space-y-3">
+              <div class="space-y-1.5">
+                <Label class="text-xs">File Path *</Label>
+                <Input v-model="fileForm.filePath" required placeholder="agent.md or skills/research.md" class="font-mono" />
+                <p class="text-xs text-muted-foreground">Use forward slashes for subdirectories.</p>
+              </div>
+              <div class="space-y-1.5">
+                <Label class="text-xs">Content *</Label>
+                <Textarea v-model="fileForm.content" required rows="8" class="font-mono text-xs" placeholder="# Agent Instructions&#10;&#10;Your markdown content..." />
+              </div>
+              <div class="flex gap-2">
+                <Button type="submit" size="sm" :disabled="savingFile">{{ savingFile ? 'Creating...' : 'Create File' }}</Button>
+                <Button variant="outline" size="sm" type="button" @click="showFileForm = false; fileError = ''">Cancel</Button>
+              </div>
+            </form>
+          </div>
+
+          <!-- File List -->
+          <div class="space-y-2">
+            <div v-for="f in agentFiles" :key="f.id"
+              class="rounded-lg border border-border overflow-hidden">
+              <div class="flex items-center justify-between p-3 bg-muted/30 cursor-pointer" @click="toggleFileExpand(f.id)">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs">{{ expandedFileId === f.id ? '▼' : '▶' }}</span>
+                  <span class="font-mono text-sm font-medium">{{ f.filePath }}</span>
+                  <Badge v-if="isMainAgentFile(f.filePath)" variant="default" class="text-[10px]">Main</Badge>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-muted-foreground">{{ new Date(f.updatedAt).toLocaleDateString() }}</span>
+                  <Button variant="ghost" size="sm" class="h-7 text-xs" @click.stop="startEditFile(f)">Edit</Button>
+                  <Button variant="ghost" size="sm" class="text-destructive h-7 text-xs" @click.stop="handleDeleteFile(f.id, f.filePath)">Delete</Button>
+                </div>
+              </div>
+              <!-- Preview / Edit area -->
+              <div v-if="expandedFileId === f.id" class="border-t border-border">
+                <div v-if="editingFileId === f.id" class="p-3">
+                  <Textarea v-model="editFileContent" rows="12" class="font-mono text-xs" />
+                  <div class="flex gap-2 mt-2">
+                    <Button size="sm" :disabled="savingFile" @click="handleUpdateFile(f.id)">{{ savingFile ? 'Saving...' : 'Save' }}</Button>
+                    <Button variant="outline" size="sm" @click="editingFileId = ''">Cancel</Button>
+                  </div>
+                </div>
+                <div v-else class="p-3 max-h-64 overflow-auto">
+                  <pre class="whitespace-pre-wrap font-mono text-xs text-muted-foreground">{{ f.content }}</pre>
+                </div>
+              </div>
+            </div>
+            <p v-if="agentFiles.length === 0 && !showFileForm" class="text-muted-foreground text-sm">
+              No agent files yet. Add your main agent instruction file to get started.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
 
       <!-- Built-in Tools Section -->
       <Card>
@@ -269,7 +360,7 @@ const ws = computed(() => (route.params.workspace as string) || 'default');
 const agentId = route.params.id as string;
 
 const BUILTIN_TOOLS = [
-  { name: 'schedule_next_wakeup', label: 'Schedule Next Wakeup', description: 'Self-scheduling via cron triggers' },
+  { name: 'schedule_next_workflow_execution', label: 'Schedule Next Workflow Execution', description: 'Self-scheduling via exact datetime triggers' },
   { name: 'manage_webhook_trigger', label: 'Manage Webhook Trigger', description: 'Webhook lifecycle management' },
   { name: 'record_decision', label: 'Record Decision', description: 'Audit trail for agent decisions' },
   { name: 'memory_store', label: 'Memory Store', description: 'Store semantic memories (pgvector)' },
@@ -284,22 +375,28 @@ const { data: varData, refresh: refreshVars } = await useFetch(`/api/variables?a
 const { data: mcpData } = await useFetch(`/api/mcp-servers?agentId=${agentId}`, { headers });
 const { data: pluginData, pending: pluginsLoading, refresh: refreshPlugins } = await useFetch(`/api/plugins/agent/${agentId}`, { headers });
 
+// Agent files for database source
+const { data: filesData, refresh: refreshFiles } = await useFetch(`/api/agent-files/${agentId}`, { headers });
+
 const agent = computed(() => agentData.value?.agent);
 const agentVariables = computed(() => varData.value?.variables ?? []);
 const mcpServers = computed(() => mcpData.value?.servers ?? []);
 const agentPlugins = computed(() => (pluginData.value as any)?.plugins ?? []);
+const agentFiles = computed(() => (filesData.value as any)?.files ?? []);
 
 // ── Inline Edit ─────────────────────────────────────────────────
 const editing = ref(false);
 const saving = ref(false);
 const editError = ref('');
-const editForm = reactive({ name: '', description: '', gitRepoUrl: '', gitBranch: '', agentFilePath: '', githubToken: '' });
+const editForm = reactive({ name: '', description: '', sourceType: 'github_repo' as string, gitRepoUrl: '', gitBranch: '', agentFilePath: '', skillsDirectory: '', githubToken: '' });
 
 function startEdit() {
   Object.assign(editForm, {
     name: agent.value?.name || '', description: agent.value?.description || '',
+    sourceType: (agent.value as any)?.sourceType || 'github_repo',
     gitRepoUrl: agent.value?.gitRepoUrl || '', gitBranch: agent.value?.gitBranch || 'main',
-    agentFilePath: agent.value?.agentFilePath || '', githubToken: '',
+    agentFilePath: agent.value?.agentFilePath || '', skillsDirectory: (agent.value as any)?.skillsDirectory || '',
+    githubToken: '',
   });
   editError.value = '';
   editing.value = true;
@@ -311,8 +408,13 @@ async function handleSave() {
   try {
     const body: Record<string, unknown> = {
       name: editForm.name, description: editForm.description || undefined,
-      gitRepoUrl: editForm.gitRepoUrl, gitBranch: editForm.gitBranch, agentFilePath: editForm.agentFilePath,
     };
+    if (editForm.sourceType === 'github_repo') {
+      body.gitRepoUrl = editForm.gitRepoUrl;
+      body.gitBranch = editForm.gitBranch;
+      body.agentFilePath = editForm.agentFilePath;
+      body.skillsDirectory = editForm.skillsDirectory || null;
+    }
     if (editForm.githubToken) body.githubToken = editForm.githubToken;
     await $fetch(`/api/agents/${agentId}`, { method: 'PUT', headers, body });
     editing.value = false;
@@ -395,5 +497,69 @@ async function toggleBuiltinTool(name: string, checked: boolean | string) {
   } catch {
     alert('Failed to update built-in tools');
   }
+}
+
+// ── Agent Files management (database source) ─────────────────────
+const showFileForm = ref(false);
+const savingFile = ref(false);
+const fileError = ref('');
+const fileForm = reactive({ filePath: '', content: '' });
+const expandedFileId = ref('');
+const editingFileId = ref('');
+const editFileContent = ref('');
+
+function isMainAgentFile(filePath: string): boolean {
+  const rootMdFiles = agentFiles.value
+    .filter((f: any) => f.filePath.endsWith('.md') && !f.filePath.includes('/'))
+    .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  return rootMdFiles.length > 0 && rootMdFiles[0].filePath === filePath;
+}
+
+function toggleFileExpand(id: string) {
+  expandedFileId.value = expandedFileId.value === id ? '' : id;
+  if (expandedFileId.value !== id) editingFileId.value = '';
+}
+
+function startEditFile(f: any) {
+  expandedFileId.value = f.id;
+  editingFileId.value = f.id;
+  editFileContent.value = f.content;
+}
+
+async function handleCreateFile() {
+  fileError.value = '';
+  savingFile.value = true;
+  try {
+    await $fetch(`/api/agent-files/${agentId}`, {
+      method: 'POST', headers,
+      body: { filePath: fileForm.filePath, content: fileForm.content },
+    });
+    showFileForm.value = false;
+    Object.assign(fileForm, { filePath: '', content: '' });
+    await refreshFiles();
+  } catch (e: any) { fileError.value = e?.data?.error || 'Failed to create file'; }
+  finally { savingFile.value = false; }
+}
+
+async function handleUpdateFile(fileId: string) {
+  savingFile.value = true;
+  try {
+    await $fetch(`/api/agent-files/${agentId}/${fileId}`, {
+      method: 'PUT', headers,
+      body: { content: editFileContent.value },
+    });
+    editingFileId.value = '';
+    await refreshFiles();
+  } catch { alert('Failed to update file'); }
+  finally { savingFile.value = false; }
+}
+
+async function handleDeleteFile(fileId: string, filePath: string) {
+  if (!confirm(`Delete "${filePath}"?`)) return;
+  try {
+    await $fetch(`/api/agent-files/${agentId}/${fileId}`, { method: 'DELETE', headers });
+    if (expandedFileId.value === fileId) expandedFileId.value = '';
+    await refreshFiles();
+  } catch { alert('Failed to delete file'); }
 }
 </script>

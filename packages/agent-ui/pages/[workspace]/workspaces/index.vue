@@ -23,7 +23,7 @@
             <CardTitle class="text-lg">{{ w.name }}</CardTitle>
             <div class="flex items-center gap-2">
               <Badge v-if="w.isDefault" variant="default">Default</Badge>
-              <Badge variant="outline" class="font-mono text-xs">{{ w.slug }}</Badge>
+              <Badge variant="outline" class="font-mono text-xs">/{{ w.slug }}</Badge>
             </div>
           </div>
           <CardDescription v-if="w.description">{{ w.description }}</CardDescription>
@@ -168,8 +168,8 @@ async function viewWorkspace(w: Workspace) {
   selectedWorkspace.value = w;
   showMembersDialog.value = true;
   try {
-    const res = await $fetch<{ workspace: { members: typeof members.value } }>(`/api/workspaces/${w.id}`, { headers });
-    members.value = res.workspace?.members ?? [];
+    const res = await $fetch<{ workspace: any; members: typeof members.value }>(`/api/workspaces/${w.id}`, { headers });
+    members.value = res.members ?? [];
   } catch {
     members.value = [];
   }

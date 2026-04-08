@@ -68,7 +68,7 @@ const stepSchema = z.object({
 });
 
 const triggerSchema = z.object({
-  triggerType: z.enum(['time_schedule', 'webhook', 'event']),
+  triggerType: z.enum(['time_schedule', 'exact_datetime', 'webhook', 'event']),
   configuration: z.record(z.unknown()).default({}),
 });
 
@@ -181,12 +181,19 @@ workflowsRouter.post('/', async (c) => {
   return c.json(result, 201);
 });
 
-// GET /:id — workflow detail + steps + triggers + owner
+// GET /:id — workflow detail + steps + triggers + owner (workspace-scoped)
 workflowsRouter.get('/:id', async (c) => {
+  const user = c.get('user');
   const id = uuidSchema.parse(c.req.param('id'));
 
   const workflow = await db.query.workflows.findFirst({ where: eq(workflows.id, id) });
   if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+  if (workflow.workspaceId !== user.workspaceId) return c.json({ error: 'Workflow not found' }, 404);
+
+  // Scope check: user-scoped workflows only visible to owner and admins
+  if (workflow.scope === 'user' && workflow.userId !== user.userId && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Workflow not found' }, 404);
+  }
 
   const [steps, workflowTriggers, owner, lastExec] = await Promise.all([
     db.query.workflowSteps.findMany({
@@ -270,10 +277,24 @@ workflowsRouter.put('/:id', async (c) => {
 
 // PUT /:id/steps — replace all steps atomically (increments version)
 workflowsRouter.put('/:id/steps', async (c) => {
+  const user = c.get('user');
   const id = uuidSchema.parse(c.req.param('id'));
   const { steps } = z
     .object({ steps: z.array(stepSchema).min(1).max(20) })
     .parse(await c.req.json());
+
+  // Verify workflow exists and belongs to user's workspace
+  const existing = await db.query.workflows.findFirst({ where: eq(workflows.id, id) });
+  if (!existing) return c.json({ error: 'Workflow not found' }, 404);
+  if (existing.workspaceId !== user.workspaceId) return c.json({ error: 'Forbidden' }, 403);
+
+  // Scope-based authorization (same as PUT /:id)
+  if (existing.scope === 'workspace' && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Only admins can modify workspace-level workflows' }, 403);
+  }
+  if (existing.scope === 'user' && existing.userId !== user.userId && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
 
   const result = await db.transaction(async (tx) => {
     await tx.delete(workflowSteps).where(eq(workflowSteps.workflowId, id));
@@ -346,6 +367,12 @@ workflowsRouter.post('/:id/trigger', async (c) => {
 
   const workflow = await db.query.workflows.findFirst({ where: eq(workflows.id, id) });
   if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+  if (workflow.workspaceId !== user.workspaceId) return c.json({ error: 'Forbidden' }, 403);
+
+  // Scope check: user-scoped workflows can only be triggered by owner or admins
+  if (workflow.scope === 'user' && workflow.userId !== user.userId && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
 
   const execution = await enqueueWorkflowExecution(id, null, {
     type: 'manual',

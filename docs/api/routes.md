@@ -59,6 +59,15 @@ All routes under `/api/` are served by the Agent API (Hono, port 4002).
 | PUT | `/api/triggers/:id` | JWT | Update trigger |
 | DELETE | `/api/triggers/:id` | JWT | Delete trigger |
 
+## Agent Files (database source agents)
+
+| Method | Path | Auth | Role | Description |
+|---|---|---|---|---|
+| GET | `/api/agent-files/:agentId` | JWT | Any | List files for agent |
+| POST | `/api/agent-files/:agentId` | JWT | creator_user+ | Create file (database source only) |
+| PUT | `/api/agent-files/:agentId/:fileId` | JWT | creator_user+ | Update file content |
+| DELETE | `/api/agent-files/:agentId/:fileId` | JWT | creator_user+ | Delete file |
+
 ## Plugins
 
 | Method | Path | Auth | Role | Description |

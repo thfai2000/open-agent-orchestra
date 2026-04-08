@@ -3,9 +3,12 @@
 ## Agent
 
 An AI agent defined by:
-- **Git Repository** — Contains `.github/agents/*.md` (personality) and `skills/*.md` (domain knowledge)
+- **Source Type** — How agent files are sourced: `github_repo` (Git-hosted) or `database` (stored in platform DB)
+- **GitHub Repository** (github_repo source) — Contains agent `.md` files and optional skills directory
+- **Database Files** (database source) — Agent/skill `.md` files stored directly in the database, editable via UI
 - **Name and Description** — User-facing identity
-- **GitHub Token** — For repo access (encrypted at rest)
+- **GitHub Token** — For repo access (encrypted at rest, github_repo source only)
+- **Skills Directory** — Directory containing skill .md files relative to repo root (github_repo source only)
 - **Agent Variables** — Encrypted key-value pairs (credentials or properties) scoped to this agent
 - **Scope** — `user` (personal, owned by creator) or `workspace` (shared, admin-managed). Immutable after creation.
 - **Built-in Tools Config** — Which platform built-in tools this agent can use (opt-in/opt-out per tool)
@@ -13,7 +16,7 @@ An AI agent defined by:
 ## Workflow
 
 A repeatable automated process belonging to a **user** (not an agent). Consists of:
-1. **Trigger Configuration** — When/how to start (cron schedule, webhook, event). All workflows support manual start from UI.
+1. **Trigger Configuration** — When/how to start (repeatable cron schedule, exact datetime, webhook, event). All workflows support manual start from UI.
 2. **Agent Steps** — Ordered list of prompt templates; each step can specify its own agent, model, and reasoning effort, or inherit from workflow defaults
 3. **Version** — Auto-incremented on every edit (metadata or steps change)
 4. **Owner** — The user who created the workflow
@@ -32,7 +35,8 @@ Scope is set at creation time and **cannot be changed** afterward. Workspace-sco
 
 | Type | Description | Configuration |
 |------|-------------|---------------|
-| **Time Schedule** | Cron-based or interval-based | Cron expression or interval (minutes) |
+| **Repeatable Schedule** | Cron-based or interval-based | Cron expression or interval (minutes) |
+| **Exact Datetime** | One-shot at a specific time | ISO 8601 datetime (auto-deactivates after firing) |
 | **Webhook** | External HTTP call | URL endpoint, HMAC secret |
 | **Event** | Internal platform event | Event name, optional scope filter, condition matching on event data |
 

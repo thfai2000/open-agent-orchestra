@@ -1,28 +1,69 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, desc, sql, inArray } from 'drizzle-orm';
 import { db } from '../database/index.js';
-import { workflowExecutions, stepExecutions, workflows } from '../database/schema.js';
+import { workflowExecutions, stepExecutions, workflows, triggers } from '../database/schema.js';
 import { authMiddleware, paginationSchema, uuidSchema } from '@ai-trader/shared';
 import { retryWorkflowExecution } from '../services/workflow-engine.js';
 
 const executionsRouter = new Hono();
 executionsRouter.use('/*', authMiddleware);
 
-// GET / — list executions
+/** Helper: get workflow IDs visible to this user (workspace-scoped + user's own) */
+async function getVisibleWorkflowIds(workspaceId: string, userId: string): Promise<string[]> {
+  const visible = await db.query.workflows.findMany({
+    where: and(
+      eq(workflows.workspaceId, workspaceId),
+      sql`(${workflows.scope} = 'workspace' OR ${workflows.userId} = ${userId})`,
+    ),
+    columns: { id: true },
+  });
+  return visible.map((w) => w.id);
+}
+
+/** Helper: verify execution belongs to user's workspace */
+async function verifyExecutionAccess(
+  executionId: string,
+  workspaceId: string | null,
+  userId: string,
+): Promise<{ execution: typeof workflowExecutions.$inferSelect; workflow: typeof workflows.$inferSelect } | null> {
+  const execution = await db.query.workflowExecutions.findFirst({
+    where: eq(workflowExecutions.id, executionId),
+  });
+  if (!execution) return null;
+
+  const workflow = await db.query.workflows.findFirst({
+    where: eq(workflows.id, execution.workflowId),
+  });
+  if (!workflow || workflow.workspaceId !== workspaceId) return null;
+
+  // User can see workspace-scoped workflows or their own
+  if (workflow.scope !== 'workspace' && workflow.userId !== userId) return null;
+
+  return { execution, workflow };
+}
+
+// GET / — list executions (workspace-scoped)
 const listExecutionsSchema = paginationSchema.extend({
   workflowId: z.string().uuid().optional(),
   status: z.enum(['pending', 'running', 'completed', 'failed', 'cancelled']).optional(),
 });
 
 executionsRouter.get('/', async (c) => {
-  const query = listExecutionsSchema.parse(c.req.query());
-  const conditions = [];
+  const user = c.get('user');
+  if (!user.workspaceId) return c.json({ executions: [], total: 0, page: 1, limit: 50 });
 
+  const query = listExecutionsSchema.parse(c.req.query());
+
+  // Get workflow IDs visible to this user
+  const visibleIds = await getVisibleWorkflowIds(user.workspaceId, user.userId);
+  if (visibleIds.length === 0) return c.json({ executions: [], total: 0, page: query.page, limit: query.limit });
+
+  const conditions = [inArray(workflowExecutions.workflowId, visibleIds)];
   if (query.workflowId) conditions.push(eq(workflowExecutions.workflowId, query.workflowId));
   if (query.status) conditions.push(eq(workflowExecutions.status, query.status));
 
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const where = and(...conditions);
 
   const [executions, countResult] = await Promise.all([
     db
@@ -46,37 +87,39 @@ executionsRouter.get('/', async (c) => {
   });
 });
 
-// GET /:id — full execution detail with step executions
+// GET /:id — full execution detail with step executions (workspace-scoped)
 executionsRouter.get('/:id', async (c) => {
+  const user = c.get('user');
   const id = uuidSchema.parse(c.req.param('id'));
 
-  const execution = await db.query.workflowExecutions.findFirst({
-    where: eq(workflowExecutions.id, id),
-  });
-  if (!execution) return c.json({ error: 'Execution not found' }, 404);
+  const result = await verifyExecutionAccess(id, user.workspaceId, user.userId);
+  if (!result) return c.json({ error: 'Execution not found' }, 404);
 
   const steps = await db.query.stepExecutions.findMany({
     where: eq(stepExecutions.workflowExecutionId, id),
     orderBy: stepExecutions.stepOrder,
   });
 
-  const workflow = await db.query.workflows.findFirst({
-    where: eq(workflows.id, execution.workflowId),
-  });
+  // Resolve trigger details if execution was triggered by a trigger
+  let trigger = null;
+  if (result.execution.triggerId) {
+    trigger = await db.query.triggers.findFirst({
+      where: eq(triggers.id, result.execution.triggerId),
+    });
+  }
 
-  return c.json({ execution, steps, workflow });
+  return c.json({ execution: result.execution, steps, workflow: result.workflow, trigger });
 });
 
-// POST /:id/cancel — cancel a running execution
+// POST /:id/cancel — cancel a running execution (workspace-scoped)
 executionsRouter.post('/:id/cancel', async (c) => {
+  const user = c.get('user');
   const id = uuidSchema.parse(c.req.param('id'));
 
-  const execution = await db.query.workflowExecutions.findFirst({
-    where: eq(workflowExecutions.id, id),
-  });
-  if (!execution) return c.json({ error: 'Execution not found' }, 404);
+  const result = await verifyExecutionAccess(id, user.workspaceId, user.userId);
+  if (!result) return c.json({ error: 'Execution not found' }, 404);
 
-  if (execution.status !== 'pending' && execution.status !== 'running') {
+  if (result.execution.status !== 'pending' && result.execution.status !== 'running') {
     return c.json({ error: 'Can only cancel pending or running executions' }, 400);
   }
 
@@ -95,16 +138,15 @@ executionsRouter.post('/:id/cancel', async (c) => {
   return c.json({ execution: updated });
 });
 
-// POST /:id/retry — retry a failed execution from the last failed step
+// POST /:id/retry — retry a failed execution from the last failed step (workspace-scoped)
 executionsRouter.post('/:id/retry', async (c) => {
+  const user = c.get('user');
   const id = uuidSchema.parse(c.req.param('id'));
 
-  const execution = await db.query.workflowExecutions.findFirst({
-    where: eq(workflowExecutions.id, id),
-  });
-  if (!execution) return c.json({ error: 'Execution not found' }, 404);
+  const result = await verifyExecutionAccess(id, user.workspaceId, user.userId);
+  if (!result) return c.json({ error: 'Execution not found' }, 404);
 
-  if (execution.status !== 'failed') {
+  if (result.execution.status !== 'failed') {
     return c.json({ error: 'Only failed executions can be retried' }, 400);
   }
 

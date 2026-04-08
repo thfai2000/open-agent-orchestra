@@ -7,6 +7,7 @@ PostgreSQL 16 with pgvector extension. Managed via Drizzle ORM.
 ```
 workspaces ──< users
 workspaces ──< agents ──< agent_variables
+                       ──< agent_files
 workspaces ──< workflows ──< workflow_steps ──> agents
                          ──< workflow_executions ──< step_executions
 workspaces ──< plugins ──< agent_plugins ──> agents
@@ -33,7 +34,8 @@ system_events (audit log)
 | `agent_status` | `active`, `paused`, `error` |
 | `execution_status` | `pending`, `running`, `completed`, `failed`, `cancelled` |
 | `step_status` | `pending`, `running`, `completed`, `failed`, `skipped` |
-| `trigger_type` | `time_schedule`, `webhook`, `event`, `manual` |
+| `trigger_type` | `time_schedule`, `exact_datetime`, `webhook`, `event`, `manual` |
+| `agent_source_type` | `github_repo`, `database` |
 | `variable_type` | `property`, `credential` |
 | `reasoning_effort` | `low`, `medium`, `high` |
 
@@ -65,7 +67,7 @@ Independent auth (email/password/bcrypt).
 | createdAt | timestamp | |
 
 ### agents
-Git-hosted AI agent definitions.
+AI agent definitions. Support GitHub repo or database-stored agent files.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -74,9 +76,11 @@ Git-hosted AI agent definitions.
 | userId | UUID | Owner user |
 | name | varchar(100) | |
 | description | text | |
-| gitRepoUrl | varchar(500) | GitHub repo URL |
+| sourceType | agent_source_type | Default: 'github_repo'. How agent files are sourced |
+| gitRepoUrl | varchar(500) | GitHub repo URL (nullable, required for github_repo) |
 | gitBranch | varchar(100) | Default: main |
-| agentFilePath | varchar(300) | Path to .md in repo |
+| agentFilePath | varchar(300) | Path to .md in repo (nullable, required for github_repo) |
+| skillsDirectory | varchar(500) | Directory containing skill .md files (github_repo only) |
 | skillsPaths | varchar(300)[] | Paths to skill .md files |
 | githubTokenEncrypted | text | AES-256-GCM encrypted |
 | builtinToolsEnabled | jsonb | Array of enabled built-in tool names. Default: all 8 tools |
@@ -84,6 +88,20 @@ Git-hosted AI agent definitions.
 | status | agent_status | |
 | lastSessionAt | timestamp | |
 | createdAt, updatedAt | timestamp | |
+
+### agent_files
+Database-stored agent files (for sourceType='database' agents).
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| agentId | UUID FK → agents | Cascade delete |
+| filePath | varchar(500) | Relative file path (e.g. 'agent.md', 'skills/research.md') |
+| content | text | File content (markdown) |
+| createdAt, updatedAt | timestamp | |
+| | | UNIQUE(agentId, filePath) |
+
+The first root-level .md file (no `/` in path) is treated as the main agent instruction file. Other .md files are loaded as skills.
 
 ### workflows
 Multi-step execution templates. Belong to a user, not an agent.
@@ -136,6 +154,7 @@ Trigger configurations for workflows.
 
 Configuration JSONB examples:
 - Time Schedule: `{ "cron": "0 9 * * 1-5", "timezone": "America/New_York" }` or `{ "interval_minutes": 60 }`
+- Exact Datetime: `{ "datetime": "2025-01-15T09:00:00Z", "reason": "Follow-up analysis" }` (one-shot, deactivated after firing)
 - Webhook: `{ "secret": "hmac-secret-encrypted", "allowed_ips": ["0.0.0.0/0"] }`
 - Event: `{ "event_type": "workflow.completed", "source_workflow_id": "uuid" }`
 

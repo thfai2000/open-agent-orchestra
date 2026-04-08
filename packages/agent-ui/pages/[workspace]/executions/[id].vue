@@ -25,7 +25,13 @@
       </div>
 
       <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <Card><CardContent class="pt-4"><p class="text-xs text-muted-foreground">Triggered By</p><p class="font-medium">{{ execution.triggerMetadata?.type || 'unknown' }}</p></CardContent></Card>
+        <Card>
+          <CardContent class="pt-4">
+            <p class="text-xs text-muted-foreground">Triggered By</p>
+            <p class="font-medium">{{ formatTriggerType(execution.triggerMetadata?.type) }}</p>
+            <p v-if="trigger" class="text-xs text-muted-foreground mt-1">{{ formatTriggerDetail(trigger) }}</p>
+          </CardContent>
+        </Card>
         <Card><CardContent class="pt-4"><p class="text-xs text-muted-foreground">Workflow Version</p><p class="font-medium font-mono">v{{ execution.workflowVersion || '?' }}</p></CardContent></Card>
         <Card><CardContent class="pt-4"><p class="text-xs text-muted-foreground">Started</p><p class="font-medium text-sm">{{ execution.startedAt ? new Date(execution.startedAt).toLocaleString() : '—' }}</p></CardContent></Card>
         <Card><CardContent class="pt-4"><p class="text-xs text-muted-foreground">Completed</p><p class="font-medium text-sm">{{ execution.completedAt ? new Date(execution.completedAt).toLocaleString() : '—' }}</p></CardContent></Card>
@@ -139,6 +145,28 @@ const { data } = await useFetch(`/api/executions/${executionId}`, { headers });
 const execution = computed(() => data.value?.execution);
 const steps = computed(() => data.value?.steps ?? []);
 const workflow = computed(() => data.value?.workflow);
+const trigger = computed(() => data.value?.trigger);
+
+function formatTriggerType(type?: string): string {
+  if (!type) return 'unknown';
+  const labels: Record<string, string> = {
+    time_schedule: 'Repeatable Schedule',
+    exact_datetime: 'Exact Datetime',
+    webhook: 'Webhook',
+    event: 'Event',
+    manual: 'Manual',
+  };
+  return labels[type] || type;
+}
+
+function formatTriggerDetail(t: any): string {
+  const cfg = t?.configuration || {};
+  if (cfg.cron) return `cron: ${cfg.cron}`;
+  if (cfg.datetime) return `at: ${new Date(cfg.datetime).toLocaleString()}`;
+  if (cfg.path) return `path: ${cfg.path}`;
+  if (cfg.eventType || cfg.eventName) return `event: ${cfg.eventType || cfg.eventName}`;
+  return '';
+}
 
 const expandedSteps = ref(new Set<string>());
 

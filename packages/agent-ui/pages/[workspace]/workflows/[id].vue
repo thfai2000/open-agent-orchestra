@@ -211,7 +211,8 @@
                   <div class="space-y-1">
                     <Label class="text-xs">Trigger Type *</Label>
                     <select v-model="triggerForm.triggerType" required class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                      <option value="time_schedule">Time Schedule (Cron)</option>
+                      <option value="time_schedule">Repeatable Schedule (Cron)</option>
+                      <option value="exact_datetime">Exact Datetime</option>
                       <option value="webhook">Webhook</option>
                       <option value="event">Event</option>
                     </select>
@@ -220,6 +221,11 @@
                     <Label class="text-xs">Cron Expression *</Label>
                     <Input v-model="triggerForm.cron" class="font-mono" placeholder="0 9 * * 1-5" />
                     <p class="text-xs text-muted-foreground">e.g. "0 9 * * 1-5" = 9 AM weekdays</p>
+                  </div>
+                  <div v-if="triggerForm.triggerType === 'exact_datetime'" class="space-y-1">
+                    <Label class="text-xs">Datetime (ISO 8601) *</Label>
+                    <Input v-model="triggerForm.datetime" type="datetime-local" />
+                    <p class="text-xs text-muted-foreground">The trigger fires once at this exact datetime and then deactivates.</p>
                   </div>
                   <div v-if="triggerForm.triggerType === 'webhook'" class="space-y-1">
                     <Label class="text-xs">Webhook Path *</Label>
@@ -245,7 +251,7 @@
             <div v-for="trigger in triggers" :key="trigger.id"
               class="p-3 rounded-lg border border-border flex items-center justify-between">
               <div class="flex items-center gap-3">
-                <Badge variant="secondary" class="uppercase text-xs">{{ trigger.triggerType || trigger.type }}</Badge>
+                <Badge variant="secondary" class="uppercase text-xs">{{ formatTriggerType(trigger.triggerType || trigger.type) }}</Badge>
                 <span class="text-sm font-mono">{{ formatTriggerConfig(trigger) }}</span>
               </div>
               <div class="flex items-center gap-3">
@@ -300,9 +306,21 @@ const agentNameMap = computed(() => {
 function formatTriggerConfig(trigger: any): string {
   const cfg = trigger.configuration || trigger.config || {};
   if (cfg.cron) return `cron: ${cfg.cron}`;
+  if (cfg.datetime) return `datetime: ${new Date(cfg.datetime).toLocaleString()}`;
   if (cfg.path) return `path: ${cfg.path}`;
   if (cfg.eventType) return `event: ${cfg.eventType}`;
   return '—';
+}
+
+function formatTriggerType(type: string): string {
+  const labels: Record<string, string> = {
+    time_schedule: 'Repeatable Schedule',
+    exact_datetime: 'Exact Datetime',
+    webhook: 'Webhook',
+    event: 'Event',
+    manual: 'Manual',
+  };
+  return labels[type] || type;
 }
 
 // ── Workflow Edit ────────────────────────────────────────────────
@@ -443,7 +461,7 @@ async function handleSaveSteps() {
 const showTriggerForm = ref(false);
 const savingTrigger = ref(false);
 const triggerError = ref('');
-const triggerForm = reactive({ triggerType: 'time_schedule', cron: '', webhookPath: '', eventType: '' });
+const triggerForm = reactive({ triggerType: 'time_schedule', cron: '', webhookPath: '', eventType: '', datetime: '' });
 
 async function handleAddTrigger() {
   triggerError.value = '';
@@ -451,6 +469,7 @@ async function handleAddTrigger() {
   try {
     const configuration: Record<string, unknown> = {};
     if (triggerForm.triggerType === 'time_schedule') configuration.cron = triggerForm.cron;
+    if (triggerForm.triggerType === 'exact_datetime') configuration.datetime = new Date(triggerForm.datetime).toISOString();
     if (triggerForm.triggerType === 'webhook') configuration.path = triggerForm.webhookPath;
     if (triggerForm.triggerType === 'event') configuration.eventType = triggerForm.eventType;
 
@@ -460,7 +479,7 @@ async function handleAddTrigger() {
       body: { workflowId, triggerType: triggerForm.triggerType, configuration },
     });
     showTriggerForm.value = false;
-    Object.assign(triggerForm, { triggerType: 'time_schedule', cron: '', webhookPath: '', eventType: '' });
+    Object.assign(triggerForm, { triggerType: 'time_schedule', cron: '', webhookPath: '', eventType: '', datetime: '' });
     await refreshTriggers();
   } catch (e: any) {
     triggerError.value = e?.data?.error || 'Failed to add trigger';

@@ -280,7 +280,7 @@ variablesRouter.put('/:id', async (c) => {
   return c.json({ variable: updated });
 });
 
-// DELETE /:id — remove variable (agent, user, or workspace)
+// DELETE /:id — remove variable (agent, user, or workspace) with ownership verification
 variablesRouter.delete('/:id', async (c) => {
   const id = uuidSchema.parse(c.req.param('id'));
   const user = c.get('user');
@@ -291,10 +291,21 @@ variablesRouter.delete('/:id', async (c) => {
     if (user.role !== 'workspace_admin' && user.role !== 'super_admin') {
       return c.json({ error: 'Workspace admin access required' }, 403);
     }
+    // Verify workspace variable belongs to user's workspace
+    const existing = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, id) });
+    if (!existing || existing.workspaceId !== user.workspaceId) return c.json({ error: 'Variable not found' }, 404);
     await db.delete(workspaceVariables).where(eq(workspaceVariables.id, id));
   } else if (scope === 'user') {
+    // Verify user variable belongs to the requesting user
+    const existing = await db.query.userVariables.findFirst({ where: eq(userVariables.id, id) });
+    if (!existing || existing.userId !== user.userId) return c.json({ error: 'Variable not found' }, 404);
     await db.delete(userVariables).where(eq(userVariables.id, id));
   } else {
+    // Verify agent variable belongs to an agent in user's workspace
+    const existing = await db.query.agentVariables.findFirst({ where: eq(agentVariables.id, id) });
+    if (!existing) return c.json({ error: 'Variable not found' }, 404);
+    const agent = await db.query.agents.findFirst({ where: eq(agents.id, existing.agentId) });
+    if (!agent || agent.workspaceId !== user.workspaceId) return c.json({ error: 'Variable not found' }, 404);
     await db.delete(agentVariables).where(eq(agentVariables.id, id));
   }
   return c.json({ success: true });

@@ -8,11 +8,11 @@
 | Login | `/<workspace>/login` | Workspace-scoped login |
 | Register | `/<workspace>/register` | New user registration |
 | Agents | `/<workspace>/agents` | Agent list with scope badges + create form (scope selector for admins) |
-| Agent Detail | `/<workspace>/agents/:id` | View/Edit, scope display, built-in tools config, agent credentials, MCP servers |
+| Agent Detail | `/<workspace>/agents/:id` | View/Edit with source type awareness (GitHub Repo vs Database), built-in tools config, agent file editor (for database source), agent credentials, MCP servers, plugins |
 | Workflows | `/<workspace>/workflows` | Workflow list with scope badges + create form (with defaults + per-step agent selection + scope selector) |
-| Workflow Detail | `/<workspace>/workflows/:id` | Edit metadata + defaults, scope display, steps editor, trigger config (event name selector), Run Now with user input dialog |
+| Workflow Detail | `/<workspace>/workflows/:id` | Edit metadata + defaults, scope display, steps editor, trigger config (Repeatable Schedule, Exact Datetime, Webhook, Event, Manual), Run Now with user input dialog |
 | Executions | `/<workspace>/executions` | Execution history with filters |
-| Execution Detail | `/<workspace>/executions/:id` | Full execution trace: each step's prompt, output, reasoning |
+| Execution Detail | `/<workspace>/executions/:id` | Full execution trace with trigger detail (type + configuration) |
 | Events | `/<workspace>/events` | System event audit log with filtering by event name and scope, paginated |
 | Variables | `/<workspace>/variables` | User-level + agent-level + workspace-level variable manager |
 | Plugins | `/<workspace>/plugins` | Plugin marketplace with per-agent toggle |

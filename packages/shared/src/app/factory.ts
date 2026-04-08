@@ -48,8 +48,11 @@ export function createApp(config: AppConfig): Hono {
   const logger = createLogger(serviceName);
   const app = new Hono();
 
-  // Common middleware
-  app.use('/*', cors());
+  // Common middleware — restrict CORS to known origins
+  const allowedOrigins = process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(',')
+    : ['http://localhost:3002', 'http://localhost:3000'];
+  app.use('/*', cors({ origin: allowedOrigins }));
   app.use('/*', rateLimiter({ windowMs: 60_000, max: 100 }));
   app.use('/*', bodyLimit({ maxSize: 1024 * 1024 })); // 1 MB request body limit
 

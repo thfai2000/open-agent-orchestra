@@ -35,7 +35,7 @@
                   <span v-else class="text-muted-foreground">—</span>
                 </td>
                 <td class="py-3 px-4 text-xs">
-                  <Badge variant="secondary">{{ exec.triggerMetadata?.type || 'manual' }}</Badge>
+                  <Badge variant="secondary">{{ formatTriggerType(exec.triggerMetadata?.type || 'manual') }}</Badge>
                   <Badge v-if="exec.triggerMetadata?.retryOf" variant="outline" class="ml-1 text-amber-600">retry</Badge>
                 </td>
                 <td class="py-3 px-4 text-center">
@@ -64,4 +64,15 @@ const ws = computed(() => (route.params.workspace as string) || 'default');
 
 const { data } = await useFetch('/api/executions?limit=50', { headers });
 const executions = computed(() => data.value?.executions ?? []);
+
+function formatTriggerType(type: string): string {
+  const labels: Record<string, string> = {
+    time_schedule: 'Repeatable Schedule',
+    exact_datetime: 'Exact Datetime',
+    webhook: 'Webhook',
+    event: 'Event',
+    manual: 'Manual',
+  };
+  return labels[type] || type;
+}
 </script>
