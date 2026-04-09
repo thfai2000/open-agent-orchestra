@@ -51,7 +51,6 @@ export async function auditCredentialRequest(params: AuditCredentialParams): Pro
     envName,
     reason,
     credentialSource,
-    workspaceId,
   } = params;
 
   const sessionKey = executionId ?? `adhoc-${Date.now()}`;

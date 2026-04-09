@@ -295,17 +295,85 @@
 
       <!-- MCP Servers Section -->
       <Card>
-        <CardHeader><CardTitle>MCP Servers</CardTitle></CardHeader>
-        <CardContent>
-          <div v-for="mcp in mcpServers" :key="mcp.id" class="p-3 rounded-lg border border-border mb-2 flex items-center justify-between">
+        <CardHeader>
+          <div class="flex items-center justify-between">
             <div>
-              <p class="font-semibold text-sm">{{ mcp.name }}</p>
-              <p v-if="mcp.description" class="text-xs text-muted-foreground">{{ mcp.description }}</p>
-              <p class="text-xs text-muted-foreground font-mono mt-1">{{ mcp.command }} {{ (mcp.args || []).join(' ') }}</p>
+              <CardTitle>MCP Servers</CardTitle>
+              <CardDescription>Model Context Protocol servers that provide custom tools to this agent during Copilot sessions.</CardDescription>
             </div>
-            <Badge :variant="mcp.isEnabled ? 'default' : 'secondary'">{{ mcp.isEnabled ? 'Enabled' : 'Disabled' }}</Badge>
+            <Button size="sm" @click="showMcpForm = true; mcpEditId = ''">+ Add MCP Server</Button>
           </div>
-          <p v-if="mcpServers.length === 0" class="text-muted-foreground text-sm">No MCP servers configured.</p>
+        </CardHeader>
+        <CardContent>
+          <!-- MCP Server Form (Add / Edit) -->
+          <div v-if="showMcpForm" class="mb-4 p-4 rounded-lg border border-border bg-muted/30">
+            <div v-if="mcpError" class="mb-3 p-2 rounded-md bg-destructive/10 text-destructive text-sm">{{ mcpError }}</div>
+            <form @submit.prevent="handleSaveMcp" class="space-y-3">
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="space-y-1.5">
+                  <Label class="text-xs">Name *</Label>
+                  <Input v-model="mcpForm.name" required placeholder="e.g. playwright-mcp" />
+                </div>
+                <div class="space-y-1.5">
+                  <Label class="text-xs">Command *</Label>
+                  <Input v-model="mcpForm.command" required placeholder="e.g. npx, node, python" class="font-mono" />
+                </div>
+              </div>
+              <div class="space-y-1.5">
+                <Label class="text-xs">Arguments (one per line)</Label>
+                <Textarea v-model="mcpForm.argsText" rows="2" placeholder="@anthropic/mcp-playwright&#10;--headless" class="font-mono text-xs" />
+                <p class="text-xs text-muted-foreground">Each line becomes a separate argument passed to the command.</p>
+              </div>
+              <div class="space-y-1.5">
+                <Label class="text-xs">Description</Label>
+                <Input v-model="mcpForm.description" placeholder="What does this MCP server do?" />
+              </div>
+              <div class="space-y-1.5">
+                <Label class="text-xs">Environment Variable Mapping (JSON)</Label>
+                <Textarea v-model="mcpForm.envMappingText" rows="3" placeholder='{ "CREDENTIAL_KEY": "ENV_VAR_NAME" }' class="font-mono text-xs" />
+                <p class="text-xs text-muted-foreground">Maps agent credential keys (left) to environment variable names (right) passed to the MCP server process.</p>
+              </div>
+              <div class="space-y-1.5">
+                <Label class="text-xs">Write Tools (comma-separated)</Label>
+                <Input v-model="mcpForm.writeToolsText" placeholder="execute_trade, delete_record" class="font-mono text-xs" />
+                <p class="text-xs text-muted-foreground">Tool names that require explicit permission approval before execution.</p>
+              </div>
+              <div class="flex items-center gap-3">
+                <Switch :checked="mcpForm.isEnabled" @update:checked="mcpForm.isEnabled = $event" />
+                <Label class="text-xs">Enabled</Label>
+              </div>
+              <div class="flex gap-2">
+                <Button type="submit" size="sm" :disabled="savingMcp">{{ savingMcp ? 'Saving...' : (mcpEditId ? 'Update Server' : 'Add Server') }}</Button>
+                <Button variant="outline" size="sm" type="button" @click="showMcpForm = false; mcpError = ''">Cancel</Button>
+              </div>
+            </form>
+          </div>
+
+          <div class="space-y-2">
+            <div v-for="mcp in mcpServers" :key="mcp.id" class="p-3 rounded-lg border border-border">
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="font-semibold text-sm">{{ mcp.name }}</p>
+                  <p v-if="mcp.description" class="text-xs text-muted-foreground">{{ mcp.description }}</p>
+                  <p class="text-xs text-muted-foreground font-mono mt-1">{{ mcp.command }} {{ (mcp.args || []).join(' ') }}</p>
+                  <div class="flex gap-2 mt-1">
+                    <Badge v-if="Object.keys(mcp.envMapping || {}).length" variant="outline" class="text-[10px]">
+                      {{ Object.keys(mcp.envMapping).length }} env vars
+                    </Badge>
+                    <Badge v-if="(mcp.writeTools || []).length" variant="outline" class="text-[10px]">
+                      {{ mcp.writeTools.length }} write tools
+                    </Badge>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <Badge :variant="mcp.isEnabled ? 'default' : 'secondary'">{{ mcp.isEnabled ? 'Enabled' : 'Disabled' }}</Badge>
+                  <Button variant="ghost" size="sm" class="h-7 text-xs" @click="startEditMcp(mcp)">Edit</Button>
+                  <Button variant="ghost" size="sm" class="text-destructive h-7 text-xs" @click="handleDeleteMcp(mcp.id, mcp.name)">Delete</Button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p v-if="mcpServers.length === 0 && !showMcpForm" class="text-muted-foreground text-sm">No MCP servers configured. Add an MCP server to extend this agent's capabilities.</p>
         </CardContent>
       </Card>
 
@@ -374,11 +442,12 @@ const BUILTIN_TOOLS = [
   { name: 'edit_workflow', label: 'Edit Workflow', description: 'Edit triggers and steps' },
   { name: 'read_variables', label: 'Read Variables', description: 'Read properties and credentials' },
   { name: 'edit_variables', label: 'Edit Variables', description: 'Create/update/delete variables' },
+  { name: 'get_credentials_into_env', label: 'Get Credentials Into Env', description: 'Securely inject credentials into environment with audit logging' },
 ];
 
 const { data: agentData, refresh: refreshAgent } = await useFetch(`/api/agents/${agentId}`, { headers });
 const { data: varData, refresh: refreshVars } = await useFetch(`/api/variables?agentId=${agentId}`, { headers });
-const { data: mcpData } = await useFetch(`/api/mcp-servers?agentId=${agentId}`, { headers });
+const { data: mcpData, refresh: refreshMcp } = await useFetch(`/api/mcp-servers?agentId=${agentId}`, { headers });
 const { data: pluginData, pending: pluginsLoading, refresh: refreshPlugins } = await useFetch(`/api/plugins/agent/${agentId}`, { headers });
 
 // Agent files for database source
@@ -500,6 +569,87 @@ async function togglePlugin(pluginId: string, enabled: boolean) {
   } catch {
     alert('Failed to update plugin');
   }
+}
+
+// ── MCP Server management ───────────────────────────────────────
+const showMcpForm = ref(false);
+const savingMcp = ref(false);
+const mcpError = ref('');
+const mcpEditId = ref('');
+const mcpForm = reactive({
+  name: '',
+  command: '',
+  argsText: '',
+  description: '',
+  envMappingText: '{}',
+  writeToolsText: '',
+  isEnabled: true,
+});
+
+function resetMcpForm() {
+  Object.assign(mcpForm, { name: '', command: '', argsText: '', description: '', envMappingText: '{}', writeToolsText: '', isEnabled: true });
+  mcpEditId.value = '';
+}
+
+function startEditMcp(mcp: any) {
+  mcpEditId.value = mcp.id;
+  Object.assign(mcpForm, {
+    name: mcp.name,
+    command: mcp.command,
+    argsText: (mcp.args || []).join('\n'),
+    description: mcp.description || '',
+    envMappingText: JSON.stringify(mcp.envMapping || {}, null, 2),
+    writeToolsText: (mcp.writeTools || []).join(', '),
+    isEnabled: mcp.isEnabled ?? true,
+  });
+  showMcpForm.value = true;
+  mcpError.value = '';
+}
+
+async function handleSaveMcp() {
+  mcpError.value = '';
+  // Parse envMapping JSON
+  let envMapping: Record<string, string> = {};
+  try {
+    envMapping = JSON.parse(mcpForm.envMappingText || '{}');
+  } catch {
+    mcpError.value = 'Invalid JSON in Environment Variable Mapping';
+    return;
+  }
+  const args = mcpForm.argsText.split('\n').map(a => a.trim()).filter(Boolean);
+  const writeTools = mcpForm.writeToolsText.split(',').map(t => t.trim()).filter(Boolean);
+
+  savingMcp.value = true;
+  try {
+    const body = {
+      agentId,
+      name: mcpForm.name,
+      command: mcpForm.command,
+      args,
+      description: mcpForm.description || undefined,
+      envMapping,
+      writeTools,
+      isEnabled: mcpForm.isEnabled,
+    };
+
+    if (mcpEditId.value) {
+      await $fetch(`/api/mcp-servers/${mcpEditId.value}`, { method: 'PUT', headers, body });
+    } else {
+      await $fetch('/api/mcp-servers', { method: 'POST', headers, body });
+    }
+    showMcpForm.value = false;
+    resetMcpForm();
+    await refreshMcp();
+  } catch (e: any) { mcpError.value = e?.data?.error || 'Failed to save MCP server'; }
+  finally { savingMcp.value = false; }
+}
+
+async function handleDeleteMcp(id: string, name: string) {
+  if (!confirm(`Delete MCP server "${name}"?`)) return;
+  try {
+    await $fetch(`/api/mcp-servers/${id}`, { method: 'DELETE', headers });
+    await refreshMcp();
+  } catch { alert('Failed to delete MCP server'); }
 }
 
 // ── Built-in Tools management ───────────────────────────────────

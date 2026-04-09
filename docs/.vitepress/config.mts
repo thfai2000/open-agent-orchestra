@@ -99,6 +99,30 @@ export default withMermaid(
         provider: 'local',
       },
     },
+    markdown: {
+      config: (md) => {
+        // Inject a hidden div with the mermaid source after each mermaid fence block.
+        // This runs during token processing (core phase) — before the fence renderer.
+        // vitepress-plugin-mermaid replaces the fence renderer, but our injected
+        // html_block tokens are unaffected by that.
+        md.core.ruler.push('mermaid-source-capture', (state) => {
+          const inserts: { index: number; token: typeof state.tokens[0] }[] = [];
+          for (let i = 0; i < state.tokens.length; i++) {
+            const token = state.tokens[i];
+            if (token.type === 'fence' && token.info.trim() === 'mermaid') {
+              const encoded = Buffer.from(token.content.trim()).toString('base64');
+              const htmlToken = new state.Token('html_block', '', 0);
+              htmlToken.content = `<div class="mermaid-source" data-mermaid-source="${encoded}"></div>\n`;
+              inserts.push({ index: i + 1, token: htmlToken });
+            }
+          }
+          // Insert in reverse so indices stay correct
+          for (let j = inserts.length - 1; j >= 0; j--) {
+            state.tokens.splice(inserts[j].index, 0, inserts[j].token);
+          }
+        });
+      },
+    },
     mermaid: {},
   }),
 );
