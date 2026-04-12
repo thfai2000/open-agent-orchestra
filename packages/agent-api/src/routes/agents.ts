@@ -34,6 +34,7 @@ const BUILTIN_TOOL_NAMES = [
   'schedule_next_workflow_execution', 'manage_webhook_trigger', 'record_decision',
   'memory_store', 'memory_retrieve',
   'edit_workflow', 'read_variables', 'edit_variables',
+  'simple_http_request',
 ] as const;
 
 const createAgentSchema = z.object({
@@ -49,6 +50,7 @@ const createAgentSchema = z.object({
   githubTokenCredentialId: z.string().uuid().optional(),
   scope: z.enum(['user', 'workspace']).default('user'),
   builtinToolsEnabled: z.array(z.enum(BUILTIN_TOOL_NAMES)).default([...BUILTIN_TOOL_NAMES]),
+  mcpJsonTemplate: z.string().max(50000).optional(),
 }).refine(
   (data) => {
     if (data.sourceType === 'github_repo') {
@@ -88,6 +90,7 @@ agentsRouter.post('/', async (c) => {
       githubTokenEncrypted: body.githubToken ? encrypt(body.githubToken) : null,
       githubTokenCredentialId: body.githubTokenCredentialId ?? null,
       builtinToolsEnabled: body.builtinToolsEnabled,
+      mcpJsonTemplate: body.mcpJsonTemplate ?? null,
     })
     .returning();
 
@@ -140,6 +143,7 @@ const updateAgentSchema = z.object({
   githubTokenCredentialId: z.string().uuid().nullable().optional(),
   status: z.enum(['active', 'paused']).optional(),
   builtinToolsEnabled: z.array(z.enum(BUILTIN_TOOL_NAMES)).optional(),
+  mcpJsonTemplate: z.string().max(50000).nullable().optional(),
 });
 
 agentsRouter.put('/:id', async (c) => {
@@ -182,6 +186,7 @@ agentsRouter.put('/:id', async (c) => {
   }
   if (body.status) updateData.status = body.status;
   if (body.builtinToolsEnabled) updateData.builtinToolsEnabled = body.builtinToolsEnabled;
+  if (body.mcpJsonTemplate !== undefined) updateData.mcpJsonTemplate = body.mcpJsonTemplate;
 
   const [updated] = await db.update(agents).set(updateData).where(eq(agents.id, id)).returning();
 

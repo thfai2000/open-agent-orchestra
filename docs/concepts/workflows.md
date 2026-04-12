@@ -12,6 +12,7 @@ graph LR
 
 Each workflow has:
 - **Name & description**
+- **Labels** — filterable tags for organizing workflows (e.g., `production`, `daily`, `reporting`)
 - **Default agent** — used when a step doesn't specify its own
 - **Default model** — selected from admin-configured models (e.g., `claude-sonnet-4-6`, `gpt-5.4`)
 - **Default reasoning effort** — `high`, `medium`, or `low`
@@ -38,25 +39,29 @@ For Agent, Model, and Reasoning Effort, the engine resolves in this order:
 2. **Workflow-level default** (if set)
 3. **Platform default** (for model: `DEFAULT_AGENT_MODEL` env var, defaults to `gpt-4.1`)
 
-### Precedent Output
+### Jinja2 Prompt Templates
 
-Use `<PRECEDENT_OUTPUT>` in prompt templates to inject the previous step's output:
+Prompt templates use **Jinja2 templating** (powered by Nunjucks). Available variables:
+
+| Variable | Description |
+|---|---|
+| `{{ precedent_output }}` | Output from the previous step (or manual input for step 1) |
+| `{{ properties.KEY }}` | Agent/user/workspace property values |
+| `{{ credentials.KEY }}` | Agent/user/workspace credential values |
+| `{{ env.KEY }}` | Variables marked for env injection |
+
+**Backward compatibility:** The legacy `<PRECEDENT_OUTPUT>` and `{{ Properties.KEY }}` syntax is automatically converted to the new Jinja2 format.
+
+You can use any Jinja2 features: conditionals, loops, filters, etc.
 
 ```markdown
-Based on the following analysis, decide what actions to take:
+Analyze the market for {{ properties.MARKET_SYMBOL }}.
+Current risk limit: {{ properties.MAX_RISK_PERCENT }}
 
-<PRECEDENT_OUTPUT>
-
-Consider risk management and constraints.
-```
-
-### Variable Injection
-
-Use <code v-pre>{{ Properties.KEY }}</code> syntax to inject property variables into prompts:
-
-```txt
-Analyze the market for {⁣{ Properties.MARKET_SYMBOL }⁣}.
-Current risk limit: {⁣{ Properties.MAX_RISK_PERCENT }⁣}
+{% if precedent_output %}
+Previous analysis:
+{{ precedent_output }}
+{% endif %}
 ```
 
 ### Example: 3-Step Workflow
@@ -74,7 +79,7 @@ For each symbol, provide:
 ```markdown
 Based on the following market analysis, decide which trades to make:
 
-<PRECEDENT_OUTPUT>
+{{ precedent_output }}
 
 For each recommended trade, provide: symbol, side, quantity, and reasoning.
 ```
@@ -83,7 +88,7 @@ For each recommended trade, provide: symbol, side, quantity, and reasoning.
 ```markdown
 Write a brief market commentary blog post based on the following trade decisions:
 
-<PRECEDENT_OUTPUT>
+{{ precedent_output }}
 
 Write in a professional but approachable tone.
 ```

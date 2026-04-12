@@ -3,17 +3,14 @@
 import { defineTool, type Tool } from '@github/copilot-sdk';
 import { z } from 'zod';
 import { eq, and, sql } from 'drizzle-orm';
-import { createLogger, encrypt, decrypt } from '@ai-trader/shared';
+import { createLogger, encrypt } from '@ai-trader/shared';
 import { db } from '../database/index.js';
 import {
   triggers, webhookRegistrations, agentDecisions, agentMemories,
   workflows, workflowSteps, agentVariables, userVariables,
-  credentialAccessLogs, workspaceSecuritySettings,
-  workspaceVariables,
 } from '../database/schema.js';
 import { generateEmbedding } from './embedding-service.js';
-import { emitEvent, EVENT_NAMES } from './system-events.js';
-import { auditCredentialRequest } from './credential-audit.js';
+import { renderTemplate } from './jinja-renderer.js';
 
 const logger = createLogger('agent-tools');
 
@@ -43,12 +40,12 @@ export interface AgentToolContext {
  *   - edit_workflow           — Edit workflow triggers and steps
  *   - read_variables          — Read agent/user variables
  *   - edit_variables          — Create/update/delete variables
- *   - get_credentials_into_env — Securely request credentials into environment (audited)
  */
 export function createAgentTools(
   _credentials: Map<string, string>,
   context?: AgentToolContext,
   enabledTools?: string[],
+  templateContext?: Record<string, unknown>,
 ): Tool[] {
   const toolMap: Record<string, Tool> = {};
 
@@ -575,178 +572,208 @@ export function createAgentTools(
       },
     });
 
-    // ── Credential Access Tool (Audited) ─────────────────────────────
+    // ── Simple HTTP Request Tool (curl-like with Jinja2 templating) ──
 
-    toolMap['get_credentials_into_env'] = defineTool('get_credentials_into_env', {
+    // ── Security: header masking for safe logging ──────────────────
+    // Headers may contain credentials injected via Jinja2 templates.
+    // NEVER log raw header values — always mask them.
+    const SENSITIVE_HEADER_PATTERNS = /^(authorization|x-api-key|cookie|x-auth|x-token|proxy-authorization|x-secret)/i;
+    const maskHeadersForLog = (headers: Record<string, string>): Record<string, string> => {
+      const masked: Record<string, string> = {};
+      for (const [k, v] of Object.entries(headers)) {
+        masked[k] = SENSITIVE_HEADER_PATTERNS.test(k) ? '***MASKED***' : v;
+      }
+      return masked;
+    };
+
+    toolMap['simple_http_request'] = defineTool('simple_http_request', {
       description:
-        'Securely request a credential to be injected as an environment variable. All requests are logged for audit. ' +
-        'If the workspace has credential approval enabled, a security audit agent will review the request and may deny it.',
+        `Make HTTP requests with curl-like control. Supports all HTTP methods, custom headers, ` +
+        `request bodies, query parameters, timeouts, redirects, basic/bearer auth, and response control. ` +
+        `\n\n**Jinja2 Templating:** All string input arguments support Jinja2 template syntax. ` +
+        `Available variables: \`{{ properties.KEY }}\`, \`{{ credentials.KEY }}\`, \`{{ env.KEY }}\`. ` +
+        `Example: url="{{ properties.API_BASE_URL }}/v1/data", headers='{"Authorization": "Bearer {{ credentials.API_TOKEN }}"}'. ` +
+        `Templates are rendered before the request is made, so you can dynamically construct URLs, headers, bodies, etc.`,
       parameters: z.object({
-        credentialName: z.string().describe('Name of the credential key to retrieve (UPPER_SNAKE_CASE)'),
-        envName: z.string().describe('Environment variable name to inject the credential as'),
-        reason: z.string().describe('Reason for requesting the credential — logged for audit purposes'),
+        url: z.string().describe('Request URL (supports Jinja2 templating, e.g. "{{ properties.API_BASE }}/endpoint")'),
+        method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']).default('GET').describe('HTTP method'),
+        headers: z.string().optional().describe('JSON string of request headers (supports Jinja2 templating). Example: \'{"Content-Type": "application/json", "Authorization": "Bearer {{ credentials.TOKEN }}"}\''),
+        body: z.string().optional().describe('Request body as string (supports Jinja2 templating). For JSON payloads, pass a JSON string.'),
+        query_params: z.string().optional().describe('JSON string of query parameters (supports Jinja2 templating). Example: \'{"page": "1", "limit": "50"}\''),
+        content_type: z.string().optional().describe('Shorthand for Content-Type header (e.g. "application/json", "application/x-www-form-urlencoded", "multipart/form-data")'),
+        auth_type: z.enum(['none', 'basic', 'bearer']).default('none').describe('Authentication type'),
+        auth_value: z.string().optional().describe('Auth value (supports Jinja2): for basic = "user:pass", for bearer = token string. Example: "{{ credentials.API_TOKEN }}"'),
+        timeout_ms: z.number().default(30000).describe('Request timeout in milliseconds (default: 30000)'),
+        follow_redirects: z.boolean().default(true).describe('Follow HTTP redirects (default: true)'),
+        max_redirects: z.number().default(10).describe('Maximum number of redirects to follow (default: 10)'),
+        include_response_headers: z.boolean().default(false).describe('Include response headers in the result'),
+        max_response_size: z.number().default(1048576).describe('Maximum response body size in bytes (default: 1MB)'),
+        verify_ssl: z.boolean().default(true).describe('Verify SSL certificates (default: true). Set to false for self-signed certs.'),
+        user_agent: z.string().optional().describe('Custom User-Agent header'),
+        accept: z.string().optional().describe('Shorthand for Accept header (e.g. "application/json")'),
+        cookies: z.string().optional().describe('JSON string of cookies to send. Example: \'{"session": "abc123"}\''),
       }),
-      handler: async ({
-        credentialName,
-        envName,
-        reason,
-      }: {
-        credentialName: string;
-        envName: string;
-        reason: string;
+      handler: async (args: {
+        url: string;
+        method: string;
+        headers?: string;
+        body?: string;
+        query_params?: string;
+        content_type?: string;
+        auth_type: string;
+        auth_value?: string;
+        timeout_ms: number;
+        follow_redirects: boolean;
+        max_redirects: number;
+        include_response_headers: boolean;
+        max_response_size: number;
+        verify_ssl: boolean;
+        user_agent?: string;
+        accept?: string;
+        cookies?: string;
       }) => {
-        if (!context?.agentId || !context?.workspaceId) return { error: 'No agent or workspace context available' };
-        logger.info({ credentialName, envName, agentId: context.agentId, reason }, 'Tool: get_credentials_into_env');
+        try {
+          // Render all string arguments through Jinja2 if templateContext is available
+          const ctx = templateContext ?? {};
+          const render = (val: string | undefined): string | undefined =>
+            val ? renderTemplate(val, ctx) : val;
 
-        // Look up the credential across all 3 tiers (agent → user → workspace)
-        let credentialValue: string | null = null;
-        let credentialSource: string | null = null;
+          const url = renderTemplate(args.url, ctx);
+          const headersStr = render(args.headers);
+          const bodyStr = render(args.body);
+          const queryParamsStr = render(args.query_params);
+          const authValue = render(args.auth_value);
+          const userAgent = render(args.user_agent);
+          const cookiesStr = render(args.cookies);
+          const contentType = render(args.content_type);
+          const accept = render(args.accept);
 
-        // 1. Agent-level credential
-        const agentCred = await db.query.agentVariables.findFirst({
-          where: and(
-            eq(agentVariables.agentId, context.agentId),
-            eq(agentVariables.key, credentialName),
-            eq(agentVariables.variableType, 'credential'),
-          ),
-        });
-        if (agentCred) {
-          credentialValue = decrypt(agentCred.valueEncrypted);
-          credentialSource = 'agent';
-        }
-
-        // 2. User-level credential (if not found at agent level)
-        if (!credentialValue && context.userId) {
-          const userCred = await db.query.userVariables.findFirst({
-            where: and(
-              eq(userVariables.userId, context.userId),
-              eq(userVariables.key, credentialName),
-              eq(userVariables.variableType, 'credential'),
-            ),
-          });
-          if (userCred) {
-            credentialValue = decrypt(userCred.valueEncrypted);
-            credentialSource = 'user';
+          // Build URL with query params
+          const urlObj = new URL(url);
+          if (queryParamsStr) {
+            const qp = JSON.parse(queryParamsStr) as Record<string, string>;
+            for (const [k, v] of Object.entries(qp)) {
+              urlObj.searchParams.set(k, v);
+            }
           }
-        }
 
-        // 3. Workspace-level credential (if not found at user level)
-        if (!credentialValue) {
-          const wsCred = await db.query.workspaceVariables.findFirst({
-            where: and(
-              eq(workspaceVariables.workspaceId, context.workspaceId),
-              eq(workspaceVariables.key, credentialName),
-              eq(workspaceVariables.variableType, 'credential'),
-            ),
-          });
-          if (wsCred) {
-            credentialValue = decrypt(wsCred.valueEncrypted);
-            credentialSource = 'workspace';
+          // Build headers
+          const reqHeaders: Record<string, string> = {};
+          if (headersStr) {
+            Object.assign(reqHeaders, JSON.parse(headersStr));
           }
-        }
+          if (contentType) reqHeaders['Content-Type'] = contentType;
+          if (accept) reqHeaders['Accept'] = accept;
+          if (userAgent) reqHeaders['User-Agent'] = userAgent;
 
-        if (!credentialValue) {
-          // Log denied access (credential not found)
-          await db.insert(credentialAccessLogs).values({
-            workspaceId: context.workspaceId,
-            executionId: context.executionId ?? null,
-            agentId: context.agentId,
-            userId: context.userId ?? null,
-            credentialName,
-            envName,
-            reason,
-            approved: false,
-            approvedBy: null,
-          });
+          // Auth
+          if (args.auth_type === 'bearer' && authValue) {
+            reqHeaders['Authorization'] = `Bearer ${authValue}`;
+          } else if (args.auth_type === 'basic' && authValue) {
+            const encoded = Buffer.from(authValue).toString('base64');
+            reqHeaders['Authorization'] = `Basic ${encoded}`;
+          }
 
-          await emitEvent({
-            eventScope: 'workspace',
-            scopeId: context.workspaceId,
-            eventName: EVENT_NAMES.CREDENTIAL_ACCESS_DENIED,
-            eventData: { agentId: context.agentId, credentialName, envName, reason, denial: 'not_found' },
-            actorId: context.userId ?? null,
-          });
+          // Cookies
+          if (cookiesStr) {
+            const cookies = JSON.parse(cookiesStr) as Record<string, string>;
+            reqHeaders['Cookie'] = Object.entries(cookies)
+              .map(([k, v]) => `${k}=${v}`)
+              .join('; ');
+          }
 
-          return { error: `Credential "${credentialName}" not found in any scope` };
-        }
+          // SECURITY: Log request with masked headers — never log raw credential values
+          logger.info(
+            { url: urlObj.toString(), method: args.method, headers: maskHeadersForLog(reqHeaders) },
+            'Tool: simple_http_request',
+          );
 
-        // Check if workspace requires credential approval
-        const securitySettings = await db.query.workspaceSecuritySettings.findFirst({
-          where: eq(workspaceSecuritySettings.workspaceId, context.workspaceId),
-        });
+          // Perform fetch with timeout
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), args.timeout_ms);
 
-        let approved = true;
-        let approvedBy = 'auto';
-        let auditMessages: unknown = null;
+          // Build fetch options
+          const fetchOptions: RequestInit & { redirect?: RequestRedirect } = {
+            method: args.method,
+            headers: reqHeaders,
+            signal: controller.signal,
+            redirect: args.follow_redirects ? 'follow' : 'manual',
+          };
 
-        if (securitySettings?.credentialApprovalEnabled && securitySettings.approvalAgentId) {
-          // Run sandbox audit session to check credential request
+          if (bodyStr && !['GET', 'HEAD'].includes(args.method)) {
+            fetchOptions.body = bodyStr;
+          }
+
+          // SSL verification: Node.js fetch doesn't directly support disabling SSL
+          // via fetch options, but we set the env variable for the request if needed
+          const prevRejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+          if (!args.verify_ssl) {
+            process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+          }
+
+          let response: Response;
           try {
-            const auditResult = await auditCredentialRequest({
-              approvalAgentId: securitySettings.approvalAgentId,
-              requestingAgentId: context.agentId,
-              executionId: context.executionId,
-              credentialName,
-              envName,
-              reason,
-              credentialSource: credentialSource!,
-              workspaceId: context.workspaceId,
-            });
-
-            approved = auditResult.approved;
-            approvedBy = approved ? `agent:${securitySettings.approvalAgentId}` : null as unknown as string;
-            auditMessages = auditResult.sessionMessages;
-          } catch (auditErr) {
-            logger.error({ error: auditErr }, 'Credential audit session failed, denying request');
-            approved = false;
-            approvedBy = null as unknown as string;
+            response = await fetch(urlObj.toString(), fetchOptions);
+          } finally {
+            clearTimeout(timeoutId);
+            // Restore SSL setting
+            if (!args.verify_ssl) {
+              if (prevRejectUnauthorized !== undefined) {
+                process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevRejectUnauthorized;
+              } else {
+                delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+              }
+            }
           }
+
+          // Read response body with size limit
+          const contentLength = response.headers.get('content-length');
+          if (contentLength && parseInt(contentLength) > args.max_response_size) {
+            return {
+              error: `Response too large: ${contentLength} bytes exceeds max_response_size of ${args.max_response_size} bytes`,
+              status: response.status,
+              statusText: response.statusText,
+            };
+          }
+
+          const responseBuffer = await response.arrayBuffer();
+          if (responseBuffer.byteLength > args.max_response_size) {
+            return {
+              error: `Response body truncated: ${responseBuffer.byteLength} bytes exceeds max_response_size`,
+              status: response.status,
+              statusText: response.statusText,
+            };
+          }
+
+          const responseBody = new TextDecoder().decode(responseBuffer);
+
+          // Build result
+          const result: Record<string, unknown> = {
+            status: response.status,
+            statusText: response.statusText,
+            body: responseBody,
+          };
+
+          // Try to parse as JSON for convenience
+          try {
+            result.json = JSON.parse(responseBody);
+          } catch {
+            // Not JSON — that's fine, body is available as string
+          }
+
+          if (args.include_response_headers) {
+            const respHeaders: Record<string, string> = {};
+            response.headers.forEach((v, k) => { respHeaders[k] = v; });
+            result.headers = respHeaders;
+          }
+
+          return result;
+        } catch (err) {
+          if (err instanceof Error && err.name === 'AbortError') {
+            return { error: `Request timed out after ${args.timeout_ms}ms` };
+          }
+          return { error: err instanceof Error ? err.message : 'HTTP request failed' };
         }
-
-        // Log the access attempt
-        await db.insert(credentialAccessLogs).values({
-          workspaceId: context.workspaceId,
-          executionId: context.executionId ?? null,
-          agentId: context.agentId,
-          userId: context.userId ?? null,
-          credentialName,
-          envName,
-          reason,
-          approved,
-          approvedBy: approvedBy ?? null,
-          auditSessionMessages: auditMessages,
-        });
-
-        // Emit event
-        await emitEvent({
-          eventScope: 'workspace',
-          scopeId: context.workspaceId,
-          eventName: approved ? EVENT_NAMES.CREDENTIAL_ACCESS_APPROVED : EVENT_NAMES.CREDENTIAL_ACCESS_DENIED,
-          eventData: {
-            agentId: context.agentId,
-            credentialName,
-            envName,
-            reason,
-            source: credentialSource,
-            approvedBy,
-          },
-          actorId: context.userId ?? null,
-        });
-
-        if (!approved) {
-          throw new Error(`Unauthorized: Credential access for "${credentialName}" was denied by the security audit agent.`);
-        }
-
-        // Inject the credential into the process environment
-        process.env[envName] = credentialValue;
-
-        return {
-          success: true,
-          credentialName,
-          envName,
-          source: credentialSource,
-          message: `Credential "${credentialName}" has been injected as environment variable "${envName}".`,
-        };
       },
     });
 

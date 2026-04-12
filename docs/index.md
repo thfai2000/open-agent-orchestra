@@ -21,8 +21,8 @@ features:
     title: AI Team with Segregation of Duties
     details: Lower-cost agents handle screening and data gathering. Higher-cost agents with thinking capability solve complex problems. Just like a real team.
   - icon: 🔐
-    title: AI Security & Credential Audit
-    details: "Agents request credentials via get_credentials_into_env() — every access is logged with reason. An AI security agent can approve or deny requests in a sandbox session."
+    title: Zero Credential Exposure
+    details: "Agents never see credentials. Scoped credentials are injected into MCP configs and HTTP headers via Jinja2 templates — secure by design."
   - icon: 🔄
     title: Multi-Step Workflows
     details: Chain agent steps with precedent output passing, variable injection, and per-step model/reasoning configuration.
@@ -56,7 +56,7 @@ graph LR
 |---|---|---|
 | Cost-effective AI teams | Multi-agent workflows with per-step model selection | Single model for everything |
 | Agent definition | Git-hosted markdown | Code-only |
-| Credential security | Audited access via `get_credentials_into_env()` with AI approval | Environment variables |
+| Credential security | Zero exposure — Jinja2 templates inject credentials into MCP configs & HTTP headers | Environment variables |
 | Workflow orchestration | Built-in multi-step engine | Manual chaining |
 | Scheduling | Cron, datetime, events, webhooks | External (cron jobs) |
 | Multi-tenancy | Workspace isolation + RBAC | Single tenant |

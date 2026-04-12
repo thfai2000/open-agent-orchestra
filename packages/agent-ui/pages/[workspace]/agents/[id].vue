@@ -377,6 +377,45 @@
         </CardContent>
       </Card>
 
+      <!-- MCP JSON Template Section -->
+      <Card>
+        <CardHeader>
+          <div class="flex items-center justify-between">
+            <div>
+              <CardTitle>MCP JSON Template</CardTitle>
+              <CardDescription>Jinja2 template that renders to a <code class="bg-muted px-1 rounded text-xs">mcp.json</code> configuration. MCP servers defined here are spawned alongside DB-configured servers. Use <code class="bg-muted px-1 rounded text-xs">{{ templateHintProps }}</code> and <code class="bg-muted px-1 rounded text-xs">{{ templateHintCreds }}</code> for variable substitution.</CardDescription>
+            </div>
+            <div class="flex items-center gap-2">
+              <Button v-if="!editingMcpTemplate" size="sm" variant="outline" @click="startEditMcpTemplate">{{ (agent as any)?.mcpJsonTemplate ? 'Edit' : 'Add Template' }}</Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <!-- Edit form -->
+          <div v-if="editingMcpTemplate" class="space-y-3">
+            <div v-if="mcpTemplateError" class="p-2 rounded-md bg-destructive/10 text-destructive text-sm">{{ mcpTemplateError }}</div>
+            <Textarea v-model="mcpTemplateContent" rows="14" class="font-mono text-xs"
+              :placeholder='mcpTemplatePlaceholder' />
+            <div class="p-3 rounded-md bg-blue-50 dark:bg-blue-950/30 text-xs text-blue-700 dark:text-blue-300 space-y-1">
+              <p><strong>Jinja2 Variables:</strong></p>
+              <p><code class="bg-blue-100 dark:bg-blue-900 px-1 rounded">{{ templateHintProps }}</code> — Agent/user/workspace properties</p>
+              <p><code class="bg-blue-100 dark:bg-blue-900 px-1 rounded">{{ templateHintCreds }}</code> — Agent/user/workspace credentials</p>
+              <p>The rendered output must be valid JSON with a <code class="bg-blue-100 dark:bg-blue-900 px-1 rounded">mcpServers</code> key mapping server names to <code class="bg-blue-100 dark:bg-blue-900 px-1 rounded">{ command, args?, env? }</code> objects.</p>
+            </div>
+            <div class="flex gap-2">
+              <Button size="sm" :disabled="savingMcpTemplate" @click="handleSaveMcpTemplate">{{ savingMcpTemplate ? 'Saving...' : 'Save Template' }}</Button>
+              <Button variant="outline" size="sm" @click="editingMcpTemplate = false; mcpTemplateError = ''">Cancel</Button>
+              <Button v-if="(agent as any)?.mcpJsonTemplate" variant="ghost" size="sm" class="text-destructive" @click="handleClearMcpTemplate">Remove Template</Button>
+            </div>
+          </div>
+          <!-- View -->
+          <div v-else-if="(agent as any)?.mcpJsonTemplate" class="max-h-64 overflow-auto">
+            <pre class="whitespace-pre-wrap font-mono text-xs text-muted-foreground bg-muted/30 p-3 rounded-lg">{{ (agent as any).mcpJsonTemplate }}</pre>
+          </div>
+          <p v-else class="text-muted-foreground text-sm">No MCP JSON template configured. Add a Jinja2 template to dynamically configure MCP servers with variable substitution.</p>
+        </CardContent>
+      </Card>
+
       <!-- Plugins Section -->
       <Card>
         <CardHeader>
@@ -442,7 +481,7 @@ const BUILTIN_TOOLS = [
   { name: 'edit_workflow', label: 'Edit Workflow', description: 'Edit triggers and steps' },
   { name: 'read_variables', label: 'Read Variables', description: 'Read properties and credentials' },
   { name: 'edit_variables', label: 'Edit Variables', description: 'Create/update/delete variables' },
-  { name: 'get_credentials_into_env', label: 'Get Credentials Into Env', description: 'Securely inject credentials into environment with audit logging' },
+  { name: 'simple_http_request', label: 'Simple HTTP Request', description: 'Curl-like HTTP requests with Jinja2 templating on all arguments' },
 ];
 
 const { data: agentData, refresh: refreshAgent } = await useFetch(`/api/agents/${agentId}`, { headers });
@@ -534,7 +573,7 @@ const showVarForm = ref(false);
 const savingVar = ref(false);
 const varError = ref('');
 const varForm = reactive({ key: '', value: '', description: '', variableType: 'credential' as string, injectAsEnvVariable: false });
-const propertyHint = computed(() => `{{ Properties.${varForm.key || 'KEY_NAME'} }}`);
+const propertyHint = computed(() => `{{ properties.${varForm.key || 'KEY_NAME'} }}`);
 
 async function handleAddVar() {
   varError.value = '';
@@ -576,6 +615,65 @@ const showMcpForm = ref(false);
 const savingMcp = ref(false);
 const mcpError = ref('');
 const mcpEditId = ref('');
+
+// ── MCP JSON Template management ────────────────────────────────
+const editingMcpTemplate = ref(false);
+const savingMcpTemplate = ref(false);
+const mcpTemplateError = ref('');
+const mcpTemplateContent = ref('');
+const templateHintProps = '{{ properties.KEY }}';
+const templateHintCreds = '{{ credentials.KEY }}';
+const mcpTemplatePlaceholder = `{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@some/mcp-server"],
+      "env": {
+        "API_KEY": "{{ credentials.API_KEY }}"
+      }
+    }
+  }
+}`;
+
+function startEditMcpTemplate() {
+  mcpTemplateContent.value = (agent.value as any)?.mcpJsonTemplate || '';
+  mcpTemplateError.value = '';
+  editingMcpTemplate.value = true;
+}
+
+async function handleSaveMcpTemplate() {
+  mcpTemplateError.value = '';
+  savingMcpTemplate.value = true;
+  try {
+    await $fetch(`/api/agents/${agentId}`, {
+      method: 'PUT', headers,
+      body: { mcpJsonTemplate: mcpTemplateContent.value || null },
+    });
+    editingMcpTemplate.value = false;
+    await refreshAgent();
+  } catch (e: any) {
+    mcpTemplateError.value = e?.data?.error || 'Failed to save MCP JSON template';
+  } finally {
+    savingMcpTemplate.value = false;
+  }
+}
+
+async function handleClearMcpTemplate() {
+  if (!confirm('Remove the MCP JSON template?')) return;
+  savingMcpTemplate.value = true;
+  try {
+    await $fetch(`/api/agents/${agentId}`, {
+      method: 'PUT', headers,
+      body: { mcpJsonTemplate: null },
+    });
+    editingMcpTemplate.value = false;
+    await refreshAgent();
+  } catch {
+    alert('Failed to remove template');
+  } finally {
+    savingMcpTemplate.value = false;
+  }
+}
 const mcpForm = reactive({
   name: '',
   command: '',

@@ -8,11 +8,11 @@ Agents are defined as Git-hosted markdown files with skills. The platform clones
 
 - **Agent Management** — Define agents as Git repos with markdown instructions and skills
 - **Workflow Engine** — Multi-step workflows with sequential Copilot sessions
-- **5 Built-in Tools** — Self-scheduling, webhook management, decision audit, pgvector memory
+- **9 Built-in Tools** — Self-scheduling, webhook management, decision audit, pgvector memory, HTTP requests with Jinja2
 - **MCP Server Integration** — Install and configure any MCP server per-agent for domain-specific tools
 - **Trigger System** — Cron schedules, webhooks (HMAC-SHA256), events, manual triggers
 - **Memory System** — Long-term agent memory with pgvector semantic search
-- **Credential Vault** — AES-256-GCM encrypted credential storage per agent
+- **Secure Credentials** — AES-256-GCM encrypted storage, Jinja2 template injection (zero agent exposure)
 - **Quota Management** — Daily token usage tracking and limits
 - **Real-time Updates** — SSE event streaming for live execution monitoring
 
@@ -41,7 +41,7 @@ Agents are defined as Git-hosted markdown files with skills. The platform clones
 
 ### Tool Architecture
 
-- **5 Built-in tools** operate on agent_db (triggers, decisions, memory)
+- **9 Built-in tools** operate on agent_db (triggers, decisions, memory, HTTP requests)
 - **MCP tools** are loaded per-agent from user-configured MCP servers via Model Context Protocol (stdio transport)
 - Each agent can have multiple MCP servers configured, loaded on-demand during workflow execution
 

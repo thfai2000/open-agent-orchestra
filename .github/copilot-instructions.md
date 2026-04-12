@@ -108,23 +108,28 @@ deploy.sh             # Deploy to local K8s via Helm
 - **Auth**: Uses `GITHUB_TOKEN` env var or GitHub CLI auth
 - **Important**: Do NOT use Vercel AI SDK (`ai` package) or `@github/models`. Use `@github/copilot-sdk` only.
 
-## Database Schema (14 tables)
+## Database Schema
 
 | Table | Purpose |
 |-------|---------|
 | `users` | Independent auth (email/password/bcrypt) |
-| `agents` | Git repo config, status, linked credentials |
-| `workflows` | Template definitions (name, steps, agent) |
+| `workspaces` | Multi-tenant workspace isolation |
+| `agents` | Git repo config, status, MCP JSON template |
+| `agent_files` | DB-stored agent instruction/skill files |
+| `workflows` | Template definitions (name, steps, agent, labels) |
 | `workflow_steps` | Ordered prompt templates per workflow |
 | `workflow_executions` | Execution history with status/output |
 | `step_executions` | Per-step output, reasoning trace (JSONB) |
 | `triggers` | time_schedule/webhook/event/manual |
-| `agent_credentials` | AES-256-GCM encrypted key-value store |
-| `agent_quota_usage` | Daily token usage tracking per agent |
+| `agent_variables` | 3-tier scoped variables (agent level, AES-256-GCM for credentials) |
+| `user_variables` | 3-tier scoped variables (user level) |
+| `workspace_variables` | 3-tier scoped variables (workspace level) |
 | `webhook_registrations` | HMAC secrets for webhook auth |
 | `mcp_server_configs` | Per-agent MCP server configurations |
 | `agent_decisions` | Generic audit trail of agent decisions |
 | `agent_memories` | Long-term memory with pgvector embeddings |
+| `system_events` | Event audit trail for triggers |
+| `agent_quota_usage` | Daily token usage tracking per agent |
 
 ## Security Rules
 - Input validation: Zod on all API endpoints

@@ -20,6 +20,7 @@
             <Badge :variant="workflow.isActive ? 'default' : 'secondary'">{{ workflow.isActive ? 'Active' : 'Inactive' }}</Badge>
             <Badge v-if="workflow.scope === 'workspace'" variant="outline">Workspace</Badge>
             <Badge v-else variant="outline" class="text-muted-foreground">Personal</Badge>
+            <Badge v-for="label in (workflow.labels || [])" :key="label" variant="secondary" class="text-xs">{{ label }}</Badge>
             <span class="text-sm text-muted-foreground">Owner: {{ workflow.ownerName || 'Unknown' }}</span>
             <span v-if="workflow.lastExecutionAt" class="text-sm text-muted-foreground">
               Last Run: {{ new Date(workflow.lastExecutionAt).toLocaleString() }}
@@ -40,7 +41,7 @@
         <DialogContent class="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Manual Run</DialogTitle>
-            <DialogDescription>Provide initial context for the first step. This will be available as <code class="bg-muted px-1 rounded text-xs">&lt;PRECEDENT_OUTPUT&gt;</code> in step 1's prompt template.</DialogDescription>
+            <DialogDescription>Provide initial context for the first step. This will be available as <code class="bg-muted px-1 rounded text-xs">{{ precedent_output }}</code> in step 1's prompt template (Jinja2).</DialogDescription>
           </DialogHeader>
           <Textarea v-model="manualRunInput" rows="4" placeholder="Enter initial context or instructions for this run..." />
           <DialogFooter>
@@ -65,6 +66,21 @@
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div class="space-y-2"><Label>Name *</Label><Input v-model="editWfForm.name" required /></div>
               <div class="space-y-2"><Label>Description</Label><Input v-model="editWfForm.description" /></div>
+            </div>
+            <Separator />
+            <div class="space-y-2">
+              <Label class="text-sm">Labels</Label>
+              <div class="flex flex-wrap gap-2 mb-2">
+                <Badge v-for="(label, idx) in editWfForm.labels" :key="idx" variant="secondary" class="gap-1">
+                  {{ label }}
+                  <button type="button" class="ml-1 text-muted-foreground hover:text-foreground" @click="editWfForm.labels.splice(idx, 1)">&times;</button>
+                </Badge>
+              </div>
+              <div class="flex gap-2">
+                <Input v-model="editNewLabel" placeholder="Add label…" class="max-w-xs" @keydown.enter.prevent="addEditLabel" />
+                <Button type="button" variant="outline" size="sm" @click="addEditLabel">Add</Button>
+              </div>
+              <p class="text-xs text-muted-foreground">Tags for organizing and filtering workflows. Max 10 labels.</p>
             </div>
             <Separator />
             <div>
@@ -150,7 +166,7 @@
                   <Button v-if="editStepForm.length > 1" variant="ghost" size="sm" class="text-destructive h-7 text-xs" @click="editStepForm.splice(idx, 1)">Remove</Button>
                 </div>
                 <Input v-model="step.name" required placeholder="Step name" />
-                <Textarea v-model="step.promptTemplate" rows="3" required class="font-mono text-xs" placeholder="Prompt template (use <PRECEDENT_OUTPUT> and {{ Properties.KEY }})" />
+                <Textarea v-model="step.promptTemplate" rows="3" required class="font-mono text-xs" placeholder="Jinja2 prompt template: {{ precedent_output }}, {{ properties.KEY }}, {{ credentials.KEY }}" />
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div class="space-y-1">
                     <Label class="text-xs">Agent</Label>
@@ -342,9 +358,11 @@ function formatTriggerType(type: string): string {
 const editingWorkflow = ref(false);
 const savingWf = ref(false);
 const editWfError = ref('');
+const editNewLabel = ref('');
 const editWfForm = reactive({
   name: '',
   description: '',
+  labels: [] as string[],
   defaultAgentId: '',
   defaultModel: '',
   defaultReasoningEffort: '',
@@ -354,12 +372,22 @@ function startEditWorkflow() {
   Object.assign(editWfForm, {
     name: workflow.value?.name || '',
     description: workflow.value?.description || '',
+    labels: [...(workflow.value?.labels || [])],
     defaultAgentId: workflow.value?.defaultAgentId || '',
     defaultModel: workflow.value?.defaultModel || '',
     defaultReasoningEffort: workflow.value?.defaultReasoningEffort || '',
   });
+  editNewLabel.value = '';
   editWfError.value = '';
   editingWorkflow.value = true;
+}
+
+function addEditLabel() {
+  const label = editNewLabel.value.trim();
+  if (label && !editWfForm.labels.includes(label) && editWfForm.labels.length < 10) {
+    editWfForm.labels.push(label);
+  }
+  editNewLabel.value = '';
 }
 
 async function handleSaveWorkflow() {
@@ -372,6 +400,7 @@ async function handleSaveWorkflow() {
       body: {
         name: editWfForm.name,
         description: editWfForm.description || undefined,
+        labels: editWfForm.labels,
         defaultAgentId: editWfForm.defaultAgentId || null,
         defaultModel: editWfForm.defaultModel || null,
         defaultReasoningEffort: editWfForm.defaultReasoningEffort || null,

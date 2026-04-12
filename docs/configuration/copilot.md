@@ -66,7 +66,6 @@ Platform tools created with `defineTool()` from the Copilot SDK:
 | `edit_workflow` | `stepUpdates[]` | Modify workflow steps |
 | `read_variables` | `scope`, `variableType` | Read variables |
 | `edit_variables` | `key`, `value`, `scope`, etc. | Create/update variables |
-| `get_credentials_into_env` | `credentialName`, `envName`, `reason` | Inject credentials into env with audit. See [AI Security](/concepts/security) |
 
 ### MCP Tools
 

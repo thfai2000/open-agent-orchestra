@@ -26,7 +26,6 @@ erDiagram
     agents ||--o{ webhook_registrations : "has webhooks"
     agents ||--o{ agent_decisions : "has decisions"
     agents ||--o{ agent_memories : "has memories"
-    agents ||--o{ credential_access_logs : "has credential logs"
 
     workflows ||--o{ workflow_steps : "has steps"
     workflows ||--o{ triggers : "has triggers"
@@ -104,6 +103,7 @@ AI agent definitions.
 | githubTokenEncrypted | text | AES-256-GCM encrypted |
 | githubTokenCredentialId | varchar(100) | References credential variable |
 | builtinToolsEnabled | jsonb | Array of enabled built-in tool names |
+| mcpJsonTemplate | text | Jinja2 template for mcp.json (rendered with variables before session) |
 | scope | resource_scope | Default: `user`. Immutable |
 | status | agent_status | |
 | lastSessionAt | timestamp | |
@@ -152,6 +152,7 @@ Multi-step execution templates.
 | userId | UUID | Owner |
 | name | varchar(200) | |
 | description | text | |
+| labels | varchar(50)[] | Filterable tags (GIN indexed) |
 | isActive | boolean | |
 | maxConcurrentExecutions | integer | Default: 1 |
 | version | integer | Auto-incremented. Default: 1 |
@@ -412,42 +413,6 @@ All variable tables share the same structure: `key` (UPPER_SNAKE_CASE), `valueEn
 | lastReceivedAt | timestamp | |
 | createdAt | timestamp | |
 
-## Security Tables
-
-### credential_access_logs
-
-Audit log of all credential access requests made by agents via `get_credentials_into_env`.
-
-| Column | Type | Notes |
-|---|---|---|
-| id | UUID PK | |
-| workspaceId | UUID FK → workspaces | |
-| executionId | UUID FK → workflow_executions | Nullable |
-| agentId | UUID FK → agents | |
-| userId | UUID | |
-| credentialName | varchar(200) | Credential key requested |
-| envName | varchar(200) | Target environment variable name |
-| reason | text | Agent-provided justification |
-| approved | boolean | Whether access was granted |
-| approvedBy | varchar(100) | `auto` or `audit_agent:{agentId}` |
-| auditSessionMessages | jsonb | Full audit session transcript |
-| createdAt | timestamp | Indexed |
-
-Indexes: `agentId`, `executionId`, `createdAt`
-
-### workspace_security_settings
-
-Per-workspace security configuration for credential access control.
-
-| Column | Type | Notes |
-|---|---|---|
-| id | UUID PK | |
-| workspaceId | UUID FK → workspaces | UNIQUE |
-| credentialApprovalEnabled | boolean | Default: false |
-| approvalAgentId | UUID FK → agents | Agent used for audit decisions |
-| updatedBy | UUID FK → users | |
-| updatedAt | timestamp | |
-
 ## Security Features
 
 - **Encryption** — All credential values encrypted with AES-256-GCM
@@ -455,4 +420,4 @@ Per-workspace security configuration for credential access control.
 - **UUID keys** — Non-guessable primary keys
 - **Foreign keys** — Cascade deletes for referential integrity
 - **Unique indexes** — Prevent duplicate variable keys per scope
-- **Credential audit** — All credential access logged with approval workflow. See [AI Security](/concepts/security)
+- **Zero credential exposure** — Agents never access credentials directly. Credentials are injected via Jinja2 templates into MCP configs and HTTP headers. See [AI Security](/concepts/security)

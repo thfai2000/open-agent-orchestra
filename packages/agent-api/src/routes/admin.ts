@@ -9,8 +9,6 @@ import {
   models,
   workspaceQuotaSettings,
   creditUsage,
-  workspaceSecuritySettings,
-  credentialAccessLogs,
 } from '../database/schema.js';
 import { authMiddleware, uuidSchema, emailSchema, passwordSchema } from '@ai-trader/shared';
 
@@ -290,85 +288,6 @@ adminRouter.get('/usage/summary', async (c) => {
     .groupBy(creditUsage.userId, users.name, users.email);
 
   return c.json({ dailyUsage, modelUsage, userUsage, days });
-});
-
-// ═══════════════════════════════════════════════════════════════════════
-// Security Settings (credential approval)
-// ═══════════════════════════════════════════════════════════════════════
-
-// GET /security — get workspace security settings
-adminRouter.get('/security', async (c) => {
-  const user = c.get('user');
-  const settings = await db.query.workspaceSecuritySettings.findFirst({
-    where: eq(workspaceSecuritySettings.workspaceId, user.workspaceId!),
-  });
-  return c.json({
-    settings: settings ?? {
-      credentialApprovalEnabled: false,
-      approvalAgentId: null,
-    },
-  });
-});
-
-// PUT /security — update workspace security settings
-const updateSecuritySchema = z.object({
-  credentialApprovalEnabled: z.boolean(),
-  approvalAgentId: z.string().uuid().nullable(),
-});
-
-adminRouter.put('/security', async (c) => {
-  const user = c.get('user');
-  const body = updateSecuritySchema.parse(await c.req.json());
-
-  const existing = await db.query.workspaceSecuritySettings.findFirst({
-    where: eq(workspaceSecuritySettings.workspaceId, user.workspaceId!),
-  });
-
-  if (existing) {
-    const [updated] = await db
-      .update(workspaceSecuritySettings)
-      .set({
-        credentialApprovalEnabled: body.credentialApprovalEnabled,
-        approvalAgentId: body.approvalAgentId,
-        updatedBy: user.userId,
-        updatedAt: new Date(),
-      })
-      .where(eq(workspaceSecuritySettings.id, existing.id))
-      .returning();
-    return c.json({ settings: updated });
-  }
-
-  const [created] = await db
-    .insert(workspaceSecuritySettings)
-    .values({
-      workspaceId: user.workspaceId!,
-      credentialApprovalEnabled: body.credentialApprovalEnabled,
-      approvalAgentId: body.approvalAgentId,
-      updatedBy: user.userId,
-    })
-    .returning();
-  return c.json({ settings: created }, 201);
-});
-
-// ═══════════════════════════════════════════════════════════════════════
-// Credential Access Logs (audit trail)
-// ═══════════════════════════════════════════════════════════════════════
-
-// GET /credential-logs — list credential access logs for workspace
-adminRouter.get('/credential-logs', async (c) => {
-  const user = c.get('user');
-  const page = z.coerce.number().min(1).default(1).parse(c.req.query('page'));
-  const limit = z.coerce.number().min(1).max(200).default(50).parse(c.req.query('limit'));
-  const offset = (page - 1) * limit;
-
-  const logs = await db.query.credentialAccessLogs.findMany({
-    where: eq(credentialAccessLogs.workspaceId, user.workspaceId!),
-    orderBy: desc(credentialAccessLogs.createdAt),
-    limit,
-    offset,
-  });
-
-  return c.json({ logs, page, limit });
 });
 
 export default adminRouter;

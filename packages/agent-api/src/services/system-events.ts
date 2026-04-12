@@ -37,11 +37,6 @@ export const EVENT_NAMES = {
   VARIABLE_CREATED: 'variable.created',
   VARIABLE_UPDATED: 'variable.updated',
   VARIABLE_DELETED: 'variable.deleted',
-
-  // Credential access events
-  CREDENTIAL_ACCESS_REQUESTED: 'credential.access_requested',
-  CREDENTIAL_ACCESS_APPROVED: 'credential.access_approved',
-  CREDENTIAL_ACCESS_DENIED: 'credential.access_denied',
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];

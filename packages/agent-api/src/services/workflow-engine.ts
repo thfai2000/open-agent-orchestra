@@ -23,7 +23,7 @@ import { prepareAgentWorkspace, prepareDbAgentWorkspace } from './agent-workspac
 import { createAgentTools } from './agent-tools.js';
 import { connectToMcpServer } from './mcp-client.js';
 import { loadAgentPlugins, readPluginSkills, getPluginMcpServers, getPluginToolDefs } from './plugin-loader.js';
-import { cleanupAuditSession } from './credential-audit.js';
+import { renderTemplate, buildTemplateContext } from './jinja-renderer.js';
 
 const logger = createLogger('workflow-engine');
 
@@ -326,8 +326,9 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
     const step = steps[i];
     const stepExec = stepExecs[i];
 
-    // Resolve prompt: replace <PRECEDENT_OUTPUT> with previous step's output
-    const resolvedPrompt = step.promptTemplate.replace(/<PRECEDENT_OUTPUT>/g, precedentOutput);
+    // Resolve prompt using Jinja2 templating
+    // Build context: precedent_output + properties + credentials will be available per-step below
+    const resolvedPrompt = step.promptTemplate;
 
     // Mark step as running
     await db
@@ -370,6 +371,7 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
         agent: stepAgent,
         step,
         resolvedPrompt,
+        precedentOutput,
         credentials: mergedCredentials,
         properties: mergedProperties,
         envVariables: mergedEnvVars,
@@ -417,9 +419,6 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
         .set({ status: 'failed', error: errorMsg, completedAt: new Date() })
         .where(eq(workflowExecutions.id, executionId));
 
-      // Clean up any audit sessions
-      await cleanupAuditSession(executionId);
-
       logger.error({ executionId, stepOrder: step.stepOrder, error: errorMsg }, 'Step failed');
       return;
     }
@@ -437,9 +436,6 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
     await db.update(agents).set({ lastSessionAt: new Date() }).where(eq(agents.id, agentId));
   }
 
-  // Clean up any audit sessions created during this execution
-  await cleanupAuditSession(executionId);
-
   logger.info({ executionId }, 'Workflow execution completed');
 }
 
@@ -456,6 +452,7 @@ async function executeCopilotSession(params: {
   agent: typeof agents.$inferSelect;
   step: typeof workflowSteps.$inferSelect;
   resolvedPrompt: string;
+  precedentOutput: string;
   credentials: Map<string, string>;
   properties: Map<string, string>;
   envVariables: Map<string, string>;
@@ -466,13 +463,16 @@ async function executeCopilotSession(params: {
   workflowDefaultModel?: string | null;
   workflowDefaultReasoningEffort?: string | null;
 }): Promise<{ output: string; reasoningTrace: Record<string, unknown> }> {
-  const { agent, step, resolvedPrompt: rawPrompt, credentials, properties, envVariables, workflowId, workspaceId, executionId, userId, workflowDefaultModel, workflowDefaultReasoningEffort } = params;
+  const { agent, step, resolvedPrompt: rawPrompt, precedentOutput, credentials, properties, envVariables, workflowId, workspaceId, executionId, userId, workflowDefaultModel, workflowDefaultReasoningEffort } = params;
 
-  // Replace {{ Properties.KEY }} tokens in the prompt with property values
-  let resolvedPrompt = rawPrompt;
-  for (const [key, value] of properties) {
-    resolvedPrompt = resolvedPrompt.replace(new RegExp(`\\{\\{\\s*Properties\\.${key}\\s*\\}\\}`, 'g'), value);
-  }
+  // Render prompt template using Jinja2 (nunjucks) with full variable context
+  const templateContext = buildTemplateContext({
+    properties,
+    credentials,
+    envVariables,
+    precedentOutput,
+  });
+  const resolvedPrompt = renderTemplate(rawPrompt, templateContext);
 
   logger.info(
     {
@@ -549,7 +549,7 @@ async function executeCopilotSession(params: {
       executionId,
       userId: agent.userId,
       workspaceId,
-    }, (agent.builtinToolsEnabled as string[]) ?? undefined);
+    }, (agent.builtinToolsEnabled as string[]) ?? undefined, templateContext);
 
     // 3.1 Load MCP server configurations for this agent from DB
     const mcpConfigs = await db.query.mcpServerConfigs.findMany({
@@ -581,6 +581,35 @@ async function executeCopilotSession(params: {
         logger.info({ server: mcpConfig.name, mcpToolCount: mcp.tools.length }, 'MCP tools loaded');
       } catch (mcpErr) {
         logger.warn({ server: mcpConfig.name, error: mcpErr }, 'Failed to connect to MCP server, skipping');
+      }
+    }
+
+    // 3.1.5 Render agent's mcp.json.template (Jinja2) and spawn MCP servers from it
+    if (agent.mcpJsonTemplate) {
+      try {
+        const renderedMcpJson = renderTemplate(agent.mcpJsonTemplate, templateContext);
+        const mcpJson = JSON.parse(renderedMcpJson) as {
+          mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+        };
+        if (mcpJson.mcpServers) {
+          for (const [serverName, serverConfig] of Object.entries(mcpJson.mcpServers)) {
+            try {
+              const mcp = await connectToMcpServer({
+                name: serverName,
+                command: serverConfig.command,
+                args: serverConfig.args ?? [],
+                env: serverConfig.env ?? {},
+              });
+              allTools = [...allTools, ...mcp.tools];
+              mcpCleanups.push(mcp.cleanup);
+              logger.info({ server: serverName, mcpToolCount: mcp.tools.length }, 'MCP tools loaded from mcp.json.template');
+            } catch (err) {
+              logger.warn({ server: serverName, error: err }, 'Failed to connect MCP server from template, skipping');
+            }
+          }
+        }
+      } catch (err) {
+        logger.warn({ error: err }, 'Failed to render/parse mcp.json.template, skipping');
       }
     }
 

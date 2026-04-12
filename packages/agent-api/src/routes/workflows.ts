@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { eq, desc, and, or, sql } from 'drizzle-orm';
+import { eq, desc, and, or, sql, arrayContains } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { workflows, workflowSteps, triggers, workflowExecutions, users, agents } from '../database/schema.js';
 import { authMiddleware, uuidSchema } from '@ai-trader/shared';
@@ -11,18 +11,29 @@ const workflowsRouter = new Hono();
 workflowsRouter.use('/*', authMiddleware);
 
 // GET / — list workflows visible to user: user-scoped (own) + workspace-scoped
+// Query params: ?labels=label1,label2 — filter by ALL specified labels (AND logic)
 workflowsRouter.get('/', async (c) => {
   const user = c.get('user');
   if (!user.workspaceId) return c.json({ workflows: [] });
 
-  const workflowList = await db.query.workflows.findMany({
-    where: and(
-      eq(workflows.workspaceId, user.workspaceId),
-      or(
-        eq(workflows.scope, 'workspace'),
-        eq(workflows.userId, user.userId),
-      ),
+  const labelsParam = c.req.query('labels');
+  const labelFilter = labelsParam ? labelsParam.split(',').map(l => l.trim()).filter(Boolean) : [];
+
+  const conditions = [
+    eq(workflows.workspaceId, user.workspaceId),
+    or(
+      eq(workflows.scope, 'workspace'),
+      eq(workflows.userId, user.userId),
     ),
+  ];
+
+  // Filter by labels if provided (array containment: workflow.labels ⊇ filterLabels)
+  if (labelFilter.length > 0) {
+    conditions.push(arrayContains(workflows.labels, labelFilter));
+  }
+
+  const workflowList = await db.query.workflows.findMany({
+    where: and(...conditions),
   });
 
   // Fetch last execution time for each workflow
@@ -56,6 +67,18 @@ workflowsRouter.get('/', async (c) => {
   return c.json({ workflows: enriched });
 });
 
+// GET /labels — list all distinct labels used in workflows (for filter UI)
+workflowsRouter.get('/labels', async (c) => {
+  const user = c.get('user');
+  if (!user.workspaceId) return c.json({ labels: [] });
+
+  const rows = await db.execute(
+    sql`SELECT DISTINCT unnest(labels) AS label FROM workflows WHERE workspace_id = ${user.workspaceId} ORDER BY label`,
+  );
+  const labels = (rows as unknown as Array<{ label: string }>).map((r) => r.label);
+  return c.json({ labels });
+});
+
 // POST / — create workflow with steps and optional triggers
 const stepSchema = z.object({
   name: z.string().min(1).max(200),
@@ -75,6 +98,7 @@ const triggerSchema = z.object({
 const createWorkflowSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(1000).optional(),
+  labels: z.array(z.string().min(1).max(50)).max(10).default([]),
   defaultAgentId: z.string().uuid().optional(),
   defaultModel: z.string().max(100).optional(),
   defaultReasoningEffort: z.enum(['high', 'medium', 'low']).optional(),
@@ -129,6 +153,7 @@ workflowsRouter.post('/', async (c) => {
         scope: body.scope,
         name: body.name,
         description: body.description,
+        labels: body.labels,
         defaultAgentId: body.defaultAgentId,
         defaultModel: body.defaultModel,
         defaultReasoningEffort: body.defaultReasoningEffort,
@@ -231,6 +256,7 @@ workflowsRouter.get('/:id', async (c) => {
 const updateWorkflowSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().max(1000).optional(),
+  labels: z.array(z.string().min(1).max(50)).max(10).optional(),
   isActive: z.boolean().optional(),
   defaultAgentId: z.string().uuid().nullable().optional(),
   defaultModel: z.string().max(100).nullable().optional(),

@@ -28,6 +28,20 @@
             <Textarea v-model="form.description" rows="2" placeholder="What does this workflow do?" />
           </div>
           <div class="space-y-2">
+            <Label>Labels</Label>
+            <div class="flex flex-wrap gap-2 mb-2">
+              <Badge v-for="(label, idx) in form.labels" :key="idx" variant="secondary" class="gap-1">
+                {{ label }}
+                <button type="button" class="ml-1 text-muted-foreground hover:text-foreground" @click="form.labels.splice(idx, 1)">&times;</button>
+              </Badge>
+            </div>
+            <div class="flex gap-2">
+              <Input v-model="newLabel" placeholder="Add label…" class="max-w-xs" @keydown.enter.prevent="addLabel" />
+              <Button type="button" variant="outline" size="sm" @click="addLabel">Add</Button>
+            </div>
+            <p class="text-xs text-muted-foreground">Tags for organizing and filtering workflows. Max 10 labels.</p>
+          </div>
+          <div class="space-y-2">
             <Label>Scope</Label>
             <select v-model="form.scope"
               class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring max-w-xs">
@@ -83,7 +97,7 @@
           <div class="flex items-center justify-between">
             <div>
               <CardTitle>Steps *</CardTitle>
-              <CardDescription>Define the sequential steps for this workflow. Use <code class="bg-muted px-1 rounded text-xs">&lt;PRECEDENT_OUTPUT&gt;</code> in prompt templates to reference the previous step's output.</CardDescription>
+              <CardDescription>Define the sequential steps for this workflow. Use Jinja2 templating: <code class="bg-muted px-1 rounded text-xs">{{ precedent_output }}</code> for previous step output, <code class="bg-muted px-1 rounded text-xs">{{ properties.KEY }}</code> and <code class="bg-muted px-1 rounded text-xs">{{ credentials.KEY }}</code> for variables.</CardDescription>
             </div>
             <Button variant="outline" size="sm" type="button" @click="addStep">+ Add Step</Button>
           </div>
@@ -104,7 +118,7 @@
               <div class="space-y-1.5">
                 <Label class="text-xs">Prompt Template *</Label>
                 <Textarea v-model="step.promptTemplate" rows="3" required class="font-mono text-xs"
-                  placeholder="Prompt template (use <PRECEDENT_OUTPUT> for previous step's output, {{ Properties.KEY }} for properties)" />
+                  placeholder="Jinja2 prompt template: {{ precedent_output }}, {{ properties.KEY }}, {{ credentials.KEY }}" />
               </div>
               <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div class="space-y-1">
@@ -234,6 +248,7 @@ const formError = ref('');
 const form = reactive({
   name: '',
   description: '',
+  labels: [] as string[],
   defaultAgentId: '',
   defaultModel: '',
   defaultReasoningEffort: '',
@@ -250,6 +265,15 @@ const eventNames = computed(() => (namesData.value as any)?.eventNames ?? []);
 
 const { data: modelsData } = await useFetch('/api/quota/models', { headers });
 const availableModels = computed(() => (modelsData.value as any)?.models ?? []);
+
+const newLabel = ref('');
+function addLabel() {
+  const label = newLabel.value.trim();
+  if (label && !form.labels.includes(label) && form.labels.length < 10) {
+    form.labels.push(label);
+  }
+  newLabel.value = '';
+}
 
 function addStep() {
   form.steps.push({ name: '', promptTemplate: '', agentId: '', model: '', reasoningEffort: '', timeoutSeconds: 300 });
@@ -284,6 +308,7 @@ async function handleCreate() {
       body: {
         name: form.name,
         description: form.description || undefined,
+        labels: form.labels.length > 0 ? form.labels : undefined,
         defaultAgentId: form.defaultAgentId || undefined,
         defaultModel: form.defaultModel || undefined,
         defaultReasoningEffort: form.defaultReasoningEffort || undefined,

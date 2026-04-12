@@ -77,7 +77,6 @@ The platform logs 21 system event types accessible via **Events** page:
 | Trigger | `trigger.fired` |
 | User | `user.login`, `user.registered` |
 | Variable | `variable.created`, `variable.updated`, `variable.deleted` |
-| Credential | `credential.access_requested`, `credential.access_approved`, `credential.access_denied` |
 
 Events can be used to trigger workflows via [event triggers](/concepts/workflows#event-trigger).
 

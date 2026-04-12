@@ -83,7 +83,6 @@ agent-api/
 │   ├── services/
 │   │   ├── workflow-engine.ts  # Core: enqueue, execute, retry, Copilot sessions
 │   │   ├── agent-tools.ts     # 9 built-in tools (defineTool)
-│   │   ├── credential-audit.ts # Sandbox session for credential approval
 │   │   ├── agent-workspace.ts # Git clone + skill loading
 │   │   ├── mcp-client.ts      # MCP server spawn + tool registration
 │   │   ├── plugin-loader.ts   # Plugin repo clone + manifest parsing
@@ -102,7 +101,6 @@ agent-api/
 - **`schema.ts`** — All database tables. The source of truth for the data model.
 - **`workflow-engine.ts`** — The heart of the system. Handles execution flow, Copilot sessions, credential resolution, tool merging.
 - **`agent-tools.ts`** — Defines the 9 built-in tools available to agents.
-- **`credential-audit.ts`** — Sandbox Copilot session for credential approval.
 
 ### `packages/agent-ui/` — `@ai-trader/agent-ui`
 

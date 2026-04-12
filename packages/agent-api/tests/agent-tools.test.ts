@@ -483,3 +483,86 @@ describe('agent-tools: edit_variables', () => {
     expect(result.error).toBeDefined();
   });
 });
+
+describe('agent-tools: simple_http_request credential masking', () => {
+  it('renders Jinja2 templates and sends real credentials in headers to the target', async () => {
+    const { createAgentTools } = await import('../src/services/agent-tools.js');
+
+    const mockFetchResponse = new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      statusText: 'OK',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(mockFetchResponse);
+
+    try {
+      const templateContext = {
+        credentials: { API_TOKEN: 'super-secret-token-123' },
+        properties: { API_BASE: 'https://api.example.com' },
+      };
+      const tools = createAgentTools(new Map(), TEST_CONTEXT, undefined, templateContext);
+      const httpTool = tools.find((t: { name: string }) => t.name === 'simple_http_request') as { handler: Function };
+
+      const result = await httpTool.handler({
+        url: '{{ properties.API_BASE }}/data',
+        method: 'GET',
+        headers: '{"Authorization": "Bearer {{ credentials.API_TOKEN }}"}',
+        auth_type: 'none',
+        timeout_ms: 5000,
+        follow_redirects: true,
+        max_redirects: 10,
+        include_response_headers: false,
+        max_response_size: 1048576,
+        verify_ssl: true,
+      });
+
+      // The HTTP request should succeed
+      expect(result.status).toBe(200);
+
+      // Verify fetch was called with the RENDERED credential in the header
+      const fetchCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      const fetchHeaders = fetchCall[1].headers as Record<string, string>;
+      expect(fetchHeaders['Authorization']).toBe('Bearer super-secret-token-123');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('renders Jinja2 templates in URL and bearer auth_value', async () => {
+    const { createAgentTools } = await import('../src/services/agent-tools.js');
+
+    const mockFetchResponse = new Response('OK', { status: 200, statusText: 'OK' });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(mockFetchResponse);
+
+    try {
+      const templateContext = {
+        credentials: { TOKEN: 'my-bearer-token' },
+        properties: { HOST: 'https://example.com' },
+      };
+      const tools = createAgentTools(new Map(), TEST_CONTEXT, undefined, templateContext);
+      const httpTool = tools.find((t: { name: string }) => t.name === 'simple_http_request') as { handler: Function };
+
+      await httpTool.handler({
+        url: '{{ properties.HOST }}/api/v1',
+        method: 'GET',
+        auth_type: 'bearer',
+        auth_value: '{{ credentials.TOKEN }}',
+        timeout_ms: 5000,
+        follow_redirects: true,
+        max_redirects: 10,
+        include_response_headers: false,
+        max_response_size: 1048576,
+        verify_ssl: true,
+      });
+
+      const fetchCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(fetchCall[0]).toBe('https://example.com/api/v1');
+      const fetchHeaders = fetchCall[1].headers as Record<string, string>;
+      expect(fetchHeaders['Authorization']).toBe('Bearer my-bearer-token');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

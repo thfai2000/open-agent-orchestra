@@ -65,7 +65,7 @@ For private repos, provide a GitHub token. You can either:
 
 ### Built-in Tools
 
-Every agent has access to 9 built-in platform tools (individually toggleable):
+Every agent has access to 10 built-in platform tools (individually toggleable):
 
 | Tool | Description |
 |---|---|
@@ -77,9 +77,24 @@ Every agent has access to 9 built-in platform tools (individually toggleable):
 | `edit_workflow` | Modify workflow steps programmatically |
 | `read_variables` | Read properties and credentials |
 | `edit_variables` | Create/update variables |
-| `get_credentials_into_env` | Securely inject credentials into environment variables with audit logging. See [AI Security](/concepts/security) |
+| `simple_http_request` | Curl-like HTTP requests with Jinja2 templating on all arguments |
 
 By default, all tools are enabled. Admins and agent owners can toggle individual tools when creating or editing agents.
+
+### Simple HTTP Request Tool
+
+The `simple_http_request` tool provides curl-like HTTP request capabilities with all the fine-grained control of popular HTTP clients:
+
+- All HTTP methods (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS)
+- Custom headers, query parameters, cookies
+- Basic and Bearer authentication
+- Request body (JSON, form data, raw text)
+- Timeout control, redirect following
+- SSL verification toggle
+- Response size limits
+- Response header inclusion
+
+**Jinja2 Templating:** All string arguments support Jinja2 template syntax. Available variables: `{{ properties.KEY }}`, `{{ credentials.KEY }}`, `{{ env.KEY }}`. This allows agents to dynamically construct URLs, headers, and bodies using agent variables.
 
 ### MCP Servers
 
@@ -133,6 +148,39 @@ The left side is the env var name passed to the MCP server process. The right si
 #### Write Tool Permissions
 
 Tools listed in `writeTools` require explicit permission approval before execution. This prevents agents from making destructive calls without authorization.
+
+### MCP JSON Template (Jinja2)
+
+In addition to DB-configured MCP servers, agents can define an **MCP JSON Template** — a Jinja2 template that renders to a `mcp.json` configuration at execution time. This is useful for dynamically configuring MCP servers with variable substitution.
+
+**Template variables:**
+- `{{ properties.KEY }}` — Agent/user/workspace property values
+- `{{ credentials.KEY }}` — Agent/user/workspace credential values
+
+**Example template:**
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "{{ credentials.GITHUB_TOKEN }}"
+      }
+    },
+    "custom-api": {
+      "command": "node",
+      "args": ["{{ properties.MCP_SERVER_PATH }}"],
+      "env": {
+        "API_KEY": "{{ credentials.API_KEY }}",
+        "API_URL": "{{ properties.API_URL }}"
+      }
+    }
+  }
+}
+```
+
+The rendered JSON must contain a `mcpServers` key mapping server names to `{ command, args?, env? }` objects. Servers from the template are spawned alongside DB-configured MCP servers.
 
 ### Tool Loading Flow
 

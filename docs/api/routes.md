@@ -26,10 +26,11 @@ All routes are served by OAO-API (Hono v4.6) at port 4002. OAO-UI proxies all `/
 
 | Method | Path | Role | Description |
 |---|---|---|---|
-| GET | `/api/workflows` | Any | List workflows in workspace |
+| GET | `/api/workflows` | Any | List workflows in workspace. Query: `?labels=a,b` filters by labels (AND logic) |
+| GET | `/api/workflows/labels` | Any | List all distinct labels in workspace |
 | POST | `/api/workflows` | creator+ | Create workflow with steps + triggers |
 | GET | `/api/workflows/:id` | Any | Workflow detail with steps |
-| PUT | `/api/workflows/:id` | creator+ | Update workflow |
+| PUT | `/api/workflows/:id` | creator+ | Update workflow (name, description, labels, defaults) |
 | DELETE | `/api/workflows/:id` | creator+ | Delete workflow |
 
 ## Executions
@@ -112,9 +113,6 @@ Requires `workspace_admin` or `super_admin` role.
 | GET/POST/PUT/DELETE | `/api/admin/models[/:id]` | Model CRUD (workspace-scoped) |
 | GET/PUT | `/api/admin/quota-settings` | Workspace quota settings |
 | GET | `/api/admin/credit-stats` | Workspace credit usage breakdown |
-| GET | `/api/admin/security` | Get workspace security settings (credential approval) |
-| PUT | `/api/admin/security` | Update workspace security settings |
-| GET | `/api/admin/credential-logs` | List credential access logs (paginated) |
 
 ## Quota
 

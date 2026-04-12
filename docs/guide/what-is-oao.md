@@ -21,10 +21,10 @@ This is exactly how a real team works — people with different capabilities col
 
 When agents interact with external services, they need credentials (API keys, tokens, passwords). Traditional approaches expose credentials as environment variables — with no audit trail, no access control, and no way to know which agent used what and why.
 
-**OAO solves this** with the `get_credentials_into_env()` tool:
-- Every credential access requires a **reason** that is logged
-- A designated **security audit agent** can review and approve/deny requests in a sandbox Copilot session
-- Full audit trail of all credential usage across all executions
+**OAO solves this** with a **zero credential exposure** approach:
+- Credentials are stored encrypted (AES-256-GCM) and resolved via Jinja2 templates (`{{ credentials.KEY }}`)
+- Agents never see raw credentials — they are injected into MCP configs and HTTP headers server-side
+- Scoped credentials (agent → user → workspace) provide fine-grained access control
 
 ### Beyond Just AI Security
 
@@ -95,4 +95,4 @@ graph TB
 - [Host on Kubernetes](/guide/kubernetes) — Run OAO on Kubernetes with Helm
 - [Build & Deploy](/guide/build-and-deploy) — Checkout source code and build from scratch
 - [Agents & Tools](/concepts/agents) — Understand agents and the tool system
-- [AI Security](/concepts/security) — Learn about credential audit and approval
+- [AI Security](/concepts/security) — Zero credential exposure with Jinja2 templates
