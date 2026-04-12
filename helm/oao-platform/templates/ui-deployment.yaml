@@ -38,7 +38,7 @@ metadata:
   name: oao-ui
   namespace: {{ .Values.namespace }}
 spec:
-  type: LoadBalancer
+  type: ClusterIP
   selector:
     app: oao-ui
   ports:

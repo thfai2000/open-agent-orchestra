@@ -1,0 +1,42 @@
+═══════════════════════════════════════════════════════════════
+  ✓ Open Agent Orchestra (OAO) deployed successfully
+═══════════════════════════════════════════════════════════════
+
+  Helm release: {{ .Release.Name }}
+  Namespace:    {{ .Values.namespace }}
+
+{{- if .Values.ingress.enabled }}
+
+  Access via Ingress:
+    URL:  http://{{ .Values.ingress.host }}
+
+  Make sure your Ingress controller is running and
+  {{ .Values.ingress.host }} resolves to your cluster IP.
+  For local development, add to /etc/hosts:
+    127.0.0.1  {{ .Values.ingress.host }}
+{{- else }}
+
+  Access via port-forward:
+    kubectl -n {{ .Values.namespace }} port-forward svc/oao-ui {{ .Values.ui.port }}:{{ .Values.ui.port }} &
+    kubectl -n {{ .Values.namespace }} port-forward svc/oao-api {{ .Values.api.port }}:{{ .Values.api.port }} &
+
+    OAO-UI:   http://localhost:{{ .Values.ui.port }}
+    OAO-API:  http://localhost:{{ .Values.api.port }}
+{{- end }}
+
+  Superadmin account (first deploy only):
+    Email:    admin@oao.local
+    Password: check job logs ↓
+
+    kubectl -n {{ .Values.namespace }} logs job/{{ .Release.Name }}-db-migrate | grep -A 5 "SUPERADMIN"
+
+    ⚠  Change the superadmin password immediately via
+       Settings → Change Password.
+
+  Useful commands:
+    kubectl -n {{ .Values.namespace }} get pods
+    kubectl -n {{ .Values.namespace }} logs -f deployment/oao-api
+    helm list -n {{ .Values.namespace }}
+    helm uninstall {{ .Release.Name }} -n {{ .Values.namespace }}
+
+═══════════════════════════════════════════════════════════════

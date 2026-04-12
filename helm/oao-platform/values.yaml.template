@@ -5,6 +5,12 @@
 
 namespace: open-agent-orchestra
 
+ingress:
+  enabled: true
+  host: oao.local
+  className: nginx
+  annotations: {}
+
 api:
   image: oao-api:latest
   replicas: 2
@@ -21,7 +27,6 @@ ui:
   image: oao-ui:latest
   replicas: 1
   port: 3002
-  nodePort: 30002
 
 redis:
   image: redis:7-alpine

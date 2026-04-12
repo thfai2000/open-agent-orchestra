@@ -22,7 +22,7 @@
   1. Run pre-build checks (TypeScript, ESLint, tests) — fix all errors first
   2. Rebuild Docker images with `build.sh` (bump `BUILD_TAG` using semantic versioning)
   3. Update image tags in `helm/oao-platform/values.yaml`
-  4. DB schema is pushed automatically via Helm hook (`post-install`/`post-upgrade` Job)
+  4. DB schema push + seed data are applied automatically via Helm hook (`post-install`/`post-upgrade` Job)
   5. Redeploy via `deploy.sh`
   6. After deployment, verify the OAO-UI (http://localhost:3002) is accessible
 - **Semantic Versioning** — All versions follow `major.minor.patch` format (e.g. `1.0.0`):

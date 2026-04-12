@@ -85,17 +85,20 @@ ui:
   image: oao-ui:1.0.0
 ```
 
-Run the deploy script:
+Run the deploy script (development convenience):
 
 ```bash
 ./deploy.sh
 ```
 
 This will:
-1. Deploy PostgreSQL 16 + Redis 7 to the `open-agent-orchestra` namespace
-2. Deploy OAO-API, OAO-UI, and Scheduler services
+1. Run pre-flight checks (kubectl, helm, cluster connectivity)
+2. Deploy via `helm upgrade --install` to the `open-agent-orchestra` namespace
 3. Auto-push database schema via Helm hook (Drizzle `post-install`/`post-upgrade` Job)
-4. Set up port-forwards for localhost access
+
+> **Note:** `deploy.sh` is a development convenience wrapper. For production, use `helm upgrade --install` directly — see [Host on Kubernetes](/guide/kubernetes).
+
+After deployment, access the platform via ingress at **http://oao.local** (requires `/etc/hosts` entry and NGINX Ingress Controller). See [Host on Kubernetes](/guide/kubernetes) for setup details.
 
 ### Option B: Use Docker Compose
 
@@ -131,11 +134,24 @@ AGENT_DATABASE_URL="postgresql://oao:oao_dev@localhost:15432/agent_db" \
 
 ## 7. Access the Platform
 
+With ingress enabled (default):
+
+| Service | URL |
+|---|---|
+| **OAO Platform** | http://oao.local |
+| **OAO API** | http://oao.local/api |
+
+Without ingress (port-forward fallback):
+
+```bash
+kubectl -n open-agent-orchestra port-forward svc/oao-ui 3002:3002 &
+kubectl -n open-agent-orchestra port-forward svc/oao-api 4002:4002 &
+```
+
 | Service | URL |
 |---|---|
 | **OAO-UI** | http://localhost:3002 |
 | **OAO-API** | http://localhost:4002 |
-| **API Health** | http://localhost:4002/health |
 
 ## Local Development (Hot Reload)
 

@@ -22,15 +22,18 @@
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
-    "docs:deploy": "npm run docs:build && cd docs/.vitepress/dist && touch .nojekyll && git init && git checkout -b gh-pages && git add -A && git commit -m 'docs: deploy' && git push -f git@github.com:thfai2000/open-agent-orchestra.git gh-pages && cd -"
+    "docs:deploy": "npm run docs:build && cd docs/.vitepress/dist && touch .nojekyll && git init && git checkout -b gh-pages && git add -A && git commit -m 'docs: deploy' && git push -f git@github.com:thfai2000/open-agent-orchestra.git gh-pages && cd -",
+    "screenshots": "node scripts/screenshots.mjs"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.59.1",
     "eslint": "^10.2.0",
     "mermaid": "^11.14.0",
+    "playwright": "^1.59.1",
     "prettier": "^3.8.1",
     "shadcn": "^4.1.2",
     "typescript-eslint": "^8.58.0",
