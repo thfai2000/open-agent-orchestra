@@ -45,12 +45,12 @@ Prompt templates use **Jinja2 templating** (powered by Nunjucks). Available vari
 
 | Variable | Description |
 |---|---|
-| `{{ precedent_output }}` | Output from the previous step (or manual input for step 1) |
-| `{{ properties.KEY }}` | Agent/user/workspace property values |
-| `{{ credentials.KEY }}` | Agent/user/workspace credential values |
-| `{{ env.KEY }}` | Variables marked for env injection |
+| <span v-pre>`{{ precedent_output }}`</span> | Output from the previous step (or manual input for step 1) |
+| <span v-pre>`{{ properties.KEY }}`</span> | Agent/user/workspace property values |
+| <span v-pre>`{{ credentials.KEY }}`</span> | Agent/user/workspace credential values |
+| <span v-pre>`{{ env.KEY }}`</span> | Variables marked for env injection |
 
-**Backward compatibility:** The legacy `<PRECEDENT_OUTPUT>` and `{{ Properties.KEY }}` syntax is automatically converted to the new Jinja2 format.
+**Backward compatibility:** The legacy `<PRECEDENT_OUTPUT>` and <span v-pre>`{{ Properties.KEY }}`</span> syntax is automatically converted to the new Jinja2 format.
 
 You can use any Jinja2 features: conditionals, loops, filters, etc.
 

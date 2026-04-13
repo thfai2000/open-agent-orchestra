@@ -36,10 +36,10 @@ All Jinja2 templates have access to these variables:
 
 | Variable | Description |
 |---|---|
-| `{{ credentials.KEY }}` | Decrypted credential value from 3-tier lookup |
-| `{{ properties.KEY }}` | Property (non-secret) value from 3-tier lookup |
-| `{{ env.KEY }}` | Server environment variable |
-| `{{ precedent_output }}` | Previous workflow step output (in prompts) |
+| <span v-pre>`{{ credentials.KEY }}`</span> | Decrypted credential value from 3-tier lookup |
+| <span v-pre>`{{ properties.KEY }}`</span> | Property (non-secret) value from 3-tier lookup |
+| <span v-pre>`{{ env.KEY }}`</span> | Server environment variable |
+| <span v-pre>`{{ precedent_output }}`</span> | Previous workflow step output (in prompts) |
 
 ## Method 1: MCP JSON Template (Recommended for API Integrations)
 
@@ -126,7 +126,7 @@ simple_http_request(
 
 **What happens:**
 1. The workflow engine renders all string arguments through Jinja2
-2. `{{ credentials.FINANCIAL_API_KEY }}` is resolved and decrypted from the variable store
+2. <span v-pre>`{{ credentials.FINANCIAL_API_KEY }}`</span> is resolved and decrypted from the variable store
 3. The actual HTTP request is made with the real credential in the header
 4. The agent receives the response — it never saw the raw API key
 

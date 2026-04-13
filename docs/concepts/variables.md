@@ -23,9 +23,9 @@ The engine replaces these tokens with decrypted values before sending to Copilot
 ## Credentials
 
 Credentials are injected into the Copilot session's credential map. They are used by:
-- **MCP JSON templates** — via Jinja2 `{{ credentials.KEY }}` to pass credentials as environment variables to MCP servers
-- **`simple_http_request` tool** — via Jinja2 `{{ credentials.KEY }}` in headers, auth, and URLs
-- **Prompt templates** — via Jinja2 `{{ credentials.KEY }}` (use `{{ properties.KEY }}` for non-secret config instead)
+- **MCP JSON templates** — via Jinja2 <span v-pre>`{{ credentials.KEY }}`</span> to pass credentials as environment variables to MCP servers
+- **`simple_http_request` tool** — via Jinja2 <span v-pre>`{{ credentials.KEY }}`</span> in headers, auth, and URLs
+- **Prompt templates** — via Jinja2 <span v-pre>`{{ credentials.KEY }}`</span> (use <span v-pre>`{{ properties.KEY }}`</span> for non-secret config instead)
 - **Git authentication** — agents can reference a credential for GitHub token
 
 Credentials are **never exposed to agents directly**. They are resolved server-side during Jinja2 template rendering. See [AI Security](/concepts/security).

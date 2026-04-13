@@ -22,7 +22,7 @@ This is exactly how a real team works — people with different capabilities col
 When agents interact with external services, they need credentials (API keys, tokens, passwords). Traditional approaches expose credentials as environment variables — with no audit trail, no access control, and no way to know which agent used what and why.
 
 **OAO solves this** with a **zero credential exposure** approach:
-- Credentials are stored encrypted (AES-256-GCM) and resolved via Jinja2 templates (`{{ credentials.KEY }}`)
+- Credentials are stored encrypted (AES-256-GCM) and resolved via Jinja2 templates (<span v-pre>`{{ credentials.KEY }}`</span>)
 - Agents never see raw credentials — they are injected into MCP configs and HTTP headers server-side
 - Scoped credentials (agent → user → workspace) provide fine-grained access control
 

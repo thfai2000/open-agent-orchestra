@@ -94,7 +94,7 @@ The `simple_http_request` tool provides curl-like HTTP request capabilities with
 - Response size limits
 - Response header inclusion
 
-**Jinja2 Templating:** All string arguments support Jinja2 template syntax. Available variables: `{{ properties.KEY }}`, `{{ credentials.KEY }}`, `{{ env.KEY }}`. This allows agents to dynamically construct URLs, headers, and bodies using agent variables.
+**Jinja2 Templating:** All string arguments support Jinja2 template syntax. Available variables: <span v-pre>`{{ properties.KEY }}`</span>, <span v-pre>`{{ credentials.KEY }}`</span>, <span v-pre>`{{ env.KEY }}`</span>. This allows agents to dynamically construct URLs, headers, and bodies using agent variables.
 
 ### MCP Servers
 
@@ -154,8 +154,8 @@ Tools listed in `writeTools` require explicit permission approval before executi
 In addition to DB-configured MCP servers, agents can define an **MCP JSON Template** — a Jinja2 template that renders to a `mcp.json` configuration at execution time. This is useful for dynamically configuring MCP servers with variable substitution.
 
 **Template variables:**
-- `{{ properties.KEY }}` — Agent/user/workspace property values
-- `{{ credentials.KEY }}` — Agent/user/workspace credential values
+- <span v-pre>`{{ properties.KEY }}`</span> — Agent/user/workspace property values
+- <span v-pre>`{{ credentials.KEY }}`</span> — Agent/user/workspace credential values
 
 **Example template:**
 ```json
