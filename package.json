@@ -21,8 +21,8 @@
     "db:seed": "npm run db:seed --workspace=packages/oao-api",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs",
-    "docs:deploy": "npm run docs:build && cd docs/.vitepress/dist && touch .nojekyll && git init && git checkout -b gh-pages && git add -A && git commit -m 'docs: deploy' && git push -f git@github.com:thfai2000/open-agent-orchestra.git gh-pages && cd -",
+    "docs:preview": "vitepress preview docs --outDir ../docs-dist",
+    "docs:deploy": "npm run docs:build && cd docs-dist && touch .nojekyll && git init && git checkout -b gh-pages && git add -A && git commit -m 'docs: deploy' && git push -f git@github.com:thfai2000/open-agent-orchestra.git gh-pages && cd -",
     "screenshots": "node scripts/screenshots.mjs"
   },
   "engines": {

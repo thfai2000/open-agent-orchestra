@@ -2,6 +2,7 @@ node_modules/
 .nuxt/
 .output/
 dist/
+docs-dist/
 .env
 *.log
 .DS_Store

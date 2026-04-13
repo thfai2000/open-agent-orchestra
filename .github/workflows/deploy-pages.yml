@@ -1,0 +1,57 @@
+# ============================================================================
+# deploy-pages.yml — Build & deploy VitePress docs + Helm chart index
+# Triggers on push to main branch
+# Deploys to GitHub Pages (gh-pages branch)
+# ============================================================================
+name: Deploy Docs & Helm Chart
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ── Build VitePress docs ───────────────────────────────────────
+      - name: Build VitePress docs
+        run: npm run docs:build
+
+      # ── Package Helm chart ─────────────────────────────────────────
+      - name: Package Helm chart
+        run: |
+          mkdir -p docs-dist/charts
+          helm package helm/oao-platform -d docs-dist/charts/
+          helm repo index docs-dist/charts/ \
+            --url https://thfai2000.github.io/open-agent-orchestra/charts
+
+      # ── Copy Artifact Hub metadata ─────────────────────────────────
+      - name: Copy Artifact Hub repo file
+        run: cp artifacthub-repo.yml docs-dist/artifacthub-repo.yml
+
+      # ── Deploy to GitHub Pages ─────────────────────────────────────
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs-dist
+          cname: ""

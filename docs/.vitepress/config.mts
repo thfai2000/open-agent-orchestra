@@ -6,6 +6,7 @@ export default withMermaid(
     title: 'Open Agent Orchestra',
     description: 'An autonomous AI workflow engine powered by the GitHub Copilot SDK. Build cost-effective AI teams with segregation of duties, secure credential management, and multi-step workflows.',
     base: '/open-agent-orchestra/',
+    outDir: '../docs-dist',
     ignoreDeadLinks: [
       /localhost/,
     ],
