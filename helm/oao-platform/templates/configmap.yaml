@@ -1,9 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: oao-platform-config
-  namespace: {{ .Values.namespace }}
-data:
-  {{- range $key, $val := .Values.config }}
-  {{ $key }}: {{ $val | quote }}
-  {{- end }}
