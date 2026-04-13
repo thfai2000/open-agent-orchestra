@@ -97,7 +97,7 @@
           <div class="flex items-center justify-between">
             <div>
               <CardTitle>Steps *</CardTitle>
-              <CardDescription>Define the sequential steps for this workflow. Use Jinja2 templating: <code class="bg-muted px-1 rounded text-xs">{{ precedent_output }}</code> for previous step output, <code class="bg-muted px-1 rounded text-xs">{{ properties.KEY }}</code> and <code class="bg-muted px-1 rounded text-xs">{{ credentials.KEY }}</code> for variables.</CardDescription>
+              <CardDescription>Define the sequential steps for this workflow. Use Jinja2 templating: <code class="bg-muted px-1 rounded text-xs">{{ precedent_output }}</code> for previous step output, <code class="bg-muted px-1 rounded text-xs">{{ inputs.KEY }}</code> for webhook/manual-run parameters, <code class="bg-muted px-1 rounded text-xs">{{ properties.KEY }}</code> and <code class="bg-muted px-1 rounded text-xs">{{ credentials.KEY }}</code> for variables.</CardDescription>
             </div>
             <Button variant="outline" size="sm" type="button" @click="addStep">+ Add Step</Button>
           </div>
@@ -159,8 +159,8 @@
         <CardHeader>
           <div class="flex items-center justify-between">
             <div>
-              <CardTitle>Triggers (optional)</CardTitle>
-              <CardDescription>Add automated triggers. All workflows can also be started manually from the detail page.</CardDescription>
+              <CardTitle>Triggers</CardTitle>
+              <CardDescription>A default webhook trigger is pre-filled. The <strong>Manual Run</strong> button on the detail page uses the webhook trigger to collect inputs. Use <code class="bg-muted px-1 rounded text-xs">{{ inputs.PARAM_NAME }}</code> in prompt templates.</CardDescription>
             </div>
             <Button variant="outline" size="sm" type="button" @click="addTrigger">+ Add Trigger</Button>
           </div>
@@ -204,6 +204,20 @@
                   </select>
                 </div>
               </div>
+              <!-- Webhook Parameters -->
+              <div v-if="trigger.triggerType === 'webhook'" class="mt-3 space-y-2">
+                <div class="flex items-center justify-between">
+                  <Label class="text-xs">Webhook Parameters</Label>
+                  <Button variant="ghost" size="sm" class="h-6 text-xs" type="button" @click="trigger.webhookParams.push({ name: '', required: false, description: '' })">+ Add Parameter</Button>
+                </div>
+                <div v-for="(param, pi) in trigger.webhookParams" :key="pi" class="flex gap-2 items-center">
+                  <Input v-model="param.name" placeholder="Name" class="flex-1 text-xs" />
+                  <Input v-model="param.description" placeholder="Description (optional)" class="flex-1 text-xs" />
+                  <label class="flex items-center gap-1 text-xs whitespace-nowrap"><input type="checkbox" v-model="param.required" /> Required</label>
+                  <Button variant="ghost" size="sm" class="h-6 w-6 p-0 text-destructive" type="button" @click="trigger.webhookParams.splice(pi, 1)">×</Button>
+                </div>
+                <p class="text-xs text-muted-foreground">Define inputs for this webhook. Access in prompts: <code class="bg-muted px-1 rounded">{{ inputs.paramName }}</code>. Required parameters are validated on both webhook calls and Manual Run.</p>
+              </div>
               <!-- Event Conditions -->
               <div v-if="trigger.triggerType === 'event'" class="mt-3 space-y-2">
                 <div class="flex items-center justify-between">
@@ -220,7 +234,7 @@
               </div>
             </CardContent>
           </Card>
-          <p v-if="form.triggers.length === 0" class="text-muted-foreground text-sm">No triggers added. You can always start the workflow manually.</p>
+          <p v-if="form.triggers.length === 0" class="text-muted-foreground text-sm">No triggers added. Add a webhook trigger to enable Manual Run from the workflow detail page.</p>
         </CardContent>
       </Card>
 
@@ -234,7 +248,8 @@
 
 <script setup lang="ts">
 interface StepForm { name: string; promptTemplate: string; agentId: string; model: string; reasoningEffort: string; timeoutSeconds: number; }
-interface TriggerForm { triggerType: string; cron: string; webhookPath: string; eventType: string; datetime: string; conditions: Array<{ key: string; value: string }>; }
+interface WebhookParam { name: string; required: boolean; description: string; }
+interface TriggerForm { triggerType: string; cron: string; webhookPath: string; webhookParams: WebhookParam[]; eventType: string; datetime: string; conditions: Array<{ key: string; value: string }>; }
 
 const { authHeaders, user } = useAuth();
 const headers = authHeaders();
@@ -254,7 +269,7 @@ const form = reactive({
   defaultReasoningEffort: '',
   scope: 'user' as 'user' | 'workspace',
   steps: [{ name: '', promptTemplate: '', agentId: '', model: '', reasoningEffort: '', timeoutSeconds: 300 }] as StepForm[],
-  triggers: [] as TriggerForm[],
+  triggers: [{ triggerType: 'webhook', cron: '', webhookPath: `/${crypto.randomUUID().slice(0, 12)}`, webhookParams: [] as WebhookParam[], eventType: '', datetime: '', conditions: [] }] as TriggerForm[],
 });
 
 const { data: agentsData } = await useFetch('/api/agents', { headers });
@@ -279,7 +294,7 @@ function addStep() {
   form.steps.push({ name: '', promptTemplate: '', agentId: '', model: '', reasoningEffort: '', timeoutSeconds: 300 });
 }
 function addTrigger() {
-  form.triggers.push({ triggerType: 'time_schedule', cron: '', webhookPath: '', eventType: '', datetime: '', conditions: [] });
+  form.triggers.push({ triggerType: 'time_schedule', cron: '', webhookPath: '', webhookParams: [] as WebhookParam[], eventType: '', datetime: '', conditions: [] });
 }
 
 async function handleCreate() {
@@ -290,7 +305,16 @@ async function handleCreate() {
       const configuration: Record<string, unknown> = {};
       if (t.triggerType === 'time_schedule') configuration.cron = t.cron;
       if (t.triggerType === 'exact_datetime') configuration.datetime = new Date(t.datetime).toISOString();
-      if (t.triggerType === 'webhook') configuration.path = t.webhookPath;
+      if (t.triggerType === 'webhook') {
+        configuration.path = t.webhookPath;
+        if (t.webhookParams.length > 0) {
+          configuration.parameters = t.webhookParams.filter(p => p.name.trim()).map(p => ({
+            name: p.name.trim(),
+            required: p.required,
+            ...(p.description.trim() ? { description: p.description.trim() } : {}),
+          }));
+        }
+      }
       if (t.triggerType === 'event') {
         configuration.eventName = t.eventType;
         if (t.conditions.length > 0) {

@@ -28,7 +28,7 @@ const mockDb = {
     workflows: { findFirst: vi.fn() },
     workflowSteps: { findMany: vi.fn().mockResolvedValue([]) },
     workflowExecutions: { findFirst: vi.fn() },
-    stepExecutions: { findMany: vi.fn().mockResolvedValue([]) },
+    stepExecutions: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn() },
     agents: { findFirst: vi.fn() },
     agentVariables: { findMany: vi.fn().mockResolvedValue([]) },
     userVariables: { findMany: vi.fn().mockResolvedValue([]) },
@@ -113,6 +113,31 @@ vi.mock('../src/services/plugin-loader.js', () => ({
   getPluginToolDefs: vi.fn().mockReturnValue([]),
 }));
 
+// ─── Mock k8s-provisioner ───────────────────────────────────────────
+const mockCreateAgentPod = vi.fn().mockResolvedValue('oao-agent-step-001');
+const mockWaitForPodCompletion = vi.fn().mockResolvedValue('Succeeded');
+const mockDeleteAgentPod = vi.fn().mockResolvedValue(undefined);
+const mockAcquireAgentSlot = vi.fn().mockResolvedValue(true);
+const mockReleaseAgentSlot = vi.fn().mockResolvedValue(undefined);
+vi.mock('../src/services/k8s-provisioner.js', () => ({
+  createAgentPod: (...args: unknown[]) => mockCreateAgentPod(...args),
+  waitForPodCompletion: (...args: unknown[]) => mockWaitForPodCompletion(...args),
+  deleteAgentPod: (...args: unknown[]) => mockDeleteAgentPod(...args),
+  acquireAgentSlot: (...args: unknown[]) => mockAcquireAgentSlot(...args),
+  releaseAgentSlot: (...args: unknown[]) => mockReleaseAgentSlot(...args),
+}));
+
+// ─── Mock agent-instance-registry ───────────────────────────────────
+vi.mock('../src/services/agent-instance-registry.js', () => ({
+  registerEphemeralInstance: vi.fn().mockResolvedValue('instance-001'),
+  terminateEphemeralInstance: vi.fn().mockResolvedValue(undefined),
+}));
+
+// ─── Mock agent-worker ──────────────────────────────────────────────
+vi.mock('../src/workers/agent-worker.js', () => ({
+  AGENT_STEP_QUEUE: 'agent-step-execution',
+}));
+
 beforeAll(() => {
   process.env.JWT_SECRET = 'test-secret-key-must-be-at-least-32-chars-long!!';
   process.env.ENCRYPTION_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -121,6 +146,11 @@ beforeAll(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   mockRedis.set.mockResolvedValue('OK');
+  mockCreateAgentPod.mockResolvedValue('oao-agent-step-001');
+  mockWaitForPodCompletion.mockResolvedValue('Succeeded');
+  mockDeleteAgentPod.mockResolvedValue(undefined);
+  mockAcquireAgentSlot.mockResolvedValue(true);
+  mockReleaseAgentSlot.mockResolvedValue(undefined);
 });
 
 describe('enqueueWorkflowExecution', () => {
@@ -290,11 +320,7 @@ describe('executeWorkflow', () => {
     mockDb.query.stepExecutions.findMany.mockResolvedValueOnce([
       { id: 'se-1', stepOrder: 1, status: 'pending' },
     ]);
-    // Workspace variables
-    mockDb.query.workspaceVariables.findMany.mockResolvedValueOnce([]);
-    // User variables
-    mockDb.query.userVariables.findMany.mockResolvedValueOnce([]);
-    // Agent lookup
+    // Agent lookup for step dispatch
     mockDb.query.agents.findFirst.mockResolvedValueOnce({
       id: 'agent-001',
       name: 'Test Agent',
@@ -306,17 +332,117 @@ describe('executeWorkflow', () => {
       githubTokenCredentialId: null,
       builtinToolsEnabled: [],
     });
-    // Agent variables
-    mockDb.query.agentVariables.findMany.mockResolvedValueOnce([]);
-    // MCP configs
-    mockDb.query.mcpServerConfigs.findMany.mockResolvedValueOnce([]);
-
-    // Session lock succeeds
-    mockRedis.set.mockResolvedValueOnce('OK');
+    // Static path: after enqueue, poll returns completed
+    mockDb.query.stepExecutions.findFirst.mockResolvedValueOnce({
+      id: 'se-1',
+      status: 'completed',
+      output: 'AI response output',
+    });
 
     await executeWorkflow('exec-001');
 
+    // Verify step was enqueued to BullMQ queue for static agent worker
+    expect(mockQueueAdd).toHaveBeenCalledWith('step-execution', {
+      stepExecutionId: 'se-1',
+      executionId: 'exec-001',
+    });
+
     // Verify execution was marked as completed
+    expect(mockDb.update).toHaveBeenCalled();
+  });
+
+  it('marks execution as failed when step worker reports failure', async () => {
+    const { executeWorkflow } = await import('../src/services/workflow-engine.js');
+
+    mockDb.query.workflowExecutions.findFirst.mockResolvedValueOnce({
+      id: 'exec-002',
+      workflowId: 'wf-001',
+      triggerMetadata: null,
+    });
+    mockDb.query.workflows.findFirst.mockResolvedValueOnce({
+      id: 'wf-001',
+      name: 'Test WF',
+      userId: 'user-001',
+      defaultAgentId: 'agent-001',
+      workspaceId: 'ws-001',
+      defaultModel: null,
+      defaultReasoningEffort: null,
+    });
+    mockDb.query.workflowSteps.findMany.mockResolvedValueOnce([
+      { id: 'ws-1', name: 'Step 1', promptTemplate: 'Do X', stepOrder: 1, agentId: null, model: null, reasoningEffort: null, timeoutSeconds: 120 },
+    ]);
+    mockDb.query.stepExecutions.findMany.mockResolvedValueOnce([
+      { id: 'se-1', stepOrder: 1, status: 'pending' },
+    ]);
+    mockDb.query.agents.findFirst.mockResolvedValueOnce({
+      id: 'agent-001',
+      name: 'Test Agent',
+      userId: 'user-001',
+      sourceType: 'database',
+    });
+    // Static path: poll returns failed
+    mockDb.query.stepExecutions.findFirst = vi.fn().mockResolvedValueOnce({
+      id: 'se-1',
+      status: 'failed',
+      error: 'Agent worker reported failure',
+    });
+
+    await executeWorkflow('exec-002');
+
+    // Step was enqueued to BullMQ
+    expect(mockQueueAdd).toHaveBeenCalled();
+    // Execution should be marked as failed
+    expect(mockDb.update).toHaveBeenCalled();
+  });
+
+  it('handles static dispatch timeout when worker never completes', async () => {
+    const { executeWorkflow } = await import('../src/services/workflow-engine.js');
+
+    mockDb.query.workflowExecutions.findFirst.mockResolvedValueOnce({
+      id: 'exec-003',
+      workflowId: 'wf-001',
+      triggerMetadata: null,
+    });
+    mockDb.query.workflows.findFirst.mockResolvedValueOnce({
+      id: 'wf-001',
+      name: 'Test WF',
+      userId: 'user-001',
+      defaultAgentId: 'agent-001',
+      workspaceId: 'ws-001',
+      defaultModel: null,
+      defaultReasoningEffort: null,
+    });
+    mockDb.query.workflowSteps.findMany.mockResolvedValueOnce([
+      { id: 'ws-1', name: 'Step 1', promptTemplate: 'Do X', stepOrder: 1, agentId: null, model: null, reasoningEffort: null, timeoutSeconds: 60 },
+    ]);
+    mockDb.query.stepExecutions.findMany.mockResolvedValueOnce([
+      { id: 'se-1', stepOrder: 1, status: 'pending' },
+    ]);
+    mockDb.query.agents.findFirst.mockResolvedValueOnce({
+      id: 'agent-001',
+      name: 'Test Agent',
+      userId: 'user-001',
+      sourceType: 'database',
+    });
+    // Static path: poll always returns pending (never completes)
+    mockDb.query.stepExecutions.findFirst = vi.fn().mockResolvedValue({
+      id: 'se-1',
+      status: 'pending',
+    });
+
+    // Use fake timers to skip the 3s poll intervals and 60s timeout
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    const promise = executeWorkflow('exec-003');
+    // Advance past the 60s step timeout (timeoutSeconds: 60)
+    await vi.advanceTimersByTimeAsync(65_000);
+    await promise;
+
+    vi.useRealTimers();
+
+    // Step was enqueued but timed out waiting for completion
+    expect(mockQueueAdd).toHaveBeenCalled();
+    // Execution should be marked as failed due to timeout
     expect(mockDb.update).toHaveBeenCalled();
   });
 });

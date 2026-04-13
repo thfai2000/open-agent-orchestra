@@ -1,0 +1,36 @@
+{{- if .Values.agentWorker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oao-agent-worker
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: oao-agent-worker
+spec:
+  replicas: {{ .Values.agentWorker.replicas }}
+  selector:
+    matchLabels:
+      app: oao-agent-worker
+  template:
+    metadata:
+      labels:
+        app: oao-agent-worker
+    spec:
+      containers:
+        - name: agent-worker
+          image: {{ .Values.coreImage }}
+          imagePullPolicy: IfNotPresent
+          command: ["node", "--import", "tsx", "packages/oao-api/src/workers/agent-worker.ts"]
+          envFrom:
+            - configMapRef:
+                name: oao-platform-config
+            - secretRef:
+                name: oao-platform-secrets
+          resources:
+            requests:
+              memory: {{ .Values.agentWorker.resources.requests.memory }}
+              cpu: {{ .Values.agentWorker.resources.requests.cpu }}
+            limits:
+              memory: {{ .Values.agentWorker.resources.limits.memory }}
+              cpu: {{ .Values.agentWorker.resources.limits.cpu }}
+{{- end }}

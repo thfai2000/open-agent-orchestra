@@ -21,7 +21,7 @@ export default withMermaid(
         { text: 'Guide', link: '/guide/what-is-oao' },
         { text: 'Concepts', link: '/concepts/agents' },
         { text: 'Architecture', link: '/architecture/overview' },
-        { text: 'API Reference', link: '/api/routes' },
+        { text: 'Reference', link: '/reference/template-variables' },
       ],
       sidebar: {
         '/guide/': [
@@ -43,14 +43,30 @@ export default withMermaid(
         ],
         '/concepts/': [
           {
-            text: 'Core Concepts',
+            text: 'Agents',
             items: [
-              { text: 'Agents & Tools', link: '/concepts/agents' },
-              { text: 'Workflows & Triggers', link: '/concepts/workflows' },
-              { text: 'Variables & Credentials', link: '/concepts/variables' },
+              { text: 'Agents', link: '/concepts/agents' },
+              { text: 'Variables', link: '/concepts/variables' },
+            ],
+          },
+          {
+            text: 'Automation',
+            items: [
+              { text: 'Workflows', link: '/concepts/workflows' },
+              { text: 'Workflow Engine & Controller', link: '/concepts/workflow-engine' },
+            ],
+          },
+          {
+            text: 'Security & Access',
+            items: [
               { text: 'AI Security', link: '/concepts/security' },
-              { text: 'Workspaces', link: '/concepts/workspaces' },
               { text: 'RBAC', link: '/concepts/rbac' },
+            ],
+          },
+          {
+            text: 'Platform',
+            items: [
+              { text: 'Workspaces', link: '/concepts/workspaces' },
               { text: 'Plugins', link: '/concepts/plugins' },
               { text: 'Admin', link: '/concepts/admin' },
             ],
@@ -65,11 +81,12 @@ export default withMermaid(
             ],
           },
         ],
-        '/api/': [
+        '/reference/': [
           {
-            text: 'API Reference',
+            text: 'Reference',
             items: [
-              { text: 'Endpoints', link: '/api/routes' },
+              { text: 'Template Variables', link: '/reference/template-variables' },
+              { text: 'API Endpoints', link: '/reference/api-endpoints' },
             ],
           },
         ],

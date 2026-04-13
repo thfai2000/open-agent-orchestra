@@ -6,9 +6,17 @@ A **workflow** is an ordered sequence of steps, each executed as a separate Copi
 
 ```mermaid
 graph LR
-    S1[Step 1: Gather Data] -->|output| S2[Step 2: Analyze]
-    S2 -->|output| S3[Step 3: Generate Report]
+    T["Trigger<br/>(cron / webhook / event)"] --> S1[Step 1]
+    S1 -->|precedent_output| S2[Step 2]
+    S2 -->|precedent_output| S3["Step ..."]
+    S3 -->|precedent_output| SN[Step N]
+    SN --> R["Execution<br/>Result"]
+
+    style T fill:#FF9800,color:#fff
+    style R fill:#4CAF50,color:#fff
 ```
+
+A workflow is a linear pipeline of steps. Each step runs as an independent Copilot session. The output of step _N_ becomes <span v-pre>`{{ precedent_output }}`</span> for step _N+1_.
 
 Each workflow has:
 - **Name & description**
@@ -45,10 +53,13 @@ Prompt templates use **Jinja2 templating** (powered by Nunjucks). Available vari
 
 | Variable | Description |
 |---|---|
-| <span v-pre>`{{ precedent_output }}`</span> | Output from the previous step (or manual input for step 1) |
+| <span v-pre>`{{ precedent_output }}`</span> | Output from the previous step |
 | <span v-pre>`{{ properties.KEY }}`</span> | Agent/user/workspace property values |
 | <span v-pre>`{{ credentials.KEY }}`</span> | Agent/user/workspace credential values |
 | <span v-pre>`{{ env.KEY }}`</span> | Variables marked for env injection |
+| <span v-pre>`{{ inputs.KEY }}`</span> | Webhook parameter / manual run input values |
+
+For the full template variable reference, see [Template Variables](/reference/template-variables).
 
 **Backward compatibility:** The legacy `<PRECEDENT_OUTPUT>` and <span v-pre>`{{ Properties.KEY }}`</span> syntax is automatically converted to the new Jinja2 format.
 
@@ -95,7 +106,7 @@ Write in a professional but approachable tone.
 
 ## Triggers
 
-Triggers define **when** a workflow executes. Every workflow supports manual execution; triggers add automation.
+Triggers define **when** a workflow executes. Workflows can also be run manually from the UI when a webhook trigger is configured.
 
 ### Trigger Types
 
@@ -103,9 +114,35 @@ Triggers define **when** a workflow executes. Every workflow supports manual exe
 |------|-------------|---------------|
 | **Cron Schedule** | Recurring execution | Cron expression (e.g., `0 9 * * 1-5`) |
 | **Exact Datetime** | One-shot at a specific time | ISO 8601 datetime (auto-deactivates after firing) |
-| **Webhook** | External HTTP call | URL endpoint + HMAC-SHA256 secret |
+| **Webhook** | External HTTP call with parameter validation | URL path + HMAC-SHA256 secret + parameter definitions |
 | **Event** | React to system events | Event name + optional conditions |
-| **Manual** | UI button click | Optional user input message |
+
+### Manual Run
+
+The **Manual Run** button in the UI allows authenticated users to trigger a workflow directly. It is available when the workflow has at least one active **webhook trigger**.
+
+When clicked, the UI shows input fields based on the webhook trigger's **parameter definitions**. Required parameters must be filled in before the run starts. The inputs are available in prompt templates as <span v-pre>`{{ inputs.PARAM_NAME }}`</span>.
+
+Manual Run calls `POST /api/workflows/:id/run` directly — it does not go through the webhook endpoint or event system.
+
+### Webhook Parameters
+
+Webhook triggers support **user-defined parameters**:
+
+| Field | Description |
+|---|---|
+| **Name** | Parameter key (used in templates as <span v-pre>`{{ inputs.name }}`</span>) |
+| **Required** | If `true`, the parameter must be provided (validated on webhook and manual run) |
+| **Description** | Optional help text shown in the Manual Run dialog |
+
+When a webhook fires (`POST /api/webhooks/:path`), the request body is validated against the parameter definitions. Only defined parameters are passed through as `inputs`.
+
+### Webhook Security
+
+- **HMAC-SHA256** signature verification
+- **Personal Access Token** (PAT) with `webhook:trigger` scope
+- **5-minute replay protection**
+- **Event ID deduplication**
 
 ### Cron Expression Examples
 
@@ -125,7 +162,7 @@ graph LR
     ET --> WF[Workflow Execution]
 ```
 
-**Available system events (21):**
+**Available system events (22):**
 
 | Category | Events |
 |---|---|
@@ -134,148 +171,15 @@ graph LR
 | Execution | `execution.started`, `execution.completed`, `execution.failed`, `execution.cancelled` |
 | Step | `step.completed`, `step.failed` |
 | Trigger | `trigger.fired` |
+| Webhook | `webhook.received` |
 | User | `user.login`, `user.registered` |
 | Variable | `variable.created`, `variable.updated`, `variable.deleted` |
 | Credential | `credential.access_requested`, `credential.access_approved`, `credential.access_denied` |
 
 **Event data conditions** — filter by matching key-value pairs (e.g., `scope = workspace`, `agentName = "MyAgent"`).
 
-### Webhook Security
+## Engine & Execution
 
-- **HMAC-SHA256** signature verification
-- **5-minute replay protection**
-- **Event ID deduplication**
+For details on the workflow engine, controller, execution pipeline, retry mechanism, and concurrency, see [Workflow Engine & Controller](/concepts/workflow-engine).
 
-## Workflow Engine
-
-The workflow engine orchestrates the execution of multi-step workflows, managing variable resolution, agent loading, Copilot session creation, and error recovery.
-
-### Execution Pipeline
-
-```mermaid
-graph TB
-    START[Trigger fires] --> SNAP[Snapshot workflow<br/>version + config]
-    SNAP --> CREATE[Create execution record<br/>+ pre-create step records]
-    CREATE --> QUEUE[Enqueue BullMQ job]
-    QUEUE --> WORKER[Worker picks up job]
-    WORKER --> VARS[Load variables<br/>workspace → user → agent]
-    VARS --> MARK[Mark execution as running]
-    MARK --> LOOP{Next step?}
-    LOOP -->|yes| RESOLVE[Resolve prompt<br/>variables + precedent output]
-    RESOLVE --> AGENT[Load agent + clone repo]
-    AGENT --> MERGE[Merge credentials<br/>agent overrides user overrides workspace]
-    MERGE --> SESSION[Execute Copilot Session]
-    SESSION -->|success| STORE[Store step output]
-    STORE --> LOOP
-    SESSION -->|error| FAIL[Mark step + execution failed]
-    LOOP -->|no more| DONE[Mark execution completed]
-```
-
-### Variable Resolution
-
-Variables are resolved in three tiers with override semantics:
-
-```mermaid
-graph LR
-    W[Workspace Variables] -->|base| M[Merged Map]
-    U[User Variables] -->|override| M
-    A[Agent Variables] -->|override| M
-    M --> C[Credentials Map]
-    M --> P[Properties Map]
-    M --> E[Env Variables Map]
-```
-
-### Concurrency Control
-
-```mermaid
-sequenceDiagram
-    participant W1 as Worker 1
-    participant Redis as Redis Lock
-    participant W2 as Worker 2
-
-    W1->>Redis: SETNX session-lock:{agentId}
-    Redis-->>W1: OK (acquired)
-    W2->>Redis: SETNX session-lock:{agentId}
-    Redis-->>W2: FAIL (locked)
-    Note over W2: Agent already has active session
-    W1->>Redis: DEL session-lock:{agentId}
-    Note over W1: Lock released after completion
-```
-
-Each agent can only have one active Copilot session at a time.
-
-## Workflow Execution
-
-A single run of a workflow:
-
-- **Status flow** — `pending` → `running` → `completed` | `failed` | `cancelled`
-- **Workflow Snapshot** — Complete snapshot of workflow + steps at trigger time (immutable)
-- **Step Executions** — Ordered list of step execution records with output and reasoning trace
-
-### Retry Mechanism
-
-Failed executions can be retried **from the last failed step**:
-
-```mermaid
-graph LR
-    E[Failed Execution] -->|retry from step 3| S3[Re-execute Step 3]
-    S3 -->|success| S4[Execute Step 4]
-    S4 -->|success| S5[Execute Step 5]
-    S5 --> D[Execution Complete]
-
-    style S3 fill:#FF9800,color:#fff
-```
-
-When retrying:
-- Steps before the failure are **preserved** (outputs remain)
-- Precedent output for the retry step is recovered from the last completed step
-- Execution continues normally from the retry point
-
-### Error Handling
-
-- If a step fails, the entire workflow execution is marked `failed`
-- Remaining steps are marked `skipped`
-- Error details are logged in `step_executions.error` and `workflow_executions.error`
-- BullMQ handles job-level retries for transient failures (network, pod crash)
-
-### Scheduler Architecture
-
-```mermaid
-graph TB
-    subgraph "Scheduler Service"
-        LP[Acquire Redis Leader Lock<br/>SETNX with 60s TTL]
-        CT[Poll Cron Triggers]
-        DT[Poll Datetime Triggers]
-        ET[Poll Event Triggers]
-    end
-
-    subgraph "Execution"
-        Q[BullMQ Queue]
-        W[Workflow Worker<br/>concurrency: 1]
-    end
-
-    LP --> CT
-    LP --> DT
-    LP --> ET
-    CT -->|due| Q
-    DT -->|due| Q
-    ET -->|matched| Q
-    Q --> W
-```
-
-- **30-second poll interval** for all trigger types
-- **Redis leader lock** prevents duplicate execution in multi-replica setups
-- **Cron triggers** — check `nextRunAt <= NOW()`
-- **Datetime triggers** — fire once, then auto-deactivate
-- **Event triggers** — match unprocessed system events against conditions
-
-### Model Selection
-
-Models are managed by workspace admins in **Admin → Models**. Default models:
-
-| Model | Provider |
-|---|---|
-| `claude-sonnet-4-6` | Anthropic |
-| `claude-opus-4-6` | Anthropic |
-| `gpt-5.4` | OpenAI |
-| `gpt-5-mini` | OpenAI |
+For what happens inside each step — Jinja2 templating, variable resolution, Git checkout, Copilot session setup, tool loading, and cleanup — see [Agent Steps](/concepts/agent-steps).

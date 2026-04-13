@@ -105,7 +105,7 @@ vi.mock('../src/services/workflow-engine.js', () => ({
 
 // Mock system-events
 vi.mock('../src/services/system-events.js', () => ({
-  emitEvent: vi.fn(),
+  emitEvent: vi.fn().mockResolvedValue('event-id-001'),
   EVENT_NAMES: {
     AGENT_CREATED: 'agent.created',
     AGENT_UPDATED: 'agent.updated',
@@ -116,6 +116,7 @@ vi.mock('../src/services/system-events.js', () => ({
     WORKFLOW_DELETED: 'workflow.deleted',
     EXECUTION_COMPLETED: 'execution.completed',
     EXECUTION_FAILED: 'execution.failed',
+    WEBHOOK_RECEIVED: 'webhook.received',
   },
 }));
 
@@ -411,7 +412,7 @@ describe('Workflow routes — authenticated', () => {
     expect(res.status).toBe(404);
   });
 
-  it('POST /api/workflows/:id/trigger enqueues manual execution', async () => {
+  it('POST /api/workflows/:id/run enqueues execution with inputs', async () => {
     const token = await getToken();
     // findFirst returns the workflow
     mockFindFirst.mockResolvedValueOnce({
@@ -422,14 +423,22 @@ describe('Workflow routes — authenticated', () => {
       userId: TEST_UUID,
       scope: 'user',
     });
+    // findFirst returns webhook trigger (second call)
+    mockFindFirst.mockResolvedValueOnce({
+      id: 'trigger-001',
+      triggerType: 'webhook',
+      isActive: true,
+      configuration: { path: '/test-hook', parameters: [{ name: 'symbol', required: true }] },
+    });
 
-    const res = await app.request(`/api/workflows/${TEST_WORKFLOW_ID}/trigger`, {
+    const res = await app.request(`/api/workflows/${TEST_WORKFLOW_ID}/run`, {
       method: 'POST',
       headers: authHeaders(token),
-      body: JSON.stringify({ userInput: 'Run analysis now' }),
+      body: JSON.stringify({ inputs: { symbol: 'AAPL' } }),
     });
-    // Should succeed or return the execution
-    expect([200, 201]).toContain(res.status);
+    expect(res.status).toBe(202);
+    const body = await res.json();
+    expect(body.status).toBe('accepted');
   });
 });
 

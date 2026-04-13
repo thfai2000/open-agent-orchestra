@@ -102,7 +102,7 @@ vi.mock('../src/services/workflow-engine.js', () => ({
 }));
 
 vi.mock('../src/services/system-events.js', () => ({
-  emitEvent: vi.fn(),
+  emitEvent: vi.fn().mockResolvedValue('event-id-001'),
   EVENT_NAMES: {
     AGENT_CREATED: 'agent.created',
     AGENT_UPDATED: 'agent.updated',
@@ -113,6 +113,7 @@ vi.mock('../src/services/system-events.js', () => ({
     WORKFLOW_DELETED: 'workflow.deleted',
     EXECUTION_COMPLETED: 'execution.completed',
     EXECUTION_FAILED: 'execution.failed',
+    WEBHOOK_RECEIVED: 'webhook.received',
   },
 }));
 
@@ -349,12 +350,18 @@ describe('Webhook HMAC verification', () => {
         isActive: true,
         requestCount: 0,
         triggerId: TEST_TRIGGER_ID,
+        agentId: TEST_AGENT_ID,
       })
       // 2nd findFirst: trigger lookup
       .mockResolvedValueOnce({
         id: TEST_TRIGGER_ID,
         workflowId: TEST_WORKFLOW_ID,
         isActive: true,
+      })
+      // 3rd findFirst: agent lookup (for workspaceId)
+      .mockResolvedValueOnce({
+        id: TEST_AGENT_ID,
+        workspaceId: TEST_WORKSPACE_ID,
       });
 
     const res = await app.request(`/api/webhooks/${TEST_WEBHOOK_REG_ID}`, {
@@ -369,13 +376,17 @@ describe('Webhook HMAC verification', () => {
     });
     expect(res.status).toBe(202);
 
-    const { enqueueWorkflowExecution } = await import('../src/services/workflow-engine.js');
-    expect(enqueueWorkflowExecution).toHaveBeenCalledWith(
-      TEST_WORKFLOW_ID,
-      TEST_TRIGGER_ID,
+    const { emitEvent } = await import('../src/services/system-events.js');
+    expect(emitEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: 'webhook',
-        eventId: 'evt-trigger-001',
+        eventScope: 'workspace',
+        scopeId: TEST_WORKSPACE_ID,
+        eventName: 'webhook.received',
+        eventData: expect.objectContaining({
+          triggerId: TEST_TRIGGER_ID,
+          workflowId: TEST_WORKFLOW_ID,
+          eventId: 'evt-trigger-001',
+        }),
       }),
     );
   });

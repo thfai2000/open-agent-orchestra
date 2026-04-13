@@ -1,0 +1,105 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Open Agent Orchestra (OAO) — Docker Compose
+#
+# Static Agent mode — pre-provisioned, long-running worker containers pick up
+# step execution jobs from a BullMQ queue. All backend services use the single
+# oao-core image with a command override to select the role.
+#
+# Usage:
+#   docker compose up -d
+#   docker compose up -d --scale oao-agent=3   # scale agent workers horizontally
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+  # ─── PostgreSQL 16 + pgvector ───────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: oao
+      POSTGRES_PASSWORD: oao_dev
+      POSTGRES_DB: agent_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oao"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ─── Redis 7 ────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ─── OAO-API (REST API) ────────────────────────────────────────────────
+  oao-api:
+    image: oao-core:latest
+    ports:
+      - "4002:4002"
+    environment: &common-env
+      NODE_ENV: production
+      AGENT_API_PORT: "4002"
+      AGENT_DATABASE_URL: "postgresql://oao:oao_dev@postgres:5432/agent_db"
+      REDIS_URL: "redis://redis:6379"
+      JWT_SECRET: "change-me-in-production-at-least-32-characters-long"
+      ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      GITHUB_TOKEN: "${GITHUB_TOKEN}"
+      MAX_CONCURRENT_AGENTS: "10"
+      DEFAULT_AGENT_QUOTA: "50"
+      DEFAULT_AGENT_MODEL: "gpt-4.1"
+      EMBEDDING_PROVIDER: "local"
+      LOG_LEVEL: "info"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ─── OAO-UI (Dashboard) ────────────────────────────────────────────────
+  oao-ui:
+    image: oao-ui:latest
+    ports:
+      - "3002:3002"
+    environment:
+      NUXT_PUBLIC_API_BASE: "http://oao-api:4002"
+    depends_on:
+      - oao-api
+
+  # ─── OAO-Controller (Trigger Poller + Workflow Worker) ──────────────────
+  oao-controller:
+    image: oao-core:latest
+    command: ["node", "--import", "tsx", "packages/oao-api/src/workers/controller.ts"]
+    environment:
+      <<: *common-env
+      CONTROLLER_POLL_INTERVAL: "30000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ─── OAO-Agent (Static Agent Worker) ───────────────────────────────────
+  # Scale horizontally: docker compose up -d --scale oao-agent=3
+  oao-agent:
+    image: oao-core:latest
+    command: ["node", "--import", "tsx", "packages/oao-api/src/workers/agent-worker.ts"]
+    environment:
+      <<: *common-env
+      AGENT_WORKER_NAME: "agent-worker"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:

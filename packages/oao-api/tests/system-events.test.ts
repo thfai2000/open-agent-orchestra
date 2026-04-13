@@ -42,6 +42,7 @@ describe('EVENT_NAMES', () => {
     expect(EVENT_NAMES.STEP_COMPLETED).toBe('step.completed');
     expect(EVENT_NAMES.STEP_FAILED).toBe('step.failed');
     expect(EVENT_NAMES.TRIGGER_FIRED).toBe('trigger.fired');
+    expect(EVENT_NAMES.WEBHOOK_RECEIVED).toBe('webhook.received');
     expect(EVENT_NAMES.USER_LOGIN).toBe('user.login');
     expect(EVENT_NAMES.USER_REGISTERED).toBe('user.registered');
     expect(EVENT_NAMES.VARIABLE_CREATED).toBe('variable.created');

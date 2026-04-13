@@ -39,8 +39,8 @@ TAG="${BUILD_TAG:-latest}"
 REGISTRY="${DOCKER_REGISTRY:-docker.io}"
 HELM_REGISTRY="${HELM_REGISTRY:-oci://registry-1.docker.io/${DOCKER_USERNAME}}"
 
+CORE_IMAGE="${DOCKER_USERNAME}/oao-core"
 UI_IMAGE="${DOCKER_USERNAME}/oao-ui"
-API_IMAGE="${DOCKER_USERNAME}/oao-api"
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Open Agent Orchestra — Publish to Docker Hub"
@@ -49,8 +49,8 @@ echo ""
 echo "  Docker Username : ${DOCKER_USERNAME}"
 echo "  Registry        : ${REGISTRY}"
 echo "  Tag             : ${TAG}"
+echo "  Core Image      : ${CORE_IMAGE}:${TAG}"
 echo "  UI Image        : ${UI_IMAGE}:${TAG}"
-echo "  API Image       : ${API_IMAGE}:${TAG}"
 echo "  Helm Registry   : ${HELM_REGISTRY}"
 echo ""
 
@@ -78,16 +78,15 @@ if [ "${SKIP_BUILD:-}" != "true" ]; then
   echo "▸ [1/4] Building Docker images..."
   echo ""
 
+  echo "  Building oao-core:${TAG}..."
+  docker build -t "oao-core:${TAG}" -f Dockerfile.core .
+
   echo "  Building oao-ui:${TAG}..."
   docker build -t "oao-ui:${TAG}" -f Dockerfile.ui .
-
-  echo "  Building oao-api:${TAG}..."
-  docker build -t "oao-api:${TAG}" -f Dockerfile.api .
 else
   echo "▸ [1/4] Skipping build (SKIP_BUILD=true)"
-  # Tag existing local images for push
+  docker tag "oao-core:${TAG}" "oao-core:${TAG}" 2>/dev/null || true
   docker tag "oao-ui:${TAG}" "oao-ui:${TAG}" 2>/dev/null || true
-  docker tag "oao-api:${TAG}" "oao-api:${TAG}" 2>/dev/null || true
 fi
 
 # ─── Step 2: Tag for registry ────────────────────────────────────────────────
@@ -95,20 +94,20 @@ fi
 echo ""
 echo "▸ [2/4] Tagging images for registry..."
 
+docker tag "oao-core:${TAG}" "${CORE_IMAGE}:${TAG}"
+docker tag "oao-core:${TAG}" "${CORE_IMAGE}:latest"
 docker tag "oao-ui:${TAG}" "${UI_IMAGE}:${TAG}"
 docker tag "oao-ui:${TAG}" "${UI_IMAGE}:latest"
-docker tag "oao-api:${TAG}" "${API_IMAGE}:${TAG}"
-docker tag "oao-api:${TAG}" "${API_IMAGE}:latest"
 
 # ─── Step 3: Push Docker images ─────────────────────────────────────────────
 
 echo ""
 echo "▸ [3/4] Pushing Docker images..."
 
+docker push "${CORE_IMAGE}:${TAG}"
+docker push "${CORE_IMAGE}:latest"
 docker push "${UI_IMAGE}:${TAG}"
 docker push "${UI_IMAGE}:latest"
-docker push "${API_IMAGE}:${TAG}"
-docker push "${API_IMAGE}:latest"
 
 echo "  ✓ Docker images pushed"
 
@@ -158,12 +157,14 @@ echo "════════════════════════�
 echo "  ✓ Publish complete"
 echo ""
 echo "  Docker Images:"
-echo "    ${UI_IMAGE}:${TAG}     (OAO-UI — port 3002)"
-echo "    ${API_IMAGE}:${TAG}    (OAO-API — port 4002)"
+echo "    ${UI_IMAGE}:${TAG}          (OAO-UI — port 3002)"
+echo "    ${API_IMAGE}:${TAG}         (OAO-API — port 4002)"
+echo "    ${CONTROLLER_IMAGE}:${TAG}  (OAO-Controller — trigger poller + K8s provisioner)"
 echo ""
 echo "  Pull commands:"
 echo "    docker pull ${UI_IMAGE}:${TAG}"
 echo "    docker pull ${API_IMAGE}:${TAG}"
+echo "    docker pull ${CONTROLLER_IMAGE}:${TAG}"
 if [ "${SKIP_HELM:-}" != "true" ]; then
   echo ""
   echo "  Helm Chart:"

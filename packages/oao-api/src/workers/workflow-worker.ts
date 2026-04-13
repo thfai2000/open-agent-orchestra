@@ -5,41 +5,57 @@ import { getRedisConnectionOpts } from '../services/redis.js';
 
 const logger = createLogger('workflow-worker');
 
-const worker = new Worker(
-  'workflow-execution',
-  async (job) => {
-    const { executionId, workflowId, agentId } = job.data;
-    logger.info(
-      { executionId, workflowId, agentId, jobId: job.id },
-      'Processing workflow execution',
-    );
+let worker: Worker | null = null;
 
-    await executeWorkflow(executionId);
-  },
-  {
-    connection: getRedisConnectionOpts(),
-    concurrency: 1,
-    lockDuration: 600_000, // 10 minutes
-  },
-);
+/**
+ * Start the BullMQ workflow worker.
+ * Called from controller.ts so both the trigger poller and worker
+ * run in the same Kubernetes pod.
+ */
+export function startWorker(): Worker {
+  if (worker) return worker;
 
-worker.on('completed', (job) => {
-  logger.info({ jobId: job.id }, 'Job completed');
-});
+  worker = new Worker(
+    'workflow-execution',
+    async (job) => {
+      const { executionId, workflowId, agentId } = job.data;
+      logger.info(
+        { executionId, workflowId, agentId, jobId: job.id },
+        'Processing workflow execution',
+      );
 
-worker.on('failed', (job, err) => {
-  logger.error({ jobId: job?.id, error: err.message }, 'Job failed');
-});
+      await executeWorkflow(executionId);
+    },
+    {
+      connection: getRedisConnectionOpts(),
+      concurrency: 1,
+      lockDuration: 600_000, // 10 minutes
+    },
+  );
 
-worker.on('error', (err) => {
-  logger.error({ error: err.message }, 'Worker error');
-});
+  worker.on('completed', (job) => {
+    logger.info({ jobId: job.id }, 'Job completed');
+  });
 
-logger.info('Workflow worker started, waiting for jobs...');
+  worker.on('failed', (job, err) => {
+    logger.error({ jobId: job?.id, error: err.message }, 'Job failed');
+  });
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  logger.info('SIGTERM received, shutting down worker...');
-  await worker.close();
-  process.exit(0);
-});
+  worker.on('error', (err) => {
+    logger.error({ error: err.message }, 'Worker error');
+  });
+
+  logger.info('Workflow worker started, waiting for jobs...');
+
+  return worker;
+}
+
+/**
+ * Gracefully close the worker. Called during shutdown.
+ */
+export async function stopWorker(): Promise<void> {
+  if (worker) {
+    await worker.close();
+    worker = null;
+  }
+}

@@ -2,9 +2,9 @@ import { Hono } from 'hono';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../database/index.js';
-import { webhookRegistrations, triggers } from '../database/schema.js';
+import { webhookRegistrations, triggers, agents } from '../database/schema.js';
 import { decrypt, createLogger } from '@oao/shared';
-import { enqueueWorkflowExecution } from '../services/workflow-engine.js';
+import { emitEvent, EVENT_NAMES } from '../services/system-events.js';
 import { validatePat } from './tokens.js';
 
 const logger = createLogger('agent-webhooks');
@@ -94,23 +94,57 @@ webhooks.post('/:registrationId', async (c) => {
     })
     .where(eq(webhookRegistrations.id, registrationId));
 
-  // Find associated trigger and enqueue workflow
+  // Find associated trigger and emit webhook event for async processing
   if (registration.triggerId) {
     const trigger = await db.query.triggers.findFirst({
       where: eq(triggers.id, registration.triggerId),
     });
 
     if (trigger && trigger.isActive) {
-      let payload = {};
+      let payload: Record<string, unknown> = {};
       try { payload = body ? JSON.parse(body) : {}; } catch { /* non-JSON body */ }
-      await enqueueWorkflowExecution(trigger.workflowId, trigger.id, {
-        type: 'webhook',
-        authMethod: authedViaPat ? 'pat' : 'hmac',
-        eventId,
-        payload,
-        receivedAt: new Date().toISOString(),
-      });
-      logger.info({ registrationId, triggerId: trigger.id, authMethod: authedViaPat ? 'pat' : 'hmac' }, 'Webhook triggered workflow');
+
+      // Validate webhook parameters if defined
+      const config = (trigger.configuration || {}) as Record<string, unknown>;
+      const paramDefs = Array.isArray(config.parameters) ? config.parameters as Array<{ name: string; required?: boolean }> : [];
+      if (paramDefs.length > 0) {
+        const missing = paramDefs.filter(p => p.required && (payload[p.name] === undefined || payload[p.name] === null || payload[p.name] === ''));
+        if (missing.length > 0) {
+          return c.json({ error: `Missing required parameters: ${missing.map(p => p.name).join(', ')}` }, 400);
+        }
+      }
+
+      // Build validated inputs from defined parameters
+      const inputs: Record<string, unknown> = {};
+      for (const p of paramDefs) {
+        if (payload[p.name] !== undefined) inputs[p.name] = payload[p.name];
+      }
+
+      // Look up agent to get workspaceId for event scoping
+      const agent = registration.agentId
+        ? await db.query.agents.findFirst({ where: eq(agents.id, registration.agentId) })
+        : null;
+
+      const workspaceId = agent?.workspaceId;
+      if (workspaceId) {
+        await emitEvent({
+          eventScope: 'workspace',
+          scopeId: workspaceId,
+          eventName: EVENT_NAMES.WEBHOOK_RECEIVED,
+          eventData: {
+            registrationId,
+            triggerId: trigger.id,
+            workflowId: trigger.workflowId,
+            authMethod: authedViaPat ? 'pat' : 'hmac',
+            eventId,
+            payload,
+            inputs,
+            receivedAt: new Date().toISOString(),
+          },
+        });
+      }
+
+      logger.info({ registrationId, triggerId: trigger.id, authMethod: authedViaPat ? 'pat' : 'hmac' }, 'Webhook event emitted for async processing');
     }
   }
 

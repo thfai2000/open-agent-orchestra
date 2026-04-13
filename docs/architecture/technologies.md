@@ -14,7 +14,7 @@ graph TB
 
     subgraph "Backend"
         HONO[Hono v4.6]
-        NODE[Node.js >= 20]
+        NODE[Node.js >= 24]
         TS[TypeScript strict]
     end
 
@@ -49,7 +49,7 @@ graph TB
 
 | Layer | Technology | Version | Purpose |
 |---|---|---|---|
-| **Runtime** | Node.js | >= 20 | Server runtime |
+| **Runtime** | Node.js | >= 24 | Server runtime |
 | **Language** | TypeScript | strict mode | Type safety across all packages |
 | **API Framework** | Hono | v4.6 | Fast, lightweight REST API with `@hono/node-server` |
 | **Frontend** | Nuxt 3 / Vue 3 | 3.x | SSR dashboard application |

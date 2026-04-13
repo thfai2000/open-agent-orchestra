@@ -99,6 +99,7 @@ const mainNav = computed(() => [
   { to: `/${ws.value}/agents`, icon: '🤖', label: 'Agents' },
   { to: `/${ws.value}/workflows`, icon: '⚡', label: 'Workflows' },
   { to: `/${ws.value}/executions`, icon: '📋', label: 'Executions' },
+  { to: `/${ws.value}/instances`, icon: '🖥️', label: 'Instances' },
   { to: `/${ws.value}/events`, icon: '📡', label: 'Events' },
   { to: `/${ws.value}/variables`, icon: '🔑', label: 'Variables' },
   { to: `/${ws.value}/plugins`, icon: '🧩', label: 'Plugins' },

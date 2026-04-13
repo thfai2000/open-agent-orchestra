@@ -4,8 +4,8 @@ import { eq, desc, and, or, sql, arrayContains } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { workflows, workflowSteps, triggers, workflowExecutions, users, agents } from '../database/schema.js';
 import { authMiddleware, uuidSchema } from '@oao/shared';
-import { enqueueWorkflowExecution } from '../services/workflow-engine.js';
 import { emitEvent, EVENT_NAMES } from '../services/system-events.js';
+import { enqueueWorkflowExecution } from '../services/workflow-engine.js';
 
 const workflowsRouter = new Hono();
 workflowsRouter.use('/*', authMiddleware);
@@ -381,33 +381,71 @@ workflowsRouter.delete('/:id', async (c) => {
   return c.json({ success: true });
 });
 
-// POST /:id/trigger — manually trigger a workflow with optional user input
-const manualTriggerSchema = z.object({
-  userInput: z.string().max(10000).optional(),
+// POST /:id/run — manually run a workflow (requires a webhook trigger with parameters)
+const manualRunSchema = z.object({
+  inputs: z.record(z.unknown()).default({}),
 });
 
-workflowsRouter.post('/:id/trigger', async (c) => {
+workflowsRouter.post('/:id/run', async (c) => {
   const id = uuidSchema.parse(c.req.param('id'));
   const user = c.get('user');
-  const body = manualTriggerSchema.parse(await c.req.json().catch(() => ({})));
+  const body = manualRunSchema.parse(await c.req.json().catch(() => ({})));
 
   const workflow = await db.query.workflows.findFirst({ where: eq(workflows.id, id) });
   if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
   if (workflow.workspaceId !== user.workspaceId) return c.json({ error: 'Forbidden' }, 403);
 
-  // Scope check: user-scoped workflows can only be triggered by owner or admins
+  // Scope check: user-scoped workflows can only be run by owner or admins
   if (workflow.scope === 'user' && workflow.userId !== user.userId && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
     return c.json({ error: 'Forbidden' }, 403);
   }
 
-  const execution = await enqueueWorkflowExecution(id, null, {
-    type: 'manual',
-    userId: user.userId,
-    triggeredAt: new Date().toISOString(),
-    ...(body.userInput ? { userInput: body.userInput } : {}),
+  if (!workflow.isActive) {
+    return c.json({ error: 'Workflow is not active' }, 400);
+  }
+
+  // Find the first active webhook trigger for parameter definitions
+  const webhookTrigger = await db.query.triggers.findFirst({
+    where: and(
+      eq(triggers.workflowId, id),
+      eq(triggers.triggerType, 'webhook'),
+      eq(triggers.isActive, true),
+    ),
   });
 
-  return c.json({ execution }, 201);
+  if (!webhookTrigger) {
+    return c.json({ error: 'No active webhook trigger found. Add a webhook trigger to enable Manual Run.' }, 400);
+  }
+
+  // Validate inputs against webhook parameter definitions
+  const config = webhookTrigger.configuration as Record<string, unknown>;
+  const paramDefs = Array.isArray(config.parameters) ? config.parameters as Array<{ name: string; required?: boolean }> : [];
+  if (paramDefs.length > 0) {
+    const missing = paramDefs.filter(p => p.required && (body.inputs[p.name] === undefined || body.inputs[p.name] === null || body.inputs[p.name] === ''));
+    if (missing.length > 0) {
+      return c.json({ error: `Missing required inputs: ${missing.map(p => p.name).join(', ')}` }, 400);
+    }
+  }
+
+  // Build validated inputs
+  const inputs: Record<string, unknown> = {};
+  for (const p of paramDefs) {
+    if (body.inputs[p.name] !== undefined) inputs[p.name] = body.inputs[p.name];
+  }
+  // Also allow extra inputs when no parameters are defined
+  if (paramDefs.length === 0) {
+    Object.assign(inputs, body.inputs);
+  }
+
+  // Enqueue workflow execution directly (no event system needed — user is authenticated)
+  const execution = await enqueueWorkflowExecution(workflow.id, webhookTrigger.id, {
+    type: 'manual_run',
+    userId: user.userId,
+    inputs,
+    triggeredAt: new Date().toISOString(),
+  });
+
+  return c.json({ status: 'accepted', executionId: execution.id }, 202);
 });
 
 export default workflowsRouter;

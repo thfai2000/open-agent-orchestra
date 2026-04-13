@@ -21,6 +21,7 @@ import quotaRouter from './routes/quota.js';
 import workspacesRouter from './routes/workspaces.js';
 import eventsRouter from './routes/events.js';
 import agentFilesRouter from './routes/agent-files.js';
+import agentInstancesRouter from './routes/agent-instances.js';
 import tokensRouter, { validatePat } from './routes/tokens.js';
 
 const logger = createLogger('oao-api');
@@ -53,6 +54,7 @@ const app = createApp({
     ['/api/workspaces', workspacesRouter],
     ['/api/events', eventsRouter],
     ['/api/agent-files', agentFilesRouter],
+    ['/api/agent-instances', agentInstancesRouter],
     ['/api/tokens', tokensRouter],
   ],
 });

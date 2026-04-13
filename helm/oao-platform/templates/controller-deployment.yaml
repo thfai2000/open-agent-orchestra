@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oao-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: oao-controller
+spec:
+  replicas: {{ .Values.controller.replicas }}
+  selector:
+    matchLabels:
+      app: oao-controller
+  template:
+    metadata:
+      labels:
+        app: oao-controller
+    spec:
+      serviceAccountName: oao-controller
+      containers:
+        - name: controller
+          image: {{ .Values.coreImage }}
+          imagePullPolicy: IfNotPresent
+          command: ["node", "--import", "tsx", "packages/oao-api/src/workers/controller.ts"]
+          envFrom:
+            - configMapRef:
+                name: oao-platform-config
+            - secretRef:
+                name: oao-platform-secrets
+          env:
+            - name: AGENT_POD_IMAGE
+              value: {{ .Values.coreImage }}
+            - name: AGENT_POD_MEMORY_REQUEST
+              value: {{ .Values.agentPod.resources.requests.memory | quote }}
+            - name: AGENT_POD_CPU_REQUEST
+              value: {{ .Values.agentPod.resources.requests.cpu | quote }}
+            - name: AGENT_POD_MEMORY_LIMIT
+              value: {{ .Values.agentPod.resources.limits.memory | quote }}
+            - name: AGENT_POD_CPU_LIMIT
+              value: {{ .Values.agentPod.resources.limits.cpu | quote }}
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              memory: {{ .Values.controller.resources.requests.memory }}
+              cpu: {{ .Values.controller.resources.requests.cpu }}
+            limits:
+              memory: {{ .Values.controller.resources.limits.memory }}
+              cpu: {{ .Values.controller.resources.limits.cpu }}

@@ -28,6 +28,8 @@ erDiagram
     agents ||--o{ agent_decisions : "has decisions"
     agents ||--o{ agent_memories : "has memories"
 
+    step_executions ||--o| agent_instances : "runs on"
+
     workflows ||--o{ workflow_steps : "has steps"
     workflows ||--o{ triggers : "has triggers"
     workflows ||--o{ workflow_executions : "has executions"
@@ -52,6 +54,8 @@ erDiagram
 | `resource_scope` | `user`, `workspace` |
 | `event_scope` | `workspace`, `user` |
 | `memory_type` | `observation`, `insight`, `strategy`, `lesson_learned`, `general` |
+| `instance_type` | `static`, `ephemeral` |
+| `instance_status` | `idle`, `busy`, `offline`, `terminated` |
 
 ## Tenancy Tables
 
@@ -399,6 +403,23 @@ All variable tables share the same structure: `key` (UPPER_SNAKE_CASE), `valueEn
 | embedding | vector(1536) | pgvector embedding |
 | metadata | jsonb | Additional context |
 | createdAt | timestamp | |
+
+### agent_instances
+
+Tracks running agent instances (both static and ephemeral).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID PK | |
+| name | varchar(200) | Instance name (worker name or K8s pod name) |
+| instance_type | enum | `static` or `ephemeral` |
+| status | enum | `idle`, `busy`, `offline`, `terminated` |
+| hostname | varchar(255) | Machine/container hostname |
+| current_step_execution_id | UUID FK → step_executions | Currently executing step (nullable) |
+| metadata | JSONB | Flexible metadata (pid, labels, etc.) |
+| last_heartbeat_at | timestamp | Last heartbeat time |
+| createdAt | timestamp | |
+| updatedAt | timestamp | |
 
 ### webhook_registrations
 

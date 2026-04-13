@@ -45,6 +45,8 @@ export const stepStatusEnum = pgEnum('step_status', [
 ]);
 export const reasoningEffortEnum = pgEnum('reasoning_effort', ['high', 'medium', 'low']);
 export const variableTypeEnum = pgEnum('variable_type', ['property', 'credential']);
+export const agentInstanceTypeEnum = pgEnum('agent_instance_type', ['static', 'ephemeral']);
+export const agentInstanceStatusEnum = pgEnum('agent_instance_status', ['idle', 'busy', 'offline', 'terminated']);
 
 // ─── Workspaces ──────────────────────────────────────────────────────
 
@@ -576,5 +578,27 @@ export const personalAccessTokens = pgTable(
   (table) => ({
     patUserIdx: index('pat_user_idx').on(table.userId),
     patTokenHashIdx: uniqueIndex('pat_token_hash_idx').on(table.tokenHash),
+  }),
+);
+
+// ─── Agent Instances ─────────────────────────────────────────────────
+
+export const agentInstances = pgTable(
+  'agent_instances',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 200 }).notNull(), // e.g. "agent-worker-1" or K8s pod name
+    instanceType: agentInstanceTypeEnum('instance_type').notNull(), // 'static' | 'ephemeral'
+    status: agentInstanceStatusEnum('status').notNull().default('idle'),
+    hostname: varchar('hostname', { length: 255 }), // machine/container hostname
+    currentStepExecutionId: uuid('current_step_execution_id').references(() => stepExecutions.id),
+    metadata: jsonb('metadata').notNull().default({}), // flexible: labels, versions, capabilities
+    lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    instanceTypeIdx: index('agent_instances_type_idx').on(table.instanceType),
+    instanceStatusIdx: index('agent_instances_status_idx').on(table.status),
   }),
 );

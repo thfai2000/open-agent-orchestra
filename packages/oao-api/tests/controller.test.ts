@@ -43,12 +43,12 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-// We can't directly import the scheduler since it auto-starts a run() loop.
+// We can't directly import the controller since it auto-starts a run() loop.
 // Instead we test the exported/internal functions via module import tricks.
 // The cronMatchesNow function isn't exported, so we test it via a separate extraction.
 
-describe('Scheduler: cronMatchesNow logic', () => {
-  // We replicate the cronMatchesNow function from scheduler.ts for unit testing
+describe('Controller: cronMatchesNow logic', () => {
+  // We replicate the cronMatchesNow function from controller.ts for unit testing
   // since it's not exported. In a real codebase, we'd export it.
   function cronMatchesNow(cronExpr: string): boolean {
     const parts = cronExpr.split(/\s+/);
@@ -142,25 +142,25 @@ describe('Scheduler: cronMatchesNow logic', () => {
   });
 });
 
-describe('Scheduler: Redis leader lock', () => {
+describe('Controller: Redis leader lock', () => {
   it('acquireLeaderLock succeeds when NX returns OK', async () => {
     mockRedis.set.mockResolvedValueOnce('OK');
-    // The scheduler uses SET key value EX ttl NX
+    // The controller uses SET key value EX ttl NX
     // We verify the mock was called correctly
     const redis = mockRedis;
-    const result = await redis.set('scheduler:leader', 'scheduler', 'EX', 60, 'NX');
+    const result = await redis.set('controller:leader', expect.any(String), 'EX', 60, 'NX');
     expect(result).toBe('OK');
   });
 
   it('acquireLeaderLock fails when NX returns null', async () => {
     mockRedis.set.mockResolvedValueOnce(null);
-    const result = await mockRedis.set('scheduler:leader', 'scheduler', 'EX', 60, 'NX');
+    const result = await mockRedis.set('controller:leader', expect.any(String), 'EX', 60, 'NX');
     expect(result).toBeNull();
   });
 
   it('renewLeaderLock succeeds when expire returns 1', async () => {
     mockRedis.expire.mockResolvedValueOnce(1);
-    const result = await mockRedis.expire('scheduler:leader', 60);
+    const result = await mockRedis.expire('controller:leader', 60);
     expect(result).toBe(1);
   });
 });

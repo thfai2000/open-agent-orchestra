@@ -50,7 +50,7 @@ services:
       retries: 10
 
   oao-api:
-    image: oao-api:latest     # or: <dockerhub-user>/oao-api:v1.0
+    image: oao-core:latest     # or: thfai2000/oao-core:1.6.0
     ports:
       - "4002:4002"
     environment:
@@ -68,8 +68,40 @@ services:
       redis:
         condition: service_healthy
 
+  oao-controller:
+    image: oao-core:latest     # same image, different entrypoint
+    command: ["node", "--import", "tsx", "packages/oao-api/src/workers/controller.ts"]
+    environment:
+      NODE_ENV: production
+      AGENT_DATABASE_URL: postgresql://oao:oao_dev@postgres:5432/agent_db
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: your-jwt-secret-change-in-production
+      ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  oao-agent:
+    image: oao-core:latest     # same image, different entrypoint
+    command: ["node", "--import", "tsx", "packages/oao-api/src/workers/agent-worker.ts"]
+    environment:
+      NODE_ENV: production
+      AGENT_DATABASE_URL: postgresql://oao:oao_dev@postgres:5432/agent_db
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: your-jwt-secret-change-in-production
+      ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   oao-ui:
-    image: oao-ui:latest      # or: <dockerhub-user>/oao-ui:v1.0
+    image: oao-ui:latest      # or: thfai2000/oao-ui:1.6.0
     ports:
       - "3002:3002"
     environment:
@@ -98,7 +130,9 @@ docker compose up -d
 This starts:
 - **PostgreSQL 16** with pgvector on port 5432
 - **Redis 7** on port 6379
-- **OAO-API** on port 4002
+- **OAO-API** on port 4002 (via `oao-core` image, default CMD)
+- **OAO-Controller** (via `oao-core` image, command override)
+- **OAO-Agent Worker** (via `oao-core` image, command override)
 - **OAO-UI** on port 3002
 
 ### 5. Push Database Schema
@@ -154,17 +188,23 @@ If images are published to Docker Hub, replace the image references:
 
 ```yaml
 oao-api:
-  image: <dockerhub-user>/oao-api:v1.0
+  image: thfai2000/oao-core:1.6.0
+
+oao-controller:
+  image: thfai2000/oao-core:1.6.0
+
+oao-agent:
+  image: thfai2000/oao-core:1.6.0
 
 oao-ui:
-  image: <dockerhub-user>/oao-ui:v1.0
+  image: thfai2000/oao-ui:1.6.0
 ```
 
 Pull them first:
 
 ```bash
-docker pull <dockerhub-user>/oao-api:v1.0
-docker pull <dockerhub-user>/oao-ui:v1.0
+docker pull thfai2000/oao-core:1.6.0
+docker pull thfai2000/oao-ui:1.6.0
 ```
 
 ## Next Steps

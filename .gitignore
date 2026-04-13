@@ -19,3 +19,4 @@ packages/*/dist/
 packages/*/.nuxt/
 packages/*/.output/
 packages/*/*.tsbuildinfo
+docs/.vitepress/cache

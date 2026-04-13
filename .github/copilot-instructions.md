@@ -21,7 +21,7 @@
 - **Always rebuild and redeploy after changes** — For any code changes:
   1. Run pre-build checks (TypeScript, ESLint, tests) — fix all errors first
   2. Rebuild Docker images with `build.sh` (bump `BUILD_TAG` using semantic versioning)
-  3. Update image tags in `helm/oao-platform/values.yaml`
+  3. Update `coreImage` and `ui.image` tags in `helm/oao-platform/values.yaml`
   4. DB schema push + seed data are applied automatically via Helm hook (`post-install`/`post-upgrade` Job)
   5. Redeploy via `deploy.sh`
   6. After deployment, verify the OAO-UI (http://localhost:3002) is accessible
@@ -31,7 +31,7 @@
   - **Major** (`x.0.0`): Breaking changes, schema migrations that drop data, API contract changes
   - Always bump the version according to what changed — do NOT always bump major
   - `BUILD_TAG` must match the version (e.g. `BUILD_TAG=1.0.1 bash build.sh`)
-  - Update image tags in `helm/oao-platform/values.yaml` to match
+  - Update `coreImage` and `ui.image` tags in `helm/oao-platform/values.yaml` to match
   - Publish to DockerHub with `DOCKER_USERNAME=thfai2000 BUILD_TAG=1.0.1 bash publish.sh`
 
 ---
@@ -64,7 +64,7 @@ build-and-deploy-doc.sh  # Build & deploy VitePress docs to GitHub Pages
 
 ## Technology Stack
 
-- **Runtime**: Node.js >= 20, TypeScript strict mode
+- **Runtime**: Node.js >= 24 (LTS), TypeScript strict mode
 - **API**: Hono v4.6 with `@hono/node-server`
 - **Frontend**: Nuxt 3 + shadcn-vue + TailwindCSS
 - **Database**: PostgreSQL 16 + pgvector, Drizzle ORM

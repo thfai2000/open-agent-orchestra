@@ -6,7 +6,7 @@ Build **Open Agent Orchestra (OAO)** from source code for local development or c
 
 | Requirement | Version | Purpose |
 |---|---|---|
-| Node.js | >= 20 | Runtime for API and build tools |
+| Node.js | >= 24 | Runtime for API and build tools |
 | Docker Desktop | Latest | Container runtime + optional Kubernetes |
 | Git | Latest | Clone the repository |
 | Helm | >= 3 | Kubernetes deployment (optional) |
@@ -66,10 +66,10 @@ BUILD_TAG=1.0.0 ./build.sh
 
 This builds two images:
 
-| Image | Port | Description |
-|---|---|---|
-| `oao-api:1.0.0` | 4002 | OAO-API (REST API + BullMQ worker) |
-| `oao-ui:1.0.0` | 3002 | OAO-UI (Nuxt 3 dashboard) |
+| Image | Description |
+|---|---|
+| `oao-core:1.0.0` | Single backend image for all roles (API, Controller, Agent Worker) |
+| `oao-ui:1.0.0` | OAO-UI (Nuxt 3 dashboard) |
 
 ## 5. Deploy
 
@@ -78,8 +78,7 @@ This builds two images:
 Update image tags in `helm/oao-platform/values.yaml`:
 
 ```yaml
-api:
-  image: oao-api:1.0.0
+coreImage: oao-core:1.0.0
 
 ui:
   image: oao-ui:1.0.0
@@ -106,10 +105,16 @@ See [Host on Docker](/guide/docker) for the compose file, but use your locally b
 
 ```yaml
 oao-api:
-  image: oao-api:v1.0    # locally built
+  image: oao-core:latest    # locally built — default CMD starts API
+
+oao-controller:
+  image: oao-core:latest    # same image, command override selects controller role
+
+oao-agent:
+  image: oao-core:latest    # same image, command override selects agent worker role
 
 oao-ui:
-  image: oao-ui:v1.0     # locally built
+  image: oao-ui:latest      # locally built
 ```
 
 ## 6. Seed Default Data (First Deploy)
@@ -203,8 +208,8 @@ DOCKER_USERNAME=myuser BUILD_TAG=v1.0 ./publish.sh
 ```
 
 This will:
-1. Build Docker images (`oao-api`, `oao-ui`)
-2. Tag for Docker Hub (`myuser/oao-api:v1.0`, `myuser/oao-ui:v1.0`)
+1. Build Docker images (`oao-core`, `oao-ui`)
+2. Tag for Docker Hub (`myuser/oao-core:v1.0`, `myuser/oao-ui:v1.0`)
 3. Push images to Docker Hub
 4. Package and push the Helm chart to OCI registry
 

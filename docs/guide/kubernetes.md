@@ -47,8 +47,9 @@ ingress:
   className: nginx
   annotations: {}
 
+coreImage: thfai2000/oao-core:1.6.0   # Single image for API, Controller, Agent Worker
+
 api:
-  image: thfai2000/oao-api:1.2.1
   replicas: 1
   port: 4002
   resources:
@@ -60,12 +61,22 @@ api:
       cpu: 500m
 
 ui:
-  image: thfai2000/oao-ui:1.2.1
+  image: thfai2000/oao-ui:1.6.0
   replicas: 1
   port: 3002
 
-scheduler:
+controller:
   replicas: 1
+
+agentPod:
+  image: thfai2000/oao-core:1.6.0   # Image used for ephemeral agent instances
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 200m
+    limits:
+      memory: 512Mi
+      cpu: 500m
 
 postgres:
   image: pgvector/pgvector:pg16
@@ -151,7 +162,8 @@ graph TB
         ING[Ingress<br/>oao.local]
         API[OAO-API<br/>Deployment :4002]
         UI[OAO-UI<br/>Deployment :3002]
-        SCH[Scheduler<br/>Deployment]
+        CTRL[OAO-Controller<br/>Deployment]
+        AP["Agent Instances<br/>(ephemeral pods)"]
         PG[PostgreSQL<br/>StatefulSet :5432]
         RD[Redis<br/>Deployment :6379]
     end
@@ -160,8 +172,10 @@ graph TB
     ING -->|/| UI
     API --> PG
     API --> RD
-    SCH --> PG
-    SCH --> RD
+    CTRL --> PG
+    CTRL --> RD
+    CTRL -->|"create/delete"| AP
+    AP --> PG
 ```
 
 ## Updating
@@ -185,7 +199,7 @@ kubectl -n open-agent-orchestra get pods
 kubectl -n open-agent-orchestra logs -f deployment/oao-api
 
 # Scheduler logs
-kubectl -n open-agent-orchestra logs -f deployment/scheduler
+kubectl -n open-agent-orchestra logs -f deployment/oao-controller
 
 # Uninstall
 helm uninstall oao-platform -n open-agent-orchestra
@@ -197,7 +211,7 @@ For local development with Docker Desktop Kubernetes, use `deploy.sh` which runs
 
 ```bash
 # Build images first
-BUILD_TAG=1.2.1 bash build.sh
+BUILD_TAG=1.6.0 bash build.sh
 
 # Deploy locally
 bash deploy.sh

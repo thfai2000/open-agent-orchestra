@@ -7,7 +7,6 @@ import {
   workflowSteps,
   workflows,
   agents,
-  agentVariables,
   userVariables,
   workspaceVariables,
   agentQuotaUsage,
@@ -15,7 +14,7 @@ import {
   creditUsage,
   models,
 } from '../database/schema.js';
-import { decrypt, createLogger } from '@oao/shared';
+import { createLogger } from '@oao/shared';
 import { getRedisConnection } from './redis.js';
 import { CopilotClient, approveAll, defineTool } from '@github/copilot-sdk';
 import { z } from 'zod';
@@ -24,6 +23,10 @@ import { createAgentTools } from './agent-tools.js';
 import { connectToMcpServer } from './mcp-client.js';
 import { loadAgentPlugins, readPluginSkills, getPluginMcpServers, getPluginToolDefs } from './plugin-loader.js';
 import { renderTemplate, buildTemplateContext } from './jinja-renderer.js';
+
+import { createAgentPod, waitForPodCompletion, deleteAgentPod, acquireAgentSlot, releaseAgentSlot } from './k8s-provisioner.js';
+import { registerEphemeralInstance, terminateEphemeralInstance } from './agent-instance-registry.js';
+import { AGENT_STEP_QUEUE } from '../workers/agent-worker.js';
 
 const logger = createLogger('workflow-engine');
 
@@ -68,6 +71,7 @@ async function extendSessionLock(agentId: string): Promise<void> {
 }
 
 let workflowQueue: Queue | null = null;
+let stepQueue: Queue | null = null;
 
 function getQueue(): Queue {
   if (!workflowQueue) {
@@ -81,6 +85,20 @@ function getQueue(): Queue {
     });
   }
   return workflowQueue;
+}
+
+function getStepQueue(): Queue {
+  if (!stepQueue) {
+    stepQueue = new Queue(AGENT_STEP_QUEUE, {
+      connection: getRedisConnection(),
+      defaultJobOptions: {
+        removeOnComplete: 100,
+        removeOnFail: 200,
+        attempts: 1,
+      },
+    });
+  }
+  return stepQueue;
 }
 
 /** Create an execution record and enqueue a BullMQ job. */
@@ -281,130 +299,59 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
     orderBy: stepExecutions.stepOrder,
   });
 
-  // Load workspace-level variables (lowest priority)
-  const workspaceVars = workflow.workspaceId
-    ? await db.query.workspaceVariables.findMany({
-        where: eq(workspaceVariables.workspaceId, workflow.workspaceId),
-      })
-    : [];
-  const wsCredentialMap = new Map(workspaceVars.filter(v => v.variableType === 'credential').map((c) => [c.key, decrypt(c.valueEncrypted)]));
-  const wsPropertyMap = new Map(workspaceVars.filter(v => v.variableType === 'property').map((c) => [c.key, decrypt(c.valueEncrypted)]));
-  const wsEnvVarMap = new Map(workspaceVars.filter(v => v.injectAsEnvVariable).map((c) => [c.key, decrypt(c.valueEncrypted)]));
-
-  // Load user-level variables (overrides workspace)
-  const userVars = await db.query.userVariables.findMany({
-    where: eq(userVariables.userId, workflow.userId),
-  });
-  // Start with workspace maps, then overlay user maps (user overrides workspace)
-  const userCredentialMap = new Map([...wsCredentialMap, ...userVars.filter(v => v.variableType === 'credential').map((c) => [c.key, decrypt(c.valueEncrypted)] as [string, string])]);
-  const userPropertyMap = new Map([...wsPropertyMap, ...userVars.filter(v => v.variableType === 'property').map((c) => [c.key, decrypt(c.valueEncrypted)] as [string, string])]);
-  const userEnvVarMap = new Map([...wsEnvVarMap, ...userVars.filter(v => v.injectAsEnvVariable).map((c) => [c.key, decrypt(c.valueEncrypted)] as [string, string])]);
-
   // Mark execution as running
   await db
     .update(workflowExecutions)
     .set({ status: 'running', startedAt: new Date(), currentStep: startFromStep + 1 })
     .where(eq(workflowExecutions.id, executionId));
 
-  let precedentOutput = '';
-
-  // Use userInput from triggerMetadata as initial precedent output for manual runs
-  const meta = execution.triggerMetadata as Record<string, unknown> | null;
-  if (meta?.userInput && typeof meta.userInput === 'string') {
-    precedentOutput = meta.userInput;
-  }
-
-  // If retrying from a later step, recover precedent output from last completed step
-  if (startFromStep > 0) {
-    const lastCompletedStep = stepExecs[startFromStep - 1];
-    if (lastCompletedStep?.output) {
-      precedentOutput = lastCompletedStep.output;
-    }
-  }
-
+  // Execute each step using the configured execution mode
   for (let i = startFromStep; i < steps.length; i++) {
     const step = steps[i];
     const stepExec = stepExecs[i];
-
-    // Resolve prompt using Jinja2 templating
-    // Build context: precedent_output + properties + credentials will be available per-step below
-    const resolvedPrompt = step.promptTemplate;
-
-    // Mark step as running
-    await db
-      .update(stepExecutions)
-      .set({ status: 'running', resolvedPrompt, startedAt: new Date() })
-      .where(eq(stepExecutions.id, stepExec.id));
 
     await db
       .update(workflowExecutions)
       .set({ currentStep: i + 1 })
       .where(eq(workflowExecutions.id, executionId));
 
+    // Resolve agent ID for this step
+    const resolvedAgentId = step.agentId || workflow.defaultAgentId;
+    if (!resolvedAgentId) {
+      const errorMsg = `No agent configured for step "${step.name}" and no workflow default agent set`;
+      await markStepAndExecutionFailed(stepExec.id, executionId, stepExecs, i, errorMsg);
+      logger.error({ executionId, stepOrder: step.stepOrder, error: errorMsg }, 'Step failed (no agent)');
+      return;
+    }
+
+    const stepAgent = await db.query.agents.findFirst({
+      where: eq(agents.id, resolvedAgentId),
+    });
+    if (!stepAgent) {
+      const errorMsg = `Agent ${resolvedAgentId} not found for step "${step.name}"`;
+      await markStepAndExecutionFailed(stepExec.id, executionId, stepExecs, i, errorMsg);
+      logger.error({ executionId, stepOrder: step.stepOrder, error: errorMsg }, 'Step failed (agent missing)');
+      return;
+    }
+
     try {
-      // Load agent for this step (resolve: step agentId -> workflow defaultAgentId)
-      const resolvedAgentId = step.agentId || workflow.defaultAgentId;
-      if (!resolvedAgentId) throw new Error(`No agent configured for step "${step.name}" and no workflow default agent set`);
-
-      const stepAgent = await db.query.agents.findFirst({
-        where: eq(agents.id, resolvedAgentId),
-      });
-      if (!stepAgent) throw new Error(`Agent ${resolvedAgentId} not found for step "${step.name}"`);
-
-      // Load agent-level variables and merge with user-level
-      // Agent variables override user variables with the same key
-      const agentVars = await db.query.agentVariables.findMany({
-        where: eq(agentVariables.agentId, stepAgent.id),
-      });
-      const mergedCredentials = new Map(userCredentialMap);
-      const mergedProperties = new Map(userPropertyMap);
-      const mergedEnvVars = new Map(userEnvVarMap);
-      for (const v of agentVars) {
-        const decrypted = decrypt(v.valueEncrypted);
-        if (v.variableType === 'credential') mergedCredentials.set(v.key, decrypted);
-        if (v.variableType === 'property') mergedProperties.set(v.key, decrypted);
-        if (v.injectAsEnvVariable) mergedEnvVars.set(v.key, decrypted);
-      }
-
-      // Execute the Copilot session for this step
-      const result = await executeCopilotSession({
-        agent: stepAgent,
-        step,
-        resolvedPrompt,
-        precedentOutput,
-        credentials: mergedCredentials,
-        properties: mergedProperties,
-        envVariables: mergedEnvVars,
-        workflowId: workflow.id,
-        workspaceId: workflow.workspaceId ?? '',
-        executionId,
-        userId: workflow.userId,
-        workflowDefaultModel: workflow.defaultModel,
-        workflowDefaultReasoningEffort: workflow.defaultReasoningEffort,
-      });
-
-      // Update step execution with output
-      await db
-        .update(stepExecutions)
-        .set({
-          status: 'completed',
-          output: result.output,
-          reasoningTrace: result.reasoningTrace,
-          completedAt: new Date(),
-        })
-        .where(eq(stepExecutions.id, stepExec.id));
-
-      precedentOutput = result.output;
-      logger.info({ executionId, stepOrder: step.stepOrder }, 'Step completed');
+      // Always dispatch to static agent workers via BullMQ queue.
+      // Ephemeral K8s pod execution is handled by the controller when
+      // the Kubernetes API is available (per-step isolation option).
+      await executeStepStatic(stepExec, step, executionId, stepExecs, i);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      await markStepAndExecutionFailed(stepExec.id, executionId, stepExecs, i, errorMsg);
+      logger.error({ executionId, stepOrder: step.stepOrder, error: errorMsg }, 'Step failed');
+      return;
+    }
 
-      // Mark this step as failed
-      await db
-        .update(stepExecutions)
-        .set({ status: 'failed', error: errorMsg, completedAt: new Date() })
-        .where(eq(stepExecutions.id, stepExec.id));
-
+    // Check if step was marked as failed (by the worker/pod)
+    const updatedStepExec = await db.query.stepExecutions.findFirst({
+      where: eq(stepExecutions.id, stepExec.id),
+    });
+    if (updatedStepExec?.status === 'failed') {
+      const errorMsg = updatedStepExec.error || 'Step execution failed';
       // Mark remaining steps as skipped
       for (let j = i + 1; j < stepExecs.length; j++) {
         await db
@@ -412,16 +359,15 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
           .set({ status: 'skipped' })
           .where(eq(stepExecutions.id, stepExecs[j].id));
       }
-
-      // Mark execution as failed
       await db
         .update(workflowExecutions)
         .set({ status: 'failed', error: errorMsg, completedAt: new Date() })
         .where(eq(workflowExecutions.id, executionId));
-
       logger.error({ executionId, stepOrder: step.stepOrder, error: errorMsg }, 'Step failed');
       return;
     }
+
+    logger.info({ executionId, stepOrder: step.stepOrder }, 'Step completed');
   }
 
   // All steps completed: mark execution as completed
@@ -439,6 +385,166 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
   logger.info({ executionId }, 'Workflow execution completed');
 }
 
+// ─── Step Execution: Static Mode ──────────────────────────────────────
+
+/**
+ * Execute a step via static agent workers (BullMQ queue).
+ * Enqueues the step job and polls DB for completion.
+ */
+async function executeStepStatic(
+  stepExec: { id: string },
+  step: { timeoutSeconds: number | null },
+  executionId: string,
+  _stepExecs: Array<{ id: string }>,
+  _stepIndex: number,
+): Promise<void> {
+  const queue = getStepQueue();
+  const timeout = (step.timeoutSeconds ?? 600) * 1000;
+  const pollInterval = 3000; // 3 seconds
+
+  // Enqueue the step execution job for a static agent worker to pick up
+  await queue.add('step-execution', {
+    stepExecutionId: stepExec.id,
+    executionId,
+  });
+
+  logger.info({ stepExecutionId: stepExec.id, executionId }, 'Step enqueued for static agent');
+
+  // Poll DB for step completion
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeout) {
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+
+    const updated = await db.query.stepExecutions.findFirst({
+      where: eq(stepExecutions.id, stepExec.id),
+    });
+
+    if (updated?.status === 'completed' || updated?.status === 'failed') {
+      return; // Step finished — caller will check the status
+    }
+  }
+
+  // Timeout
+  throw new Error('Step execution timed out waiting for static agent worker');
+}
+
+// ─── Step Execution: Ephemeral Mode ───────────────────────────────────
+
+/**
+ * Execute a step via ephemeral K8s pod (original pattern).
+ * Currently unused — all steps route through static workers.
+ * Retained for future per-step ephemeral isolation support.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+async function executeStepEphemeral(
+  stepExec: { id: string },
+  step: { stepOrder: number; timeoutSeconds: number | null },
+  stepAgent: { id: string; name: string },
+  executionId: string,
+  workflowId: string,
+  _stepExecs: Array<{ id: string }>,
+  _stepIndex: number,
+): Promise<void> {
+  // Acquire an agent slot (semaphore for max concurrent agents)
+  let slotAcquired = false;
+  const maxWait = 300_000; // 5 minutes
+  const slotStart = Date.now();
+  while (!slotAcquired && Date.now() - slotStart < maxWait) {
+    slotAcquired = await acquireAgentSlot();
+    if (!slotAcquired) {
+      logger.debug({ stepExecutionId: stepExec.id }, 'Waiting for agent slot...');
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
+  if (!slotAcquired) {
+    throw new Error('Timed out waiting for available agent slot (max concurrent agents reached)');
+  }
+
+  let podName: string | null = null;
+  try {
+    // Create a dedicated K8s pod for this step
+    podName = await createAgentPod({
+      stepExecutionId: stepExec.id,
+      executionId,
+      workflowId,
+      stepOrder: step.stepOrder,
+      agentId: stepAgent.id,
+      agentName: stepAgent.name,
+      timeoutSeconds: step.timeoutSeconds ?? 600,
+    });
+
+    // Register in instance registry
+    await registerEphemeralInstance(podName, stepExec.id, { executionId, workflowId });
+
+    logger.info(
+      { executionId, stepOrder: step.stepOrder, podName, agentName: stepAgent.name },
+      'Ephemeral agent instance created for step execution',
+    );
+
+    // Wait for the pod to complete
+    const podResult = await waitForPodCompletion(podName, step.timeoutSeconds ?? 600);
+
+    // Release agent slot
+    await releaseAgentSlot();
+    slotAcquired = false;
+
+    // Cleanup the pod & instance record
+    await deleteAgentPod(podName);
+    await terminateEphemeralInstance(podName);
+
+    if (podResult === 'Failed') {
+      const updatedStepExec = await db.query.stepExecutions.findFirst({
+        where: eq(stepExecutions.id, stepExec.id),
+      });
+      const errorMsg = updatedStepExec?.error || 'Ephemeral agent instance failed';
+
+      if (updatedStepExec?.status !== 'failed') {
+        await db
+          .update(stepExecutions)
+          .set({ status: 'failed', error: errorMsg, completedAt: new Date() })
+          .where(eq(stepExecutions.id, stepExec.id));
+      }
+
+      throw new Error(errorMsg);
+    }
+  } catch (error) {
+    if (slotAcquired) await releaseAgentSlot();
+    if (podName) {
+      await deleteAgentPod(podName).catch(() => {});
+      await terminateEphemeralInstance(podName).catch(() => {});
+    }
+    throw error;
+  }
+}
+
+/**
+ * Helper: mark a step as failed, remaining steps as skipped, and execution as failed.
+ */
+async function markStepAndExecutionFailed(
+  stepExecId: string,
+  executionId: string,
+  stepExecs: Array<{ id: string }>,
+  stepIndex: number,
+  errorMsg: string,
+): Promise<void> {
+  await db
+    .update(stepExecutions)
+    .set({ status: 'failed', error: errorMsg, completedAt: new Date() })
+    .where(eq(stepExecutions.id, stepExecId));
+
+  for (let j = stepIndex + 1; j < stepExecs.length; j++) {
+    await db
+      .update(stepExecutions)
+      .set({ status: 'skipped' })
+      .where(eq(stepExecutions.id, stepExecs[j].id));
+  }
+
+  await db
+    .update(workflowExecutions)
+    .set({ status: 'failed', error: errorMsg, completedAt: new Date() })
+    .where(eq(workflowExecutions.id, executionId));
+}
+
 /**
  * Execute a single Copilot session for one workflow step.
  * Uses @github/copilot-sdk to:
@@ -448,7 +554,7 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
  * 4. Run the prompt and capture output
  * 5. Track token usage for quota enforcement
  */
-async function executeCopilotSession(params: {
+export async function executeCopilotSession(params: {
   agent: typeof agents.$inferSelect;
   step: typeof workflowSteps.$inferSelect;
   resolvedPrompt: string;
@@ -456,6 +562,7 @@ async function executeCopilotSession(params: {
   credentials: Map<string, string>;
   properties: Map<string, string>;
   envVariables: Map<string, string>;
+  inputs?: Record<string, unknown>;
   workflowId: string;
   workspaceId: string;
   executionId: string;
@@ -463,7 +570,7 @@ async function executeCopilotSession(params: {
   workflowDefaultModel?: string | null;
   workflowDefaultReasoningEffort?: string | null;
 }): Promise<{ output: string; reasoningTrace: Record<string, unknown> }> {
-  const { agent, step, resolvedPrompt: rawPrompt, precedentOutput, credentials, properties, envVariables, workflowId, workspaceId, executionId, userId, workflowDefaultModel, workflowDefaultReasoningEffort } = params;
+  const { agent, step, resolvedPrompt: rawPrompt, precedentOutput, credentials, properties, envVariables, inputs, workflowId, workspaceId, executionId, userId, workflowDefaultModel, workflowDefaultReasoningEffort } = params;
 
   // Render prompt template using Jinja2 (nunjucks) with full variable context
   const templateContext = buildTemplateContext({
@@ -471,6 +578,7 @@ async function executeCopilotSession(params: {
     credentials,
     envVariables,
     precedentOutput,
+    inputs,
   });
   const resolvedPrompt = renderTemplate(rawPrompt, templateContext);
 

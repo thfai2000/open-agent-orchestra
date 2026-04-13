@@ -29,6 +29,9 @@ export const EVENT_NAMES = {
   // Trigger events
   TRIGGER_FIRED: 'trigger.fired',
 
+  // Webhook events
+  WEBHOOK_RECEIVED: 'webhook.received',
+
   // User events
   USER_LOGIN: 'user.login',
   USER_REGISTERED: 'user.registered',

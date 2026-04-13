@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: oao-api
-          image: {{ .Values.api.image }}
+          image: {{ .Values.coreImage }}
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: {{ .Values.api.port }}

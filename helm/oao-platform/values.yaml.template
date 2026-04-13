@@ -5,6 +5,9 @@
 
 namespace: open-agent-orchestra
 
+# Single backend image — command override selects the role (API / Controller / Agent)
+coreImage: oao-core:latest
+
 ingress:
   enabled: true
   host: oao.local
@@ -12,7 +15,6 @@ ingress:
   annotations: {}
 
 api:
-  image: oao-api:latest
   replicas: 2
   port: 4002
   resources:
@@ -22,11 +24,57 @@ api:
     limits:
       memory: 512Mi
       cpu: 500m
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilization: 70
 
 ui:
   image: oao-ui:latest
   replicas: 1
   port: 3002
+  hpa:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilization: 70
+
+controller:
+  replicas: 1
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 250m
+  hpa:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 2
+    targetCPUUtilization: 70
+
+agentPod:
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 200m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+# Static agent worker instances (long-running BullMQ consumers)
+agentWorker:
+  enabled: true
+  replicas: 2
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 200m
+    limits:
+      memory: 512Mi
+      cpu: 500m
 
 redis:
   image: redis:7-alpine
@@ -62,6 +110,8 @@ config:
   MAX_CONCURRENT_AGENTS: "10"
   DEFAULT_AGENT_QUOTA: "50"
   DEFAULT_AGENT_MODEL: "gpt-4.1"
+  CONTROLLER_POLL_INTERVAL: "30000"
+  EMBEDDING_PROVIDER: "local"
 
 secrets:
   # PostgreSQL password

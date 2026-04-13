@@ -22,10 +22,12 @@ const env = new nunjucks.Environment(null, {
  *   - `credentials.*`      — agent/user/workspace credential values
  *   - `precedent_output`   — output from the previous workflow step
  *   - `env.*`              — environment-injected variables
+ *   - `inputs.*`           — webhook/manual-run input parameters
  *
  * Example template:
  *   "Analyse {{ properties.SYMBOL }} using key {{ credentials.API_KEY }}"
  *   "Previous result: {{ precedent_output }}"
+ *   "User requested: {{ inputs.query }}"
  */
 export function renderTemplate(
   template: string,
@@ -47,6 +49,7 @@ export function buildTemplateContext(params: {
   credentials: Map<string, string>;
   envVariables?: Map<string, string>;
   precedentOutput?: string;
+  inputs?: Record<string, unknown>;
   extra?: Record<string, unknown>;
 }): Record<string, unknown> {
   const ctx: Record<string, unknown> = {};
@@ -68,6 +71,10 @@ export function buildTemplateContext(params: {
 
   if (params.precedentOutput !== undefined) {
     ctx['precedent_output'] = params.precedentOutput;
+  }
+
+  if (params.inputs && Object.keys(params.inputs).length > 0) {
+    ctx['inputs'] = params.inputs;
   }
 
   if (params.extra) {

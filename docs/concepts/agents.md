@@ -43,8 +43,28 @@ my-agent/
 ```
 
 Configure via:
-- **Skills Paths** — Explicit list of skill file paths
+- **Skills Paths** — Explicit list of skill file paths relative to the repo root
 - **Skills Directory** — Load all `.md` files from a directory automatically
+
+### Skills Paths Example
+
+Specify individual files when you need fine-grained control over which skills are loaded:
+
+```json
+["skills/market-analysis.md", "skills/risk-management.md", "docs/api-reference.md"]
+```
+
+This loads exactly those three files, even if they are in different directories. Useful when the agent only needs a specific subset of knowledge.
+
+### Skills Directory Example
+
+Specify a directory to auto-discover all `.md` files:
+
+```
+skills/
+```
+
+This loads every `.md` file found under `skills/` recursively — ideal when the agent should have access to an entire knowledge base without maintaining an explicit list.
 
 ## Agent Scoping
 
@@ -55,11 +75,13 @@ Configure via:
 
 Scope is set at creation time and **cannot be changed** afterward.
 
-## GitHub Token & Credentials
+## GitHub Token
 
 For private repos, provide a GitHub token. You can either:
 - Enter a token directly (encrypted at rest with AES-256-GCM)
 - Reference an existing **credential variable** — the token is resolved at execution time
+
+> 📖 **See also:** [Variables](/concepts/variables) — Manage properties and credentials across all three scopes (agent → user → workspace)
 
 ## Tools
 
@@ -96,7 +118,7 @@ The `simple_http_request` tool provides curl-like HTTP request capabilities with
 
 **Jinja2 Templating:** All string arguments support Jinja2 template syntax. Available variables: <span v-pre>`{{ properties.KEY }}`</span>, <span v-pre>`{{ credentials.KEY }}`</span>, <span v-pre>`{{ env.KEY }}`</span>. This allows agents to dynamically construct URLs, headers, and bodies using agent variables.
 
-### MCP Servers
+### MCP Servers {#mcp}
 
 Agents can connect to [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers for custom tool access. Each MCP server is configured with:
 

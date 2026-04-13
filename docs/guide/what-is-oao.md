@@ -14,17 +14,18 @@ This is exactly how a real team works — people with different capabilities col
 
 - **Cost-effective** — Use expensive models only where their reasoning power is needed
 - **Segregation of duties** — Each agent has a specific role with access only to what it needs
-- **Secure** — Credentials are not freely available; every access is logged and can be audited
-- **Auditable** — Full history of what each agent decided, which credentials it accessed, and why
+- **Secure** — Credentials are accessible in different scopes by tools and never allows agents to access directly
+- **Auditable** — Full history of what each agent decided and tools were used
 
 ### AI Security Challenge
 
-When agents interact with external services, they need credentials (API keys, tokens, passwords). Traditional approaches expose credentials as environment variables — with no audit trail, no access control, and no way to know which agent used what and why.
+When agents interact with external services, they need credentials (API keys, tokens, passwords). Traditional approaches expose credentials as environment variables — with no access control and no way to scope which agent can use what.
 
 **OAO solves this** with a **zero credential exposure** approach:
 - Credentials are stored encrypted (AES-256-GCM) and resolved via Jinja2 templates (<span v-pre>`{{ credentials.KEY }}`</span>)
 - Agents never see raw credentials — they are injected into MCP configs and HTTP headers server-side
 - Scoped credentials (agent → user → workspace) provide fine-grained access control
+- Agents can only access credentials through platform tools — direct access is not permitted
 
 ### Beyond Just AI Security
 
@@ -35,6 +36,24 @@ Building production AI automation also requires solving infrastructure challenge
 - **Multi-tenancy** — Isolating agents, workflows, and data across teams
 - **Error recovery** — Retrying from the failed step, not restarting the entire workflow
 - **Tool integration** — Giving agents access to APIs, databases, and external services
+
+### Enterprise Needs
+
+Organizations adopting AI automation at scale face additional requirements that OAO addresses:
+
+- **Workspace isolation** — Each workspace provides a fully isolated boundary for administration, credentials, agents, and workflows. Teams share the same platform without risk of cross-tenant data leakage. Workspace admins manage their own users, quotas, and secrets independently.
+
+- **Prompt templating with variables** — Workflow steps use Jinja2 templates with user-defined variables (e.g., `{{ properties.REPORT_DATE }}`) and webhook payload data (e.g., `{{ trigger.body.issue_url }}`). This eliminates prompt duplication and enables operations teams to configure workflows without modifying agent code.
+
+- **Request usage management** — Per-workspace quota settings enforce daily and monthly token limits. Usage is tracked per user, model, and day. Quota enforcement blocks execution when limits are exceeded, preventing cost overruns. Administrators define limits per workspace; individual agents inherit or override them.
+
+- **Role-based access control (RBAC)** — Four roles (super_admin, workspace_admin, creator, viewer) control who can create agents, trigger workflows, manage credentials, and access admin functions. Fine-grained scopes on Personal Access Tokens restrict API access for integrations.
+
+- **Agent decision audit trail** — Agents can record structured decisions via the built-in `record_decision` tool, creating a queryable trail of what was decided, why, and with what confidence. Combined with full step execution logs (including tool calls and reasoning traces), teams can reconstruct any agent's decision process.
+
+- **Plugin ecosystem** — Git-hosted plugins extend agent capabilities without modifying core code. Plugins can add skills (markdown instruction files), MCP server connections, and custom tool definitions. This enables standardized tool libraries across the organization.
+
+- **Scalable execution architecture** — Static agent workers handle steady-state workloads; ephemeral instances (K8s) handle burst demand. Both types run simultaneously in Kubernetes, letting teams balance cost against isolation for different workflow tiers.
 
 ## The Solution
 
@@ -72,15 +91,17 @@ graph TB
 
 ## Architecture at a Glance
 
-| Component | Technology | Purpose |
-|---|---|---|
-| **OAO-API** | Hono v4.6, Node.js | REST API for agents, workflows, triggers, executions |
-| **OAO-UI** | Nuxt 3, Vue 3, Tailwind | Dashboard for managing everything |
-| **Database** | PostgreSQL 16 + pgvector | Persistent storage with vector embeddings |
-| **Queue** | Redis 7 + BullMQ | Job queue for workflow execution |
-| **Scheduler** | Custom Node.js service | Polls triggers every 30 seconds |
-| **AI Engine** | GitHub Copilot SDK | Creates and manages Copilot sessions |
-| **Deployment** | Docker + Helm + Kubernetes | Self-hosted, local or cloud |
+| Component | Purpose |
+|---|---|
+| **OAO-API** | REST API for agents, workflows, triggers, executions |
+| **OAO-UI** | Dashboard for managing everything |
+| **OAO-Controller** | Polls triggers, dispatches workflows, provisions agent instances |
+| **Agent Workers** | Execute workflow steps via Copilot sessions |
+| **PostgreSQL** | Persistent storage with pgvector embeddings |
+| **Redis + BullMQ** | Job queues for workflow and step execution |
+| **GitHub Copilot SDK** | Creates and manages AI sessions |
+
+All backend roles (API, Controller, Agent Worker) run from a single `oao-core` Docker image — the role is selected by the container command at runtime.
 
 ## Who Is This For?
 

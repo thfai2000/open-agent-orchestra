@@ -22,7 +22,7 @@ features:
     details: Lower-cost agents handle screening and data gathering. Higher-cost agents with thinking capability solve complex problems. Just like a real team.
   - icon: 🔐
     title: Zero Credential Exposure
-    details: "Agents never see credentials. Scoped credentials are injected into MCP configs and HTTP headers via Jinja2 templates — secure by design."
+    details: "Agents never see credentials. Scoped credentials are injected into MCP configs and HTTP headers via Jinja2 templates — agents can only access them through platform tools."
   - icon: 🔄
     title: Multi-Step Workflows
     details: Chain agent steps with precedent output passing, variable injection, and per-step model/reasoning configuration.
@@ -45,9 +45,9 @@ Daily tasks can often be broken down into smaller subtasks that benefit from **d
 
 ```mermaid
 graph LR
-    T[Trigger<br/>cron / event / webhook] -->|fires| S[Scheduler<br/>30s poll]
-    S -->|enqueue| WE[Workflow Engine<br/>step-by-step]
-    WE -->|creates| CS[Copilot Session<br/>agent markdown + tools + MCP]
+    T[Trigger<br/>cron / event / webhook] -->|fires| C[Controller<br/>30s poll]
+    C -->|enqueue| WE[Workflow Engine<br/>step-by-step]
+    WE -->|provisions| AP[Agent Instance<br/>Copilot session + tools + MCP]
 ```
 
 ### Key Differentiators

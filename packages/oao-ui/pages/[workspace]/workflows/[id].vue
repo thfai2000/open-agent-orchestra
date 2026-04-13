@@ -31,7 +31,12 @@
         </div>
         <div class="flex items-center gap-2">
           <Button v-if="!editingWorkflow" variant="outline" size="sm" @click="startEditWorkflow">Edit Workflow</Button>
-          <Button size="sm" class="bg-green-600 hover:bg-green-700" :disabled="triggering" @click="showRunDialog = true">{{ triggering ? 'Running…' : 'Run Now' }}</Button>
+          <Button size="sm" class="bg-green-600 hover:bg-green-700" :disabled="triggering || hasActiveExecution || !hasWebhookTrigger" @click="showRunDialog = true">
+            <template v-if="hasActiveExecution">Execution In Progress…</template>
+            <template v-else-if="triggering">Submitting…</template>
+            <template v-else-if="!hasWebhookTrigger">No Webhook Trigger</template>
+            <template v-else>Manual Run</template>
+          </Button>
           <Button variant="outline" size="sm" @click="toggleActive">{{ workflow.isActive ? 'Deactivate' : 'Activate' }}</Button>
         </div>
       </div>
@@ -41,20 +46,31 @@
         <DialogContent class="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Manual Run</DialogTitle>
-            <DialogDescription>Provide initial context for the first step. This will be available as <code class="bg-muted px-1 rounded text-xs">{{ precedent_output }}</code> in step 1's prompt template (Jinja2).</DialogDescription>
+            <DialogDescription v-if="webhookParams.length > 0">Fill in the required inputs. These are available as <code class="bg-muted px-1 rounded text-xs">{{ inputs.PARAM_NAME }}</code> in prompt templates.</DialogDescription>
+            <DialogDescription v-else>No parameters defined on the webhook trigger. The workflow will run with empty inputs.</DialogDescription>
           </DialogHeader>
-          <Textarea v-model="manualRunInput" rows="4" placeholder="Enter initial context or instructions for this run..." />
+          <div v-if="webhookParams.length > 0" class="space-y-3 py-2">
+            <div v-for="param in webhookParams" :key="param.name" class="space-y-1">
+              <Label class="text-sm">{{ param.name }} <span v-if="param.required" class="text-destructive">*</span></Label>
+              <Input v-model="runInputs[param.name]" :placeholder="param.description || param.name" />
+              <p v-if="param.description" class="text-xs text-muted-foreground">{{ param.description }}</p>
+            </div>
+          </div>
+          <div v-if="runValidationError" class="p-2 rounded-md bg-destructive/10 text-destructive text-sm">{{ runValidationError }}</div>
           <DialogFooter>
-            <Button variant="outline" @click="showRunDialog = false; manualRunInput = ''">Cancel</Button>
-            <Button class="bg-green-600 hover:bg-green-700" :disabled="triggering" @click="handleManualTrigger">{{ triggering ? 'Triggering…' : 'Start Run' }}</Button>
+            <Button variant="outline" @click="showRunDialog = false; resetRunInputs()">Cancel</Button>
+            <Button class="bg-green-600 hover:bg-green-700" :disabled="triggering" @click="handleManualRun">{{ triggering ? 'Running…' : 'Start Run' }}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <!-- Trigger Result -->
       <div v-if="triggerResult" class="p-3 rounded-md bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 text-sm">
-        Workflow triggered! Execution ID: {{ triggerResult.id?.substring(0, 8) }}…
-        <NuxtLink :to="`/${ws}/executions/${triggerResult.id}`" class="text-primary hover:underline ml-2">View →</NuxtLink>
+        Workflow run accepted! The controller will start execution shortly.
+        <span v-if="latestActiveExecution" class="ml-2">
+          Execution: {{ latestActiveExecution.id?.substring(0, 8) }}… ({{ latestActiveExecution.status }})
+          <NuxtLink :to="`/${ws}/executions/${latestActiveExecution.id}`" class="text-primary hover:underline ml-1">View →</NuxtLink>
+        </span>
       </div>
 
       <!-- Edit Workflow Form -->
@@ -211,7 +227,7 @@
           <div class="flex items-center justify-between">
             <div>
               <CardTitle>Triggers</CardTitle>
-              <CardDescription>All workflows can be started manually. Add triggers for automated execution.</CardDescription>
+              <CardDescription>Add a webhook trigger to enable <strong>Manual Run</strong>. Webhook parameters define the input fields shown during Manual Run.</CardDescription>
             </div>
             <Button variant="outline" size="sm" @click="showTriggerForm = true">+ Add Trigger</Button>
           </div>
@@ -252,6 +268,20 @@
                       <option v-for="name in eventNames" :key="name" :value="name">{{ name }}</option>
                     </select>
                   </div>
+                </div>
+                <!-- Webhook Parameters -->
+                <div v-if="triggerForm.triggerType === 'webhook'" class="mt-3 space-y-2">
+                  <div class="flex items-center justify-between">
+                    <Label class="text-xs">Webhook Parameters</Label>
+                    <Button variant="ghost" size="sm" class="h-6 text-xs" type="button" @click="triggerForm.webhookParams.push({ name: '', required: false, description: '' })">+ Add Parameter</Button>
+                  </div>
+                  <div v-for="(param, pi) in triggerForm.webhookParams" :key="pi" class="flex gap-2 items-center">
+                    <Input v-model="param.name" placeholder="Name" class="flex-1 text-xs" />
+                    <Input v-model="param.description" placeholder="Description (optional)" class="flex-1 text-xs" />
+                    <label class="flex items-center gap-1 text-xs whitespace-nowrap"><input type="checkbox" v-model="param.required" /> Required</label>
+                    <Button variant="ghost" size="sm" class="h-6 w-6 p-0 text-destructive" type="button" @click="triggerForm.webhookParams.splice(pi, 1)">×</Button>
+                  </div>
+                  <p class="text-xs text-muted-foreground">Define inputs for this webhook. Access in prompts: <code class="bg-muted px-1 rounded">{{ inputs.paramName }}</code>. Required parameters are validated.</p>
                 </div>
                 <!-- Event Conditions -->
                 <div v-if="triggerForm.triggerType === 'event'" class="space-y-2">
@@ -338,8 +368,11 @@ function formatTriggerConfig(trigger: any): string {
   const cfg = trigger.configuration || trigger.config || {};
   if (cfg.cron) return `cron: ${cfg.cron}`;
   if (cfg.datetime) return `datetime: ${new Date(cfg.datetime).toLocaleString()}`;
-  if (cfg.path) return `path: ${cfg.path}`;
-  if (cfg.eventType) return `event: ${cfg.eventType}`;
+  if (cfg.path) {
+    const paramCount = Array.isArray(cfg.parameters) ? cfg.parameters.length : 0;
+    return paramCount > 0 ? `path: ${cfg.path} (${paramCount} param${paramCount > 1 ? 's' : ''})` : `path: ${cfg.path}`;
+  }
+  if (cfg.eventType || cfg.eventName) return `event: ${cfg.eventType || cfg.eventName}`;
   return '—';
 }
 
@@ -349,7 +382,6 @@ function formatTriggerType(type: string): string {
     exact_datetime: 'Exact Datetime',
     webhook: 'Webhook',
     event: 'Event',
-    manual: 'Manual',
   };
   return labels[type] || type;
 }
@@ -419,26 +451,83 @@ async function handleSaveWorkflow() {
 const triggering = ref(false);
 const triggerResult = ref<any>(null);
 const showRunDialog = ref(false);
-const manualRunInput = ref('');
+const runInputs = reactive<Record<string, string>>({});
+const runValidationError = ref('');
+const activeExecutions = ref<any[]>([]);
+const hasActiveExecution = computed(() => activeExecutions.value.length > 0);
+const latestActiveExecution = computed(() => activeExecutions.value[0] ?? null);
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-async function handleManualTrigger() {
+// Compute webhook trigger info for Manual Run
+const hasWebhookTrigger = computed(() => triggers.value.some((t: any) => t.triggerType === 'webhook' && t.isActive));
+const webhookParams = computed(() => {
+  const wh = triggers.value.find((t: any) => t.triggerType === 'webhook' && t.isActive);
+  if (!wh) return [];
+  const config = wh.configuration || {};
+  return Array.isArray(config.parameters) ? config.parameters : [];
+});
+
+function resetRunInputs() {
+  for (const key of Object.keys(runInputs)) delete runInputs[key];
+  runValidationError.value = '';
+}
+
+async function pollActiveExecutions() {
+  try {
+    const res = await $fetch<{ executions: any[] }>(`/api/executions/active?workflowId=${workflowId}`, { headers });
+    activeExecutions.value = res.executions ?? [];
+    // Stop polling when no active executions remain and we already triggered
+    if (triggerResult.value && activeExecutions.value.length === 0 && pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      // Refresh workflow data to show the latest execution
+      await refreshWf();
+    }
+  } catch { /* ignore poll errors */ }
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(pollActiveExecutions, 3000);
+}
+
+// Initial check for active executions
+pollActiveExecutions();
+
+async function handleManualRun() {
+  runValidationError.value = '';
+
+  // Validate required params
+  const missing = webhookParams.value.filter((p: any) => p.required && (!runInputs[p.name] || !runInputs[p.name].trim()));
+  if (missing.length > 0) {
+    runValidationError.value = `Missing required inputs: ${missing.map((p: any) => p.name).join(', ')}`;
+    return;
+  }
+
   triggering.value = true;
   triggerResult.value = null;
   try {
-    const res = await $fetch<{ execution: any }>(`/api/workflows/${workflowId}/trigger`, {
+    const res = await $fetch<{ status: string; executionId: string }>(`/api/workflows/${workflowId}/run`, {
       method: 'POST',
       headers,
-      body: manualRunInput.value ? { userInput: manualRunInput.value } : {},
+      body: { inputs: { ...runInputs } },
     });
-    triggerResult.value = res.execution;
+    triggerResult.value = res;
     showRunDialog.value = false;
-    manualRunInput.value = '';
+    resetRunInputs();
+    // Start polling to pick up the execution
+    startPolling();
+    await pollActiveExecutions();
   } catch (e: any) {
-    alert(e?.data?.error || 'Failed to trigger workflow');
+    runValidationError.value = e?.data?.error || 'Failed to run workflow';
   } finally {
     triggering.value = false;
   }
 }
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer);
+});
 
 // ── Toggle active ───────────────────────────────────────────────
 async function toggleActive() {
@@ -505,7 +594,7 @@ async function handleSaveSteps() {
 const showTriggerForm = ref(false);
 const savingTrigger = ref(false);
 const triggerError = ref('');
-const triggerForm = reactive({ triggerType: 'time_schedule', cron: '', webhookPath: '', eventType: '', datetime: '', conditions: [] as Array<{ key: string; value: string }> });
+const triggerForm = reactive({ triggerType: 'time_schedule', cron: '', webhookPath: '', webhookParams: [] as Array<{ name: string; required: boolean; description: string }>, eventType: '', datetime: '', conditions: [] as Array<{ key: string; value: string }> });
 
 async function handleAddTrigger() {
   triggerError.value = '';
@@ -514,7 +603,11 @@ async function handleAddTrigger() {
     const configuration: Record<string, unknown> = {};
     if (triggerForm.triggerType === 'time_schedule') configuration.cron = triggerForm.cron;
     if (triggerForm.triggerType === 'exact_datetime') configuration.datetime = new Date(triggerForm.datetime).toISOString();
-    if (triggerForm.triggerType === 'webhook') configuration.path = triggerForm.webhookPath;
+    if (triggerForm.triggerType === 'webhook') {
+      configuration.path = triggerForm.webhookPath;
+      const params = triggerForm.webhookParams.filter(p => p.name.trim());
+      if (params.length > 0) configuration.parameters = params.map(p => ({ name: p.name.trim(), required: p.required, ...(p.description.trim() ? { description: p.description.trim() } : {}) }));
+    }
     if (triggerForm.triggerType === 'event') {
       configuration.eventName = triggerForm.eventType;
       if (triggerForm.conditions.length > 0) {
@@ -530,7 +623,7 @@ async function handleAddTrigger() {
       body: { workflowId, triggerType: triggerForm.triggerType, configuration },
     });
     showTriggerForm.value = false;
-    Object.assign(triggerForm, { triggerType: 'time_schedule', cron: '', webhookPath: '', eventType: '', datetime: '', conditions: [] });
+    Object.assign(triggerForm, { triggerType: 'time_schedule', cron: '', webhookPath: '', webhookParams: [], eventType: '', datetime: '', conditions: [] });
     await refreshTriggers();
   } catch (e: any) {
     triggerError.value = e?.data?.error || 'Failed to add trigger';

@@ -9,15 +9,16 @@ open-agent-orchestra/
 ├── build.sh              # Build Docker images locally
 ├── deploy.sh             # Deploy to local K8s via Helm
 ├── publish.sh            # Publish images + Helm chart to Docker Hub
-├── Dockerfile.api        # OAO-API Docker build
+├── Dockerfile.core       # OAO-Core Docker build (API, Controller, Agent Worker)
 ├── Dockerfile.ui         # OAO-UI Docker build
+├── docker-compose.yaml   # Docker Compose for local development
 ├── package.json          # Root workspace config + docs scripts
 ├── tsconfig.json         # Base TypeScript config
 ├── eslint.config.mjs     # ESLint flat config
 │
 ├── packages/             # npm workspaces
 │   ├── shared/           # Shared library (auth, utils, middleware)
-│   ├── oao-api/        # OAO-API — REST API + workflow engine
+│   ├── oao-api/        # OAO-API — REST API + workflow engine + controller
 │   ├── oao-ui/         # OAO-UI — Nuxt 3 dashboard
 │   └── ui-base/          # Shared Nuxt layer (Tailwind, auth)
 │
@@ -81,7 +82,9 @@ oao-api/
 │   │   ├── workspaces.ts # Workspace CRUD
 │   │   └── agent-files.ts # DB-stored agent file management
 │   ├── services/
-│   │   ├── workflow-engine.ts  # Core: enqueue, execute, retry, Copilot sessions
+│   │   ├── workflow-engine.ts  # Core: enqueue, execute, retry, agent provisioning
+│   │   ├── k8s-provisioner.ts # K8s agent instance lifecycle (ephemeral mode)
+│   │   ├── agent-instance-registry.ts # Agent instance tracking & heartbeat
 │   │   ├── agent-tools.ts     # 9 built-in tools (defineTool)
 │   │   ├── agent-workspace.ts # Git clone + skill loading
 │   │   ├── mcp-client.ts      # MCP server spawn + tool registration
@@ -90,7 +93,10 @@ oao-api/
 │   │   ├── embedding-service.ts # pgvector embeddings
 │   │   └── redis.ts           # Redis connection, BullMQ queue factory
 │   └── workers/
-│       └── workflow-worker.ts # BullMQ job processor
+│       ├── controller.ts      # Trigger poller + BullMQ worker
+│       ├── workflow-worker.ts # BullMQ job processor
+│       ├── agent-worker.ts   # Static agent instance (long-lived worker)
+│       └── agent-runner.ts   # Ephemeral agent instance entry point
 ├── tests/                     # Vitest unit tests
 ├── drizzle.config.ts          # Drizzle Kit config
 ├── package.json
@@ -154,7 +160,8 @@ helm/
     └── templates/
         ├── api-deployment.yaml       # OAO-API Deployment
         ├── ui-deployment.yaml        # OAO-UI Deployment
-        ├── scheduler-deployment.yaml # Scheduler Deployment
+        ├── controller-deployment.yaml # Controller Deployment
+        ├── controller-rbac.yaml      # RBAC for dynamic agent instance provisioning
         ├── postgres.yaml             # PostgreSQL StatefulSet
         ├── redis.yaml                # Redis Deployment
         ├── configmap.yaml            # Environment config
@@ -167,7 +174,7 @@ helm/
 
 | Script | Purpose |
 |---|---|
-| `build.sh` | Build Docker images (`oao-api`, `oao-ui`) |
+| `build.sh` | Build Docker images (`oao-core`, `oao-ui`) |
 | `deploy.sh` | Deploy to Docker Desktop K8s via Helm |
 | `publish.sh` | Push images + Helm chart to Docker Hub |
 | `npm run dev` | Start both API and UI in dev mode |

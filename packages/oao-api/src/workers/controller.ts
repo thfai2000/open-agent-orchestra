@@ -6,11 +6,11 @@ import { enqueueWorkflowExecution } from '../services/workflow-engine.js';
 import { getRedisConnection } from '../services/redis.js';
 import { startWorker, stopWorker } from './workflow-worker.js';
 
-const logger = createLogger('scheduler');
-const POLL_INTERVAL = parseInt(process.env.SCHEDULER_POLL_INTERVAL || '30000', 10);
-const LEADER_LOCK_KEY = 'scheduler:leader';
+const logger = createLogger('controller');
+const POLL_INTERVAL = parseInt(process.env.CONTROLLER_POLL_INTERVAL || '30000', 10);
+const LEADER_LOCK_KEY = 'controller:leader';
 const LEADER_LOCK_TTL = 60; // seconds
-const LAST_EVENT_CURSOR_KEY = 'scheduler:last-event-cursor';
+const LAST_EVENT_CURSOR_KEY = 'controller:last-event-cursor';
 
 /**
  * Simple cron parser: checks if a cron expression matches the current time.
@@ -50,15 +50,15 @@ function cronMatchesNow(cronExpr: string): boolean {
   });
 }
 
-const INSTANCE_ID = `scheduler:${process.pid}:${Date.now()}`;
+const INSTANCE_ID = `controller:${process.pid}:${Date.now()}`;
 
-async function acquireLeaderLock(): Promise<boolean> {
+export async function acquireLeaderLock(): Promise<boolean> {
   const redis = getRedisConnection();
   const result = await redis.set(LEADER_LOCK_KEY, INSTANCE_ID, 'EX', LEADER_LOCK_TTL, 'NX');
   return result === 'OK';
 }
 
-async function renewLeaderLock(): Promise<boolean> {
+export async function renewLeaderLock(): Promise<boolean> {
   const redis = getRedisConnection();
   const current = await redis.get(LEADER_LOCK_KEY);
   if (current !== INSTANCE_ID) return false;
@@ -213,16 +213,13 @@ async function pollEventTriggers() {
     if (newEvents.length === 0) return;
 
     // Process webhook.received events directly (they carry their own trigger/workflow info)
-    // Process manual.triggered events directly (they carry their own workflow info)
     for (const event of newEvents) {
       if (event.eventName === 'webhook.received') {
         await processWebhookEvent(event);
-      } else if (event.eventName === 'manual.triggered') {
-        await processManualTriggerEvent(event);
       }
     }
 
-    // Get all active event triggers (for non-webhook/non-manual system events)
+    // Get all active event triggers (for non-webhook system events)
     const eventTriggers = await db.query.triggers.findMany({
       where: and(eq(triggers.triggerType, 'event'), eq(triggers.isActive, true)),
     });
@@ -236,10 +233,10 @@ async function pollEventTriggers() {
       return;
     }
 
-    // Match non-webhook/non-manual events against event triggers
+    // Match non-webhook events against event triggers
     for (const event of newEvents) {
-      // Skip webhook.received and manual.triggered — already handled above
-      if (event.eventName === 'webhook.received' || event.eventName === 'manual.triggered') continue;
+      // Skip webhook.received — already handled above
+      if (event.eventName === 'webhook.received') continue;
 
       for (const trigger of eventTriggers) {
         const config = trigger.configuration as Record<string, unknown>;
@@ -343,6 +340,7 @@ async function processWebhookEvent(event: { id: string; eventData: unknown }) {
       authMethod: data.authMethod,
       eventId: data.eventId,
       payload: data.payload,
+      inputs: data.inputs ?? data.payload ?? {},
       receivedAt: data.receivedAt,
     });
 
@@ -358,49 +356,12 @@ async function processWebhookEvent(event: { id: string; eventData: unknown }) {
   }
 }
 
-/**
- * Process a manual.triggered system event by extracting the workflow info
- * from eventData and enqueuing the workflow execution.
- */
-async function processManualTriggerEvent(event: { id: string; eventData: unknown }) {
-  try {
-    const data = event.eventData as Record<string, unknown>;
-    const workflowId = data.workflowId as string | undefined;
-
-    if (!workflowId) {
-      logger.warn({ eventId: event.id }, 'Manual trigger event missing workflowId');
-      return;
-    }
-
-    // Verify workflow is active
-    const workflow = await db.query.workflows.findFirst({
-      where: eq(workflows.id, workflowId),
-    });
-    if (!workflow?.isActive) return;
-
-    // Enqueue workflow execution
-    await enqueueWorkflowExecution(workflowId, null, {
-      type: 'manual',
-      userId: data.userId,
-      triggeredAt: data.triggeredAt,
-      ...(data.userInput !== undefined ? { userInput: data.userInput } : {}),
-    });
-
-    logger.info(
-      { workflowId, eventId: event.id, userId: data.userId },
-      'Manual trigger event processed, workflow enqueued',
-    );
-  } catch (error) {
-    logger.error({ error, eventId: event.id }, 'Error processing manual trigger event');
-  }
-}
-
 async function run() {
-  logger.info('Scheduler starting...');
+  logger.info('Controller starting...');
 
   // Start the BullMQ worker in the same process
   startWorker();
-  logger.info('Workflow worker started in scheduler process');
+  logger.info('Workflow worker started in controller process');
 
   // Main loop
   const tick = async () => {
@@ -423,17 +384,17 @@ async function run() {
   // Poll on interval
   setInterval(tick, POLL_INTERVAL);
 
-  logger.info(`Scheduler running, polling every ${POLL_INTERVAL / 1000}s`);
+  logger.info(`Controller running, polling every ${POLL_INTERVAL / 1000}s`);
 }
 
 run().catch((err) => {
-  logger.error(err, 'Scheduler failed to start');
+  logger.error(err, 'Controller failed to start');
   process.exit(1);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
-  logger.info('SIGTERM received, shutting down scheduler...');
+  logger.info('SIGTERM received, shutting down controller...');
   await stopWorker();
   process.exit(0);
 });

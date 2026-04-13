@@ -1,5 +1,5 @@
 # ── Build Stage ──────────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
@@ -14,7 +14,12 @@ COPY packages/shared packages/shared
 COPY packages/oao-api packages/oao-api
 
 # ── Production Stage ──────────────────────────────────────────────────────────
-FROM node:20-alpine AS production
+# Single image for all backend roles: API, Controller, Agent Worker
+# Override CMD at runtime to select the role:
+#   API:        node --import tsx packages/oao-api/src/server.ts         (default)
+#   Controller: node --import tsx packages/oao-api/src/workers/controller.ts
+#   Agent:      node --import tsx packages/oao-api/src/workers/agent-worker.ts
+FROM node:24-alpine AS production
 
 WORKDIR /app
 
@@ -31,5 +36,5 @@ EXPOSE 4002
 
 USER app
 
-# Runs the Agent API server (HTTP + BullMQ worker + scheduler in one process)
+# Default: run the API server
 CMD ["node", "--import", "tsx", "packages/oao-api/src/server.ts"]

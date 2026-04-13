@@ -87,6 +87,39 @@ executionsRouter.get('/', async (c) => {
   });
 });
 
+// GET /active — check for active (pending/running) executions for a workflow
+// Used by the UI to poll status after manual trigger and prevent double submissions
+executionsRouter.get('/active', async (c) => {
+  const user = c.get('user');
+  if (!user.workspaceId) return c.json({ executions: [] });
+
+  const workflowId = c.req.query('workflowId');
+  if (!workflowId) return c.json({ error: 'workflowId query param required' }, 400);
+
+  // Verify user can see this workflow
+  const workflow = await db.query.workflows.findFirst({
+    where: eq(workflows.id, workflowId),
+  });
+  if (!workflow || workflow.workspaceId !== user.workspaceId) return c.json({ executions: [] });
+  if (workflow.scope === 'user' && workflow.userId !== user.userId && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ executions: [] });
+  }
+
+  const active = await db
+    .select()
+    .from(workflowExecutions)
+    .where(
+      and(
+        eq(workflowExecutions.workflowId, workflowId),
+        sql`${workflowExecutions.status} IN ('pending', 'running')`,
+      ),
+    )
+    .orderBy(desc(workflowExecutions.createdAt))
+    .limit(5);
+
+  return c.json({ executions: active });
+});
+
 // GET /:id — full execution detail with step executions (workspace-scoped)
 executionsRouter.get('/:id', async (c) => {
   const user = c.get('user');
