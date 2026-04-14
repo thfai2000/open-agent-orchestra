@@ -40,7 +40,8 @@ export default withMermaid(
         { text: 'Guide', link: '/guide/what-is-oao' },
         { text: 'Concepts', link: '/concepts/agents' },
         { text: 'Architecture', link: '/architecture/overview' },
-        { text: 'Reference', link: '/reference/template-variables' },
+        { text: 'Database', link: '/database/schema' },
+        { text: 'Reference', link: '/reference/api-endpoints' },
         {
           text: currentLabel?.version || 'Version',
           items: versionDropdown,
@@ -76,6 +77,7 @@ export default withMermaid(
             text: 'Automation',
             items: [
               { text: 'Workflows', link: '/concepts/workflows' },
+              { text: 'Agent Steps', link: '/concepts/agent-steps' },
               { text: 'Workflow Engine & Controller', link: '/concepts/workflow-engine' },
             ],
           },
@@ -83,6 +85,7 @@ export default withMermaid(
             text: 'Security & Access',
             items: [
               { text: 'AI Security', link: '/concepts/security' },
+              { text: 'Copilot CLI Security', link: '/concepts/security-copilot-cli' },
               { text: 'RBAC', link: '/concepts/rbac' },
             ],
           },
@@ -100,6 +103,8 @@ export default withMermaid(
             text: 'Architecture',
             items: [
               { text: 'System Overview', link: '/architecture/overview' },
+              { text: 'Agent Instances', link: '/architecture/agent-instances' },
+              { text: 'Request & Trigger Flows', link: '/architecture/request-flows' },
               { text: 'Technologies', link: '/architecture/technologies' },
             ],
           },
@@ -118,7 +123,9 @@ export default withMermaid(
           {
             text: 'Database',
             items: [
-              { text: 'Schema', link: '/database/schema' },
+              { text: 'Schema Overview', link: '/database/schema' },
+              { text: 'Core Tables', link: '/database/schema-core' },
+              { text: 'Support Tables', link: '/database/schema-support' },
             ],
           },
         ],

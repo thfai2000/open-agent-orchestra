@@ -189,4 +189,4 @@ helm/
 
 - [Architecture Overview](/architecture/overview) — How the components interact
 - [Database Schema](/database/schema) — All tables and relationships
-- [API Endpoints](/api/routes) — Complete API reference
+- [API Endpoints](/reference/api-endpoints) — Complete API reference

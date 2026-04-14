@@ -39,31 +39,19 @@ The agent for the step is resolved in order:
 
 ## 2. Variable Resolution (3-Tier Override)
 
-Variables are loaded from three scopes. Each higher scope overrides the previous:
+Variables are loaded from three scopes and merged with higher scopes overriding lower ones:
 
-```mermaid
-graph LR
-    W[Workspace Variables] -->|base| M[Merged Map]
-    U[User Variables] -->|override| M
-    A[Agent Variables] -->|override| M
-    M --> C[credentials map]
-    M --> P[properties map]
-    M --> E[env variables map]
 ```
-
-| Scope | Source | Override Priority |
-|---|---|---|
-| **Workspace** | `workspace_variables` table (filtered by `workspaceId`) | Lowest |
-| **User** | `user_variables` table (filtered by workflow owner `userId`) | Medium |
-| **Agent** | `agent_variables` table (filtered by `agentId`) | Highest |
+Workspace Variables (lowest) → User Variables → Agent Variables (highest)
+```
 
 Each variable has a `variableType` (`credential` or `property`) and an optional `injectAsEnvVariable` flag:
 
-- **Credentials** → `credentials` map (available as <span v-pre>`{{ credentials.KEY }}`</span> in templates)
-- **Properties** → `properties` map (available as <span v-pre>`{{ properties.KEY }}`</span> in templates)
+- **Credentials** → available as <span v-pre>`{{ credentials.KEY }}`</span> in templates
+- **Properties** → available as <span v-pre>`{{ properties.KEY }}`</span> in templates
 - **Env-injected** → written to a `.env` file in the agent workspace directory
 
-All variable values are stored encrypted (AES-256-GCM) and decrypted at resolution time in memory.
+All values are stored encrypted (AES-256-GCM) and decrypted at resolution time. For full details on scoping and priority, see [Variables](/concepts/variables).
 
 ## 3. Prepare Agent Workspace
 

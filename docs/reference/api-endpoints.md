@@ -41,7 +41,9 @@ PATs use `oao_` prefix (e.g., `Authorization: Bearer oao_abc123...`). PATs have 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/executions` | List executions (paginated) |
+| GET | `/api/executions/active` | Check for active executions for a workflow |
 | GET | `/api/executions/:id` | Execution detail with step results |
+| GET | `/api/executions/:id/steps/:stepId/live` | Live intermediate output for a running step |
 | POST | `/api/executions/:id/cancel` | Cancel running execution |
 | POST | `/api/executions/:id/retry` | Retry from failed step |
 
