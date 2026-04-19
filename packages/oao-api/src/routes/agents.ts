@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { eq, and, or, desc, sql } from 'drizzle-orm';
 import { db } from '../database/index.js';
-import { agents } from '../database/schema.js';
+import { agents, agentFiles } from '../database/schema.js';
 import { authMiddleware, encrypt, uuidSchema } from '@oao/shared';
 import { emitEvent, EVENT_NAMES } from '../services/system-events.js';
 
@@ -48,6 +48,11 @@ const BUILTIN_TOOL_NAMES = [
   'simple_http_request',
 ] as const;
 
+const agentFileSchema = z.object({
+  filePath: z.string().min(1).max(500),
+  content: z.string(),
+});
+
 const createAgentSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(1000).optional(),
@@ -63,6 +68,7 @@ const createAgentSchema = z.object({
   scope: z.enum(['user', 'workspace']).default('user'),
   builtinToolsEnabled: z.array(z.enum(BUILTIN_TOOL_NAMES)).default([...BUILTIN_TOOL_NAMES]),
   mcpJsonTemplate: z.string().max(50000).optional(),
+  files: z.array(agentFileSchema).max(50).default([]),
 }).refine(
   (data) => {
     if (data.sourceType === 'github_repo') {
@@ -71,11 +77,15 @@ const createAgentSchema = z.object({
     return true;
   },
   { message: 'gitRepoUrl and agentFilePath are required for github_repo source type' },
+).refine(
+  (data) => new Set(data.files.map((file) => file.filePath)).size === data.files.length,
+  { message: 'Duplicate agent file paths are not allowed' },
 );
 
 agentsRouter.post('/', async (c) => {
   const user = c.get('user');
   if (!user.workspaceId) return c.json({ error: 'No workspace context' }, 403);
+  const workspaceId = user.workspaceId;
   if (user.role === 'view_user') return c.json({ error: 'View-only users cannot create agents' }, 403);
 
   const body = createAgentSchema.parse(await c.req.json());
@@ -85,31 +95,45 @@ agentsRouter.post('/', async (c) => {
     return c.json({ error: 'Only admins can create workspace-level agents' }, 403);
   }
 
-  const [agent] = await db
-    .insert(agents)
-    .values({
-      workspaceId: user.workspaceId,
-      userId: user.userId,
-      scope: body.scope,
-      name: body.name,
-      description: body.description,
-      sourceType: body.sourceType,
-      gitRepoUrl: body.gitRepoUrl ?? null,
-      gitBranch: body.gitBranch,
-      agentFilePath: body.agentFilePath ?? null,
-      skillsPaths: body.skillsPaths,
-      skillsDirectory: body.skillsDirectory ?? null,
-      githubTokenEncrypted: body.githubToken ? encrypt(body.githubToken) : null,
-      githubTokenCredentialId: body.githubTokenCredentialId ?? null,
-      copilotTokenCredentialId: body.copilotTokenCredentialId ?? null,
-      builtinToolsEnabled: body.builtinToolsEnabled,
-      mcpJsonTemplate: body.mcpJsonTemplate ?? null,
-    })
-    .returning();
+  const agent = await db.transaction(async (tx) => {
+    const [createdAgent] = await tx
+      .insert(agents)
+      .values({
+        workspaceId,
+        userId: user.userId,
+        scope: body.scope,
+        name: body.name,
+        description: body.description,
+        sourceType: body.sourceType,
+        gitRepoUrl: body.gitRepoUrl ?? null,
+        gitBranch: body.gitBranch,
+        agentFilePath: body.agentFilePath ?? null,
+        skillsPaths: body.skillsPaths,
+        skillsDirectory: body.skillsDirectory ?? null,
+        githubTokenEncrypted: body.githubToken ? encrypt(body.githubToken) : null,
+        githubTokenCredentialId: body.githubTokenCredentialId ?? null,
+        copilotTokenCredentialId: body.copilotTokenCredentialId ?? null,
+        builtinToolsEnabled: body.builtinToolsEnabled,
+        mcpJsonTemplate: body.mcpJsonTemplate ?? null,
+      })
+      .returning();
+
+    if (body.sourceType === 'database' && body.files.length > 0) {
+      await tx
+        .insert(agentFiles)
+        .values(body.files.map((file) => ({
+          agentId: createdAgent.id,
+          filePath: file.filePath,
+          content: file.content,
+        })));
+    }
+
+    return createdAgent;
+  });
 
   emitEvent({
     eventScope: body.scope === 'workspace' ? 'workspace' : 'user',
-    scopeId: body.scope === 'workspace' ? user.workspaceId : user.userId,
+    scopeId: body.scope === 'workspace' ? workspaceId : user.userId,
     eventName: EVENT_NAMES.AGENT_CREATED,
     eventData: { agentId: agent.id, agentName: agent.name, scope: body.scope },
     actorId: user.userId,
@@ -120,6 +144,7 @@ agentsRouter.post('/', async (c) => {
       agent: {
         ...agent,
         githubTokenEncrypted: undefined,
+        hasInlineGitToken: Boolean(agent.githubTokenEncrypted),
       },
     },
     201,
@@ -133,13 +158,18 @@ agentsRouter.get('/:id', async (c) => {
 
   const agent = await db.query.agents.findFirst({
     where: eq(agents.id, id),
-    columns: { githubTokenEncrypted: false },
   });
 
   if (!agent) return c.json({ error: 'Agent not found' }, 404);
   if (agent.workspaceId !== user.workspaceId) return c.json({ error: 'Forbidden' }, 403);
 
-  return c.json({ agent });
+  return c.json({
+    agent: {
+      ...agent,
+      githubTokenEncrypted: undefined,
+      hasInlineGitToken: Boolean(agent.githubTokenEncrypted),
+    },
+  });
 });
 
 // PUT /:id — update agent
@@ -195,8 +225,8 @@ agentsRouter.put('/:id', async (c) => {
   }
   if (body.githubTokenCredentialId !== undefined) {
     updateData.githubTokenCredentialId = body.githubTokenCredentialId;
-    // Clear inline token when switching to credential reference
-    if (body.githubTokenCredentialId) updateData.githubTokenEncrypted = null;
+    // Explicit Git auth selection always replaces any legacy inline token.
+    updateData.githubTokenEncrypted = null;
   }
   if (body.copilotTokenCredentialId !== undefined) {
     updateData.copilotTokenCredentialId = body.copilotTokenCredentialId;
@@ -216,7 +246,11 @@ agentsRouter.put('/:id', async (c) => {
   });
 
   return c.json({
-    agent: { ...updated, githubTokenEncrypted: undefined },
+    agent: {
+      ...updated,
+      githubTokenEncrypted: undefined,
+      hasInlineGitToken: Boolean(updated.githubTokenEncrypted),
+    },
   });
 });
 

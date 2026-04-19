@@ -1,6 +1,6 @@
 # Admin
 
-Workspace administrators have access to management features for models, users, quotas, and security.
+Workspace administrators have access to management features for models, users, rate limits, and security.
 
 ## Admin Pages
 
@@ -9,7 +9,7 @@ Workspace administrators have access to management features for models, users, q
 | Users | `/{workspace}/admin/users` | List, add, and manage user roles |
 | Models | `/{workspace}/admin/models` | Configure available AI models and credit costs |
 | Auth Providers | `/{workspace}/admin/auth-providers` | Configure authentication providers (Database, LDAP). See [Auth Providers](/concepts/auth-providers) |
-| Quotas | `/{workspace}/admin/quotas` | Set workspace and per-user credit limits |
+| Rate Limits | `/{workspace}/admin/rate-limits` | Set workspace defaults and per-user credit limits |
 | Security | `/{workspace}/admin/security` | Configure credential approval and view access logs. See [AI Security](/concepts/security) |
 | Workspaces | `/{workspace}/workspaces` | Manage workspaces (`super_admin` only) |
 
@@ -33,22 +33,22 @@ Default models created by the seed script:
 | `gpt-5.4` | OpenAI | 1.00 |
 | `gpt-5-mini` | OpenAI | 1.00 |
 
-## Quota System
+## Rate Limit System
 
 ```mermaid
 graph TB
-    WQ[Workspace Quota Settings<br/>daily + monthly limits] -->|default for| UQ[User Quota Settings<br/>per-user overrides]
+    WQ[Workspace Rate Limits<br/>daily + weekly + monthly defaults] -->|default for| UQ[User Rate Limits<br/>per-user overrides]
     UQ -->|checked before| EXEC[Step Execution]
-    EXEC -->|consumed| CU[Credit Usage<br/>per user / model / day]
+    EXEC -->|consumed| CU[Credit Usage<br/>per user / model / day / cost snapshot]
 
     style WQ fill:#FF9800,color:#fff
     style UQ fill:#2196F3,color:#fff
 ```
 
-- **Workspace limits** — Default daily/monthly credit limits for all users
-- **User overrides** — Per-user limits (must be ≤ workspace limits)
-- **Credit tracking** — Tracked per user, per model, per day in `credit_usage` table
-- **Enforcement** — Checked before each step execution; exceeded → step fails, execution halted
+- **Workspace defaults** — Daily, weekly, and monthly credit limits for users who do not override them
+- **User overrides** — Per-user limits that take precedence over workspace defaults
+- **Credit tracking** — Tracked in `credit_usage` with the model credit cost snapshot captured at execution time
+- **Historical stability** — Updating a model's current credit cost does not retroactively change prior usage totals
 
 ## User Management
 

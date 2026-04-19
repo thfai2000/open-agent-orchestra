@@ -7,6 +7,7 @@ import {
   workflowSteps,
   workflows,
   agents,
+  agentVariables,
   userVariables,
   workspaceVariables,
   agentQuotaUsage,
@@ -144,6 +145,69 @@ function resolveStepAllocationTimeoutSeconds(
     ?? workflow.stepAllocationTimeoutSeconds
     ?? DEFAULT_STEP_ALLOCATION_TIMEOUT_SECONDS
   );
+}
+
+interface ResolvedScopedCredential {
+  key: string;
+  valueEncrypted: string;
+  credentialSubType: string | null;
+  scope: 'agent' | 'user' | 'workspace';
+}
+
+async function resolveScopedCredentialById(params: {
+  credentialId: string;
+  agentId: string;
+  userId: string;
+  workspaceId?: string | null;
+}): Promise<ResolvedScopedCredential | null> {
+  const agentCredential = await db.query.agentVariables.findFirst({
+    where: and(eq(agentVariables.id, params.credentialId), eq(agentVariables.agentId, params.agentId)),
+  });
+  if (agentCredential) {
+    return {
+      key: agentCredential.key,
+      valueEncrypted: agentCredential.valueEncrypted,
+      credentialSubType: agentCredential.credentialSubType,
+      scope: 'agent',
+    };
+  }
+
+  const userCredential = await db.query.userVariables.findFirst({
+    where: and(eq(userVariables.id, params.credentialId), eq(userVariables.userId, params.userId)),
+  });
+  if (userCredential) {
+    return {
+      key: userCredential.key,
+      valueEncrypted: userCredential.valueEncrypted,
+      credentialSubType: userCredential.credentialSubType,
+      scope: 'user',
+    };
+  }
+
+  if (params.workspaceId) {
+    const workspaceCredential = await db.query.workspaceVariables.findFirst({
+      where: and(eq(workspaceVariables.id, params.credentialId), eq(workspaceVariables.workspaceId, params.workspaceId)),
+    });
+    if (workspaceCredential) {
+      return {
+        key: workspaceCredential.key,
+        valueEncrypted: workspaceCredential.valueEncrypted,
+        credentialSubType: workspaceCredential.credentialSubType,
+        scope: 'workspace',
+      };
+    }
+  }
+
+  return null;
+}
+
+function ensureSupportedCopilotCredentialSubType(credential: ResolvedScopedCredential): void {
+  const credentialSubType = credential.credentialSubType || 'secret_text';
+  if (credentialSubType !== 'secret_text' && credentialSubType !== 'github_token') {
+    throw new Error(
+      `Copilot authentication does not support credential subtype "${credentialSubType}" for variable ${credential.key}. Use a GitHub Token or Secret Text credential instead.`,
+    );
+  }
 }
 
 async function getStepExecutionRecord(stepExecutionId: string) {
@@ -844,36 +908,38 @@ export async function executeCopilotSession(params: {
     // 1. Prepare agent workspace based on source type
     // Resolve GitHub token: prefer credential reference over inline encrypted token
     let resolvedGithubTokenEncrypted = agent.githubTokenEncrypted;
+    let resolvedGithubCredentialSubType: string | null = null;
     if (agent.githubTokenCredentialId && !resolvedGithubTokenEncrypted) {
-      const credId = agent.githubTokenCredentialId;
-      // Look up in user variables first (scoped to workflow owner), then workspace variables (scoped to workspace)
-      const userCred = await db.query.userVariables.findFirst({
-        where: and(eq(userVariables.id, credId), eq(userVariables.userId, userId)),
+      const gitCredential = await resolveScopedCredentialById({
+        credentialId: agent.githubTokenCredentialId,
+        agentId: agent.id,
+        userId,
+        workspaceId,
       });
-      if (userCred) {
-        resolvedGithubTokenEncrypted = userCred.valueEncrypted;
-      } else if (workspaceId) {
-        const wsCred = await db.query.workspaceVariables.findFirst({
-          where: and(eq(workspaceVariables.id, credId), eq(workspaceVariables.workspaceId, workspaceId)),
-        });
-        if (wsCred) resolvedGithubTokenEncrypted = wsCred.valueEncrypted;
+
+      if (!gitCredential) {
+        throw new Error('Configured Git authentication credential was not found in agent, user, or workspace variables.');
       }
+
+      resolvedGithubTokenEncrypted = gitCredential.valueEncrypted;
+      resolvedGithubCredentialSubType = gitCredential.credentialSubType;
     }
 
     // Resolve Copilot CLI token: per-agent override for GITHUB_TOKEN used by CopilotClient
     if (agent.copilotTokenCredentialId) {
-      const copilotCredId = agent.copilotTokenCredentialId;
-      const userCopilotCred = await db.query.userVariables.findFirst({
-        where: and(eq(userVariables.id, copilotCredId), eq(userVariables.userId, userId)),
+      const copilotCredential = await resolveScopedCredentialById({
+        credentialId: agent.copilotTokenCredentialId,
+        agentId: agent.id,
+        userId,
+        workspaceId,
       });
-      if (userCopilotCred) {
-        copilotTokenOverride = decrypt(userCopilotCred.valueEncrypted);
-      } else if (workspaceId) {
-        const wsCopilotCred = await db.query.workspaceVariables.findFirst({
-          where: and(eq(workspaceVariables.id, copilotCredId), eq(workspaceVariables.workspaceId, workspaceId)),
-        });
-        if (wsCopilotCred) copilotTokenOverride = decrypt(wsCopilotCred.valueEncrypted);
+
+      if (!copilotCredential) {
+        throw new Error('Configured Copilot authentication credential was not found in agent, user, or workspace variables.');
       }
+
+      ensureSupportedCopilotCredentialSubType(copilotCredential);
+      copilotTokenOverride = decrypt(copilotCredential.valueEncrypted);
       if (copilotTokenOverride) {
         logger.info({ agentId: agent.id }, 'Using per-agent Copilot token override');
       }
@@ -888,6 +954,7 @@ export async function executeCopilotSession(params: {
         skillsPaths: agent.skillsPaths ?? [],
         skillsDirectory: agent.skillsDirectory,
         githubTokenEncrypted: resolvedGithubTokenEncrypted,
+        githubCredentialSubType: resolvedGithubCredentialSubType,
       });
 
     // 1.5 Write .env file with variables marked for env injection
@@ -1113,12 +1180,13 @@ export async function executeCopilotSession(params: {
           userId,
           workspaceId,
           modelName: model,
+          creditCostSnapshot: cost,
           creditsConsumed: cost,
           sessionCount: 1,
           date: today,
         })
         .onConflictDoUpdate({
-          target: [creditUsage.userId, creditUsage.modelName, creditUsage.date],
+          target: [creditUsage.userId, creditUsage.modelName, creditUsage.date, creditUsage.creditCostSnapshot],
           set: {
             creditsConsumed: sql`${creditUsage.creditsConsumed}::numeric + ${cost}::numeric`,
             sessionCount: sql`${creditUsage.sessionCount} + 1`,

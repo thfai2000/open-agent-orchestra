@@ -1,385 +1,227 @@
 <template>
-  <div>
+  <div class="space-y-6">
     <Breadcrumb>
       <BreadcrumbList>
-        <BreadcrumbItem><BreadcrumbLink href="/">Home</BreadcrumbLink></BreadcrumbItem>
+        <BreadcrumbItem><BreadcrumbLink :href="`/${ws}`">Home</BreadcrumbLink></BreadcrumbItem>
         <BreadcrumbSeparator />
         <BreadcrumbItem><BreadcrumbPage>Variables</BreadcrumbPage></BreadcrumbItem>
       </BreadcrumbList>
     </Breadcrumb>
 
-    <div class="flex items-center justify-between mt-4 mb-6">
+    <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between mt-4">
       <div>
         <h1 class="text-3xl font-bold">Variables</h1>
-        <p class="text-muted-foreground mt-1">Encrypted key-value pairs. <strong>Credentials</strong> are injected into Copilot sessions. <strong>Properties</strong> can be used as tokens in prompts.</p>
+        <p class="text-muted-foreground text-sm mt-1">Manage credential and property variables with breadcrumb-based create and edit flows. Priority order is Agent &gt; User &gt; Workspace.</p>
       </div>
-      <Button @click="showCreate = true">+ Add Variable</Button>
+      <NuxtLink v-if="canManageVariables" :to="`/${ws}/variables/new`">
+        <Button>+ Create Variable</Button>
+      </NuxtLink>
     </div>
 
-    <!-- Property Hint -->
-    <div class="mb-6 p-4 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
-      <p class="text-sm text-blue-700 dark:text-blue-300">
-        <strong>Tip:</strong> Properties can be referenced in agent prompt templates using <code class="bg-blue-100 dark:bg-blue-900 px-1.5 py-0.5 rounded text-xs font-mono" v-text="'{{ Properties.KEY_NAME }}'"></code>. Variables flagged as <em>"Inject as Env Variable"</em> will be written to the agent's <code class="bg-blue-100 dark:bg-blue-900 px-1.5 py-0.5 rounded text-xs font-mono">.env</code> file during execution.
+    <div class="rounded-lg border border-blue-200 bg-blue-50/60 p-4 text-sm text-blue-700 dark:border-blue-800 dark:bg-blue-950/20 dark:text-blue-300">
+      <p>
+        <strong>Tip:</strong> Properties can be referenced in prompts with
+        <code class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-mono dark:bg-blue-900" v-text="'{{ Properties.KEY_NAME }}'" />.
+        Variables marked as environment variables are written into the agent execution environment.
       </p>
     </div>
 
-    <!-- Create Form Dialog -->
-    <Dialog v-model:open="showCreate">
-      <DialogContent class="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Add New Variable</DialogTitle>
-          <DialogDescription>Variables are encrypted at rest. Priority: Agent &gt; User &gt; Workspace (more specific wins).</DialogDescription>
-        </DialogHeader>
-        <div v-if="formError" class="p-3 rounded-md bg-destructive/10 text-destructive text-sm">{{ formError }}</div>
-        <form @submit.prevent="handleCreate" class="space-y-4">
-          <div class="grid grid-cols-2 gap-4">
-            <div class="space-y-2">
-              <Label>Scope *</Label>
-              <select v-model="form.scope" class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                <option value="user">User-level (all workflows)</option>
-                <option value="agent">Agent-level (specific agent)</option>
-                <option v-if="isAdmin" value="workspace">Workspace-level (all users)</option>
-              </select>
-            </div>
-            <div class="space-y-2">
-              <Label>Type *</Label>
-              <select v-model="form.variableType" class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                <option value="credential">Credential</option>
-                <option value="property">Property</option>
-              </select>
-            </div>
-          </div>
-          <!-- Credential Sub-Type -->
-          <div v-if="form.variableType === 'credential'" class="space-y-2">
-            <Label>Credential Type *</Label>
-            <select v-model="form.credentialSubType" class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-              <option value="secret_text">Secret Text</option>
-              <option value="github_token">GitHub Token (PAT)</option>
-              <option value="github_app">GitHub App Credential</option>
-              <option value="user_account">User Account</option>
-              <option value="private_key">Private Key (SSH/PEM)</option>
-              <option value="certificate">Certificate</option>
-            </select>
-            <p class="text-xs text-muted-foreground">
-              {{ CREDENTIAL_SUB_TYPE_HINTS[form.credentialSubType] || '' }}
-            </p>
-          </div>
-          <div v-if="form.scope === 'agent'" class="space-y-2">
-            <Label>Agent *</Label>
-            <select v-model="form.agentId" :required="form.scope === 'agent'" class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-              <option value="" disabled>Select an agent…</option>
-              <option v-for="a in agents" :key="a.id" :value="a.id">{{ a.name }}</option>
-            </select>
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div class="space-y-2">
-              <Label>Key (UPPER_SNAKE_CASE) *</Label>
-              <Input v-model="form.key" required pattern="^[A-Z_][A-Z0-9_]*$" class="font-mono" placeholder="API_KEY" />
-            </div>
-          </div>
-
-          <!-- Dynamic Value Fields based on credential sub-type -->
-          <template v-if="form.variableType === 'credential' && form.credentialSubType === 'github_app'">
-            <div class="grid grid-cols-2 gap-4">
-              <div class="space-y-2">
-                <Label>App ID *</Label>
-                <Input v-model="subFields.appId" required placeholder="123456" />
-              </div>
-              <div class="space-y-2">
-                <Label>Installation ID *</Label>
-                <Input v-model="subFields.installationId" required placeholder="789012" />
-              </div>
-            </div>
-            <div class="space-y-2">
-              <Label>Private Key (PEM) *</Label>
-              <Textarea v-model="subFields.privateKey" required rows="4" class="font-mono text-xs" placeholder="-----BEGIN RSA PRIVATE KEY-----" />
-            </div>
-          </template>
-          <template v-else-if="form.variableType === 'credential' && form.credentialSubType === 'user_account'">
-            <div class="grid grid-cols-2 gap-4">
-              <div class="space-y-2">
-                <Label>Username *</Label>
-                <Input v-model="subFields.username" required placeholder="user@example.com" />
-              </div>
-              <div class="space-y-2">
-                <Label>Password / Secret *</Label>
-                <Input v-model="subFields.password" type="password" required placeholder="Secret" />
-              </div>
-            </div>
-          </template>
-          <template v-else-if="form.variableType === 'credential' && form.credentialSubType === 'private_key'">
-            <div class="space-y-2">
-              <Label>Private Key (PEM/SSH) *</Label>
-              <Textarea v-model="subFields.key" required rows="5" class="font-mono text-xs" placeholder="-----BEGIN PRIVATE KEY-----" />
-            </div>
-            <div class="space-y-2">
-              <Label>Passphrase (optional)</Label>
-              <Input v-model="subFields.passphrase" type="password" placeholder="Passphrase if key is encrypted" />
-            </div>
-          </template>
-          <template v-else-if="form.variableType === 'credential' && form.credentialSubType === 'certificate'">
-            <div class="space-y-2">
-              <Label>Certificate (PEM) *</Label>
-              <Textarea v-model="subFields.certificate" required rows="4" class="font-mono text-xs" placeholder="-----BEGIN CERTIFICATE-----" />
-            </div>
-            <div class="space-y-2">
-              <Label>Private Key (optional)</Label>
-              <Textarea v-model="subFields.key" rows="4" class="font-mono text-xs" placeholder="-----BEGIN PRIVATE KEY-----" />
-            </div>
-            <div class="space-y-2">
-              <Label>Passphrase (optional)</Label>
-              <Input v-model="subFields.passphrase" type="password" placeholder="Passphrase" />
-            </div>
-          </template>
-          <template v-else>
-            <!-- secret_text, github_token, or property -->
-            <div class="space-y-2">
-              <Label>Value *</Label>
-              <Input v-model="form.value" type="password" required :placeholder="form.credentialSubType === 'github_token' ? 'ghp_xxxxxxxxxxxx' : 'Secret value (encrypted at rest)'" />
-            </div>
-          </template>
-          <div class="space-y-2">
-            <Label>Description</Label>
-            <Input v-model="form.description" placeholder="What is this variable for?" />
-          </div>
-          <div class="flex items-center gap-2">
-            <Switch :checked="form.injectAsEnvVariable" @update:checked="form.injectAsEnvVariable = $event" />
-            <Label class="text-sm">Inject as environment variable in agent's .env file</Label>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" type="button" @click="showCreate = false">Cancel</Button>
-            <Button type="submit" :disabled="submitting">{{ submitting ? 'Saving…' : 'Save Variable' }}</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-
-    <!-- Workspace-level Variables (admin only) -->
-    <Card v-if="isAdmin" class="mb-6">
+    <Card v-if="isAdmin">
       <CardHeader>
         <CardTitle>Workspace Variables</CardTitle>
-        <CardDescription>Available to all users in this workspace. Lowest priority — overridden by user &amp; agent variables.</CardDescription>
+        <CardDescription>Shared defaults for everyone in the workspace. User and agent variables override these entries when keys overlap.</CardDescription>
       </CardHeader>
       <CardContent>
-        <div class="space-y-2">
-          <div v-for="v in workspaceVariables" :key="v.id"
-            class="p-4 rounded-lg border border-border flex items-center justify-between">
-            <div class="flex items-center gap-3">
-              <span class="font-mono font-semibold">{{ v.key }}</span>
-              <Badge :variant="v.variableType === 'property' ? 'outline' : 'secondary'">{{ v.variableType }}</Badge>
-              <Badge v-if="v.variableType === 'credential' && v.credentialSubType && v.credentialSubType !== 'secret_text'" variant="outline" class="text-xs">{{ formatSubType(v.credentialSubType) }}</Badge>
-              <Badge v-if="v.injectAsEnvVariable" variant="outline" class="text-xs">env</Badge>
-              <span v-if="v.description" class="text-xs text-muted-foreground">{{ v.description }}</span>
+        <div v-if="workspaceVariables.length" class="space-y-3">
+          <div
+            v-for="variable in workspaceVariables"
+            :key="variable.id"
+            class="flex flex-col gap-4 rounded-lg border border-border p-4 lg:flex-row lg:items-start lg:justify-between"
+          >
+            <div class="space-y-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="font-mono font-semibold">{{ variable.key }}</span>
+                <Badge :variant="variable.variableType === 'property' ? 'outline' : 'secondary'">{{ formatVariableType(variable.variableType) }}</Badge>
+                <Badge v-if="variable.variableType === 'credential' && variable.credentialSubType && variable.credentialSubType !== 'secret_text'" variant="outline">{{ formatCredentialSubType(variable.credentialSubType) }}</Badge>
+                <Badge v-if="variable.injectAsEnvVariable" variant="outline">Environment</Badge>
+              </div>
+              <p v-if="variable.description" class="text-sm text-muted-foreground">{{ variable.description }}</p>
+              <p class="text-xs text-muted-foreground">Updated {{ formatDate(variable.updatedAt) }}</p>
             </div>
-            <div class="flex items-center gap-3">
-              <span class="text-xs text-muted-foreground font-mono">••••••••</span>
-              <Button variant="ghost" size="sm" class="text-destructive text-xs h-7" @click="handleDelete(v.id, v.key, 'workspace')">Delete</Button>
+            <div class="flex items-center gap-2">
+              <NuxtLink :to="variableDetailLocation(variable.id, 'workspace')">
+                <Button variant="outline" size="sm">Edit</Button>
+              </NuxtLink>
+              <Button v-if="canManageVariables" variant="ghost" size="sm" class="text-destructive" @click="handleDelete(variable.id, variable.key, 'workspace')">Delete</Button>
             </div>
           </div>
-          <p v-if="workspaceVariables.length === 0" class="text-muted-foreground text-sm">No workspace-level variables stored.</p>
         </div>
+        <div v-else class="py-10 text-center text-sm text-muted-foreground">No workspace-level variables stored yet.</div>
       </CardContent>
     </Card>
 
-    <!-- User-level Variables -->
-    <Card class="mb-6">
+    <Card>
       <CardHeader>
         <CardTitle>User Variables</CardTitle>
-        <CardDescription>Available to all workflow steps. Agent-level variables with the same key take priority.</CardDescription>
+        <CardDescription>Available across your workflow runs. Agent-scoped values with the same key win during execution.</CardDescription>
       </CardHeader>
       <CardContent>
-        <div class="space-y-2">
-          <div v-for="v in userVariables" :key="v.id"
-            class="p-4 rounded-lg border border-border flex items-center justify-between">
-            <div class="flex items-center gap-3">
-              <span class="font-mono font-semibold">{{ v.key }}</span>
-              <Badge :variant="v.variableType === 'property' ? 'outline' : 'secondary'">{{ v.variableType }}</Badge>
-              <Badge v-if="v.variableType === 'credential' && v.credentialSubType && v.credentialSubType !== 'secret_text'" variant="outline" class="text-xs">{{ formatSubType(v.credentialSubType) }}</Badge>
-              <Badge v-if="v.injectAsEnvVariable" variant="outline" class="text-xs">env</Badge>
-              <span v-if="v.description" class="text-xs text-muted-foreground">{{ v.description }}</span>
+        <div v-if="userVariables.length" class="space-y-3">
+          <div
+            v-for="variable in userVariables"
+            :key="variable.id"
+            class="flex flex-col gap-4 rounded-lg border border-border p-4 lg:flex-row lg:items-start lg:justify-between"
+          >
+            <div class="space-y-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="font-mono font-semibold">{{ variable.key }}</span>
+                <Badge :variant="variable.variableType === 'property' ? 'outline' : 'secondary'">{{ formatVariableType(variable.variableType) }}</Badge>
+                <Badge v-if="variable.variableType === 'credential' && variable.credentialSubType && variable.credentialSubType !== 'secret_text'" variant="outline">{{ formatCredentialSubType(variable.credentialSubType) }}</Badge>
+                <Badge v-if="variable.injectAsEnvVariable" variant="outline">Environment</Badge>
+              </div>
+              <p v-if="variable.description" class="text-sm text-muted-foreground">{{ variable.description }}</p>
+              <p class="text-xs text-muted-foreground">Updated {{ formatDate(variable.updatedAt) }}</p>
             </div>
-            <div class="flex items-center gap-3">
-              <span class="text-xs text-muted-foreground font-mono">••••••••</span>
-              <Button variant="ghost" size="sm" class="text-destructive text-xs h-7" @click="handleDelete(v.id, v.key, 'user')">Delete</Button>
+            <div class="flex items-center gap-2">
+              <NuxtLink :to="variableDetailLocation(variable.id, 'user')">
+                <Button variant="outline" size="sm">Edit</Button>
+              </NuxtLink>
+              <Button v-if="canManageVariables" variant="ghost" size="sm" class="text-destructive" @click="handleDelete(variable.id, variable.key, 'user')">Delete</Button>
             </div>
           </div>
-          <p v-if="userVariables.length === 0" class="text-muted-foreground text-sm">No user-level variables stored.</p>
         </div>
+        <div v-else class="py-10 text-center text-sm text-muted-foreground">No user-level variables stored yet.</div>
       </CardContent>
     </Card>
 
-    <!-- Agent-level Variables -->
     <Card>
       <CardHeader>
         <CardTitle>Agent Variables</CardTitle>
-        <CardDescription>Scoped to a specific agent. Override user-level variables with the same key during execution.</CardDescription>
+        <CardDescription>Scoped to a single agent. These values override user and workspace variables during that agent's execution.</CardDescription>
       </CardHeader>
       <CardContent>
-        <div v-for="a in agents" :key="a.id">
-          <div v-if="varsByAgent[a.id]?.length" class="mb-4">
-            <h3 class="text-sm font-semibold mb-2 flex items-center gap-2">
-              {{ a.name }}
-              <Badge variant="secondary" class="text-xs">{{ varsByAgent[a.id].length }}</Badge>
-            </h3>
-            <div class="space-y-2">
-              <div v-for="v in varsByAgent[a.id]" :key="v.id"
-                class="p-4 rounded-lg border border-border flex items-center justify-between">
-                <div class="flex items-center gap-3">
-                  <span class="font-mono font-semibold">{{ v.key }}</span>
-                  <Badge :variant="v.variableType === 'property' ? 'outline' : 'secondary'">{{ v.variableType }}</Badge>
-                  <Badge v-if="v.variableType === 'credential' && v.credentialSubType && v.credentialSubType !== 'secret_text'" variant="outline" class="text-xs">{{ formatSubType(v.credentialSubType) }}</Badge>
-                  <Badge v-if="v.injectAsEnvVariable" variant="outline" class="text-xs">env</Badge>
-                  <span v-if="v.description" class="text-xs text-muted-foreground">{{ v.description }}</span>
+        <div v-if="allAgentVariables.length" class="space-y-6">
+          <div v-for="agent in agents" :key="agent.id">
+            <div v-if="varsByAgent[agent.id]?.length" class="space-y-3">
+              <div class="flex items-center gap-2">
+                <h2 class="text-sm font-semibold">{{ agent.name }}</h2>
+                <Badge variant="secondary">{{ varsByAgent[agent.id].length }}</Badge>
+              </div>
+              <div
+                v-for="variable in varsByAgent[agent.id]"
+                :key="variable.id"
+                class="flex flex-col gap-4 rounded-lg border border-border p-4 lg:flex-row lg:items-start lg:justify-between"
+              >
+                <div class="space-y-2">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="font-mono font-semibold">{{ variable.key }}</span>
+                    <Badge :variant="variable.variableType === 'property' ? 'outline' : 'secondary'">{{ formatVariableType(variable.variableType) }}</Badge>
+                    <Badge v-if="variable.variableType === 'credential' && variable.credentialSubType && variable.credentialSubType !== 'secret_text'" variant="outline">{{ formatCredentialSubType(variable.credentialSubType) }}</Badge>
+                    <Badge v-if="variable.injectAsEnvVariable" variant="outline">Environment</Badge>
+                  </div>
+                  <p v-if="variable.description" class="text-sm text-muted-foreground">{{ variable.description }}</p>
+                  <p class="text-xs text-muted-foreground">Updated {{ formatDate(variable.updatedAt) }}</p>
                 </div>
-                <div class="flex items-center gap-3">
-                  <span class="text-xs text-muted-foreground font-mono">••••••••</span>
-                  <Button variant="ghost" size="sm" class="text-destructive text-xs h-7" @click="handleDelete(v.id, v.key, 'agent')">Delete</Button>
+                <div class="flex items-center gap-2">
+                  <NuxtLink :to="variableDetailLocation(variable.id, 'agent')">
+                    <Button variant="outline" size="sm">Edit</Button>
+                  </NuxtLink>
+                  <Button v-if="canManageVariables" variant="ghost" size="sm" class="text-destructive" @click="handleDelete(variable.id, variable.key, 'agent')">Delete</Button>
                 </div>
               </div>
             </div>
           </div>
         </div>
-        <p v-if="allAgentVariables.length === 0" class="text-muted-foreground text-sm">No agent-level variables stored.</p>
+        <div v-else class="py-10 text-center text-sm text-muted-foreground">No agent-level variables stored yet.</div>
       </CardContent>
     </Card>
   </div>
 </template>
 
 <script setup lang="ts">
+import { useVariableEditor, type VariableScope, type VariableSummary, type VariableType } from '~/composables/useVariableEditor';
+
+interface AgentSummary {
+  id: string;
+  name: string;
+}
+
+type VariableRecord = VariableSummary & { agentId?: string | null };
+
 const { authHeaders, user } = useAuth();
+const route = useRoute();
 const headers = authHeaders();
+const ws = computed(() => (route.params.workspace as string) || 'default');
 const isAdmin = computed(() => user.value?.role === 'workspace_admin' || user.value?.role === 'super_admin');
+const canManageVariables = computed(() => user.value?.role !== 'view_user');
 
-const showCreate = ref(false);
-const submitting = ref(false);
-const formError = ref('');
-const form = reactive({ scope: 'user', agentId: '', key: '', value: '', description: '', variableType: 'credential' as string, credentialSubType: 'secret_text' as string, injectAsEnvVariable: false });
-const subFields = reactive({ appId: '', installationId: '', privateKey: '', username: '', password: '', key: '', passphrase: '', certificate: '' });
-
-const CREDENTIAL_SUB_TYPE_HINTS: Record<string, string> = {
-  secret_text: 'A generic secret string (API key, token, etc.)',
-  github_token: 'GitHub Personal Access Token (classic or fine-grained)',
-  github_app: 'GitHub App credentials with App ID, Installation ID and Private Key',
-  user_account: 'Username and password/secret pair',
-  private_key: 'SSH or PEM private key, optionally with passphrase',
-  certificate: 'X.509 certificate with optional private key and passphrase',
-};
-
-function formatSubType(subType: string): string {
-  const labels: Record<string, string> = {
-    secret_text: 'Secret Text',
-    github_token: 'GitHub Token',
-    github_app: 'GitHub App',
-    user_account: 'User Account',
-    private_key: 'Private Key',
-    certificate: 'Certificate',
-  };
-  return labels[subType] || subType;
-}
-
-/** Serialize sub-fields into a JSON string for multi-attribute credential types */
-function buildCredentialValue(): string {
-  const st = form.credentialSubType;
-  if (st === 'github_app') {
-    return JSON.stringify({ appId: subFields.appId, installationId: subFields.installationId, privateKey: subFields.privateKey });
-  }
-  if (st === 'user_account') {
-    return JSON.stringify({ username: subFields.username, password: subFields.password });
-  }
-  if (st === 'private_key') {
-    const obj: Record<string, string> = { key: subFields.key };
-    if (subFields.passphrase) obj.passphrase = subFields.passphrase;
-    return JSON.stringify(obj);
-  }
-  if (st === 'certificate') {
-    const obj: Record<string, string> = { certificate: subFields.certificate };
-    if (subFields.key) obj.key = subFields.key;
-    if (subFields.passphrase) obj.passphrase = subFields.passphrase;
-    return JSON.stringify(obj);
-  }
-  // secret_text, github_token, property — use form.value directly
-  return form.value;
-}
-
-function resetSubFields() {
-  Object.assign(subFields, { appId: '', installationId: '', privateKey: '', username: '', password: '', key: '', passphrase: '', certificate: '' });
-}
+const { formatCredentialSubType } = useVariableEditor();
 
 const { data: agentsData } = await useFetch('/api/agents', { headers });
-const agents = computed(() => agentsData.value?.agents ?? []);
+const agents = computed<AgentSummary[]>(() => (agentsData.value?.agents ?? []) as AgentSummary[]);
 
-const userVariables = ref<any[]>([]);
-const allAgentVariables = ref<any[]>([]);
-const workspaceVariables = ref<any[]>([]);
-const varsByAgent = computed(() => {
-  const map: Record<string, any[]> = {};
-  for (const v of allAgentVariables.value) {
-    if (!map[v.agentId]) map[v.agentId] = [];
-    map[v.agentId].push(v);
+const userVariables = ref<VariableRecord[]>([]);
+const workspaceVariables = ref<VariableRecord[]>([]);
+const allAgentVariables = ref<VariableRecord[]>([]);
+
+const varsByAgent = computed<Record<string, VariableRecord[]>>(() => {
+  const grouped: Record<string, VariableRecord[]> = {};
+
+  for (const variable of allAgentVariables.value) {
+    if (!variable.agentId) continue;
+    if (!grouped[variable.agentId]) grouped[variable.agentId] = [];
+    grouped[variable.agentId].push(variable);
   }
-  return map;
+
+  return grouped;
 });
 
+function formatVariableType(variableType: VariableType): string {
+  return variableType === 'credential' ? 'Credential' : 'Property';
+}
+
+function formatDate(dateValue?: string): string {
+  if (!dateValue) return 'just now';
+  return new Date(dateValue).toLocaleString();
+}
+
+function variableDetailLocation(id: string, scope: VariableScope) {
+  return {
+    path: `/${ws.value}/variables/${id}`,
+    query: { scope },
+  };
+}
+
 async function fetchAllVariables() {
-  try {
-    const data = await $fetch<{ variables: any[] }>('/api/variables?scope=user', { headers });
-    userVariables.value = data.variables || [];
-  } catch {
-    userVariables.value = [];
-  }
+  const [userResult, workspaceResult, agentResults] = await Promise.all([
+    $fetch<{ variables: VariableRecord[] }>('/api/variables?scope=user', { headers }).catch(() => ({ variables: [] })),
+    isAdmin.value
+      ? $fetch<{ variables: VariableRecord[] }>('/api/variables?scope=workspace', { headers }).catch(() => ({ variables: [] }))
+      : Promise.resolve({ variables: [] as VariableRecord[] }),
+    Promise.all(
+      agents.value.map(async (agent) => {
+        const result = await $fetch<{ variables: VariableRecord[] }>(`/api/variables?agentId=${agent.id}`, { headers }).catch(() => ({ variables: [] as VariableRecord[] }));
+        return result.variables.map((variable) => ({ ...variable, agentId: agent.id }));
+      }),
+    ),
+  ]);
 
-  // Fetch workspace variables
-  if (isAdmin.value) {
-    try {
-      const data = await $fetch<{ variables: any[] }>('/api/variables?scope=workspace', { headers });
-      workspaceVariables.value = data.variables || [];
-    } catch {
-      workspaceVariables.value = [];
-    }
-  }
-
-  const results: any[] = [];
-  for (const a of agents.value) {
-    try {
-      const data = await $fetch<{ variables: any[] }>(`/api/variables?agentId=${a.id}`, { headers });
-      results.push(...(data.variables || []));
-    } catch { /* skip */ }
-  }
-  allAgentVariables.value = results;
+  userVariables.value = userResult.variables;
+  workspaceVariables.value = workspaceResult.variables;
+  allAgentVariables.value = agentResults.flat();
 }
 
 await fetchAllVariables();
 
-async function handleCreate() {
-  formError.value = '';
-  submitting.value = true;
-  try {
-    const body: Record<string, unknown> = {
-      key: form.key,
-      value: form.value,
-      description: form.description || undefined,
-      variableType: form.variableType,
-      credentialSubType: form.variableType === 'credential' ? form.credentialSubType : 'secret_text',
-      injectAsEnvVariable: form.injectAsEnvVariable,
-      scope: form.scope,
-    };
-    if (form.scope === 'agent') body.agentId = form.agentId;
-
-    await $fetch('/api/variables', { method: 'POST', headers, body });
-    showCreate.value = false;
-    Object.assign(form, { scope: 'user', agentId: '', key: '', value: '', description: '', variableType: 'credential', credentialSubType: 'secret_text', injectAsEnvVariable: false });    resetSubFields();    await fetchAllVariables();
-  } catch (e: any) {
-    formError.value = e?.data?.error || 'Failed to save variable';
-  } finally {
-    submitting.value = false;
-  }
-}
-
-async function handleDelete(id: string, key: string, scope: string) {
+async function handleDelete(id: string, key: string, scope: VariableScope) {
   if (!confirm(`Delete variable "${key}"?`)) return;
+
   try {
-    const query = scope !== 'agent' ? `?scope=${scope}` : '';
-    await $fetch(`/api/variables/${id}${query}`, { method: 'DELETE', headers });
+    const query = scope === 'agent' ? '' : `?scope=${scope}`;
+    await $fetch(`/api/variables/${id}${query}`, {
+      method: 'DELETE',
+      headers,
+    });
     await fetchAllVariables();
   } catch {
     alert('Failed to delete variable');

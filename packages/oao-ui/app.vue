@@ -127,7 +127,7 @@ const mainNav = computed(() => [
   { to: `/${ws.value}/instances`, icon: '🖥️', label: 'Instances' },
   { to: `/${ws.value}/events`, icon: '📡', label: 'Events' },
   { to: `/${ws.value}/variables`, icon: '🔑', label: 'Variables' },
-  { to: `/${ws.value}/admin/quotas`, icon: '📊', label: 'Quotas' },
+  { to: `/${ws.value}/admin/rate-limits`, icon: '📊', label: 'Rate Limits' },
 ]);
 
 const adminNav = computed(() => [

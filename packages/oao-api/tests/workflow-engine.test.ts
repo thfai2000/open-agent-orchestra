@@ -30,9 +30,9 @@ const mockDb = {
     workflowExecutions: { findFirst: vi.fn() },
     stepExecutions: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn() },
     agents: { findFirst: vi.fn() },
-    agentVariables: { findMany: vi.fn().mockResolvedValue([]) },
-    userVariables: { findMany: vi.fn().mockResolvedValue([]) },
-    workspaceVariables: { findMany: vi.fn().mockResolvedValue([]) },
+    agentVariables: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+    userVariables: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+    workspaceVariables: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
     mcpServerConfigs: { findMany: vi.fn().mockResolvedValue([]) },
     models: { findFirst: vi.fn() },
   },
@@ -139,6 +139,9 @@ beforeEach(() => {
   mockRedis.set.mockResolvedValue('OK');
   mockRedis.get.mockResolvedValue(null);
   mockRedis.eval.mockResolvedValue(1);
+  mockDb.query.agentVariables.findFirst.mockResolvedValue(null);
+  mockDb.query.userVariables.findFirst.mockResolvedValue(null);
+  mockDb.query.workspaceVariables.findFirst.mockResolvedValue(null);
   mockCreateAgentPod.mockResolvedValue('oao-agent-step-001');
   mockWaitForPodCompletion.mockResolvedValue('Succeeded');
   mockDeleteAgentPod.mockResolvedValue(undefined);
@@ -327,6 +330,60 @@ describe('Session lock', () => {
     ).rejects.toThrow('clone failed');
 
     expect(mockRedis.eval).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves Git authentication credentials from agent variables and passes the subtype to workspace preparation', async () => {
+    const { executeCopilotSession } = await import('../src/services/workflow-engine.js');
+
+    mockDb.query.agentVariables.findFirst.mockResolvedValueOnce({
+      id: 'git-cred-001',
+      key: 'GIT_APP_AUTH',
+      valueEncrypted: 'encrypted-github-app-credential',
+      credentialSubType: 'github_app',
+    });
+
+    await executeCopilotSession({
+      agent: {
+        id: 'agent-001',
+        name: 'Test Agent',
+        userId: 'user-001',
+        sourceType: 'github_repo',
+        gitRepoUrl: 'https://github.com/example/repo',
+        gitBranch: 'main',
+        agentFilePath: '.github/agents/test.md',
+        skillsPaths: [],
+        skillsDirectory: null,
+        githubTokenEncrypted: null,
+        githubTokenCredentialId: 'git-cred-001',
+        copilotTokenCredentialId: null,
+        builtinToolsEnabled: [],
+        mcpJsonTemplate: null,
+      } as any,
+      step: {
+        id: 'step-001',
+        name: 'Step 1',
+        promptTemplate: 'Test prompt',
+        reasoningEffort: null,
+        model: null,
+        timeoutSeconds: 60,
+      } as any,
+      stepExecutionId: 'step-exec-001',
+      resolvedPrompt: 'Test prompt',
+      precedentOutput: '',
+      credentials: new Map(),
+      properties: new Map(),
+      envVariables: new Map(),
+      workerRuntime: 'static',
+      workflowId: 'wf-001',
+      workspaceId: 'ws-001',
+      executionId: 'exec-001',
+      userId: 'user-001',
+    });
+
+    expect(mockPrepareAgentWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+      githubTokenEncrypted: 'encrypted-github-app-credential',
+      githubCredentialSubType: 'github_app',
+    }));
   });
 
 });

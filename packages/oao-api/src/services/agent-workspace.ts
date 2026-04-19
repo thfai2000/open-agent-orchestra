@@ -24,6 +24,121 @@ export interface AgentWorkspace {
   cleanup: () => Promise<void>;
 }
 
+interface GitCloneAuth {
+  username: string;
+  password: string;
+}
+
+function normalizeMultilineSecret(value: string): string {
+  return value.includes('\\n') ? value.replace(/\\n/g, '\n') : value;
+}
+
+function parseStructuredCredential(rawValue: string, credentialSubType: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(rawValue) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Credential payload must be a JSON object');
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed).map(([key, value]) => [key, typeof value === 'string' ? value : String(value ?? '')]),
+    );
+  } catch (error) {
+    throw new Error(
+      `Git credential subtype "${credentialSubType}" requires a structured JSON value. ${error instanceof Error ? error.message : 'Invalid JSON payload.'}`,
+      { cause: error },
+    );
+  }
+}
+
+async function createGitHubAppInstallationAuth(rawValue: string): Promise<GitCloneAuth> {
+  const credential = parseStructuredCredential(rawValue, 'github_app');
+  const appId = credential.appId?.trim();
+  const installationId = credential.installationId?.trim();
+  const privateKey = credential.privateKey ? normalizeMultilineSecret(credential.privateKey) : '';
+
+  if (!appId || !installationId || !privateKey) {
+    throw new Error('GitHub App credentials require appId, installationId, and privateKey.');
+  }
+
+  const jose = await import('jose');
+  const signingKey = await jose.importPKCS8(privateKey, 'RS256');
+  const now = Math.floor(Date.now() / 1000);
+  const jwt = await new jose.SignJWT({})
+    .setProtectedHeader({ alg: 'RS256' })
+    .setIssuedAt(now - 60)
+    .setExpirationTime(now + 9 * 60)
+    .setIssuer(appId)
+    .sign(signingKey);
+
+  const response = await fetch(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'open-agent-orchestra',
+    },
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(
+      `Failed to create a GitHub App installation token (${response.status}). ${errorBody || 'GitHub API request failed.'}`,
+    );
+  }
+
+  const payload = await response.json() as { token?: string };
+  if (!payload.token) {
+    throw new Error('GitHub App token response did not include an installation token.');
+  }
+
+  return {
+    username: 'x-access-token',
+    password: payload.token,
+  };
+}
+
+async function resolveGitCloneAuth(opts: {
+  gitRepoUrl: string;
+  githubTokenEncrypted?: string | null;
+  githubCredentialSubType?: string | null;
+}): Promise<GitCloneAuth | null> {
+  if (!opts.githubTokenEncrypted) return null;
+
+  const secret = decrypt(opts.githubTokenEncrypted);
+  const credentialSubType = opts.githubCredentialSubType || 'secret_text';
+  const defaultTokenUsername = opts.gitRepoUrl.includes('github.com') ? 'x-access-token' : 'git';
+
+  switch (credentialSubType) {
+    case 'secret_text':
+    case 'github_token':
+      return {
+        username: defaultTokenUsername,
+        password: secret,
+      };
+    case 'github_app':
+      return createGitHubAppInstallationAuth(secret);
+    case 'user_account': {
+      const credential = parseStructuredCredential(secret, 'user_account');
+      if (!credential.username?.trim() || !credential.password) {
+        throw new Error('User account credentials require both username and password.');
+      }
+
+      return {
+        username: credential.username.trim(),
+        password: credential.password,
+      };
+    }
+    case 'private_key':
+    case 'certificate':
+      throw new Error(
+        `Git credential subtype "${credentialSubType}" is not supported for HTTPS repository cloning. Use GitHub Token, GitHub App, User Account, or Secret Text instead.`,
+      );
+    default:
+      throw new Error(`Unsupported Git credential subtype "${credentialSubType}".`);
+  }
+}
+
 /**
  * Clone an agent's Git repo into a temporary directory, read agent.json + agent.md + skills.
  * Returns an AgentWorkspace with the parsed content and a cleanup function.
@@ -35,6 +150,7 @@ export async function prepareAgentWorkspace(opts: {
   skillsPaths: string[];
   skillsDirectory?: string | null;
   githubTokenEncrypted?: string | null;
+  githubCredentialSubType?: string | null;
 }): Promise<AgentWorkspace> {
   const workdir = await mkdtemp(join(tmpdir(), 'agent-workspace-'));
 
@@ -52,15 +168,31 @@ export async function prepareAgentWorkspace(opts: {
     const cloneUrl = opts.gitRepoUrl;
     const git: SimpleGit = simpleGit();
 
-    if (opts.githubTokenEncrypted) {
-      const token = decrypt(opts.githubTokenEncrypted);
-      // Use GIT_ASKPASS to provide credentials securely without embedding in URL
+    const gitCloneAuth = await resolveGitCloneAuth({
+      gitRepoUrl: opts.gitRepoUrl,
+      githubTokenEncrypted: opts.githubTokenEncrypted,
+      githubCredentialSubType: opts.githubCredentialSubType,
+    });
+
+    if (gitCloneAuth) {
+      // Use GIT_ASKPASS to provide credentials securely without embedding secrets in the repo URL.
       const { writeFile, chmod } = await import('node:fs/promises');
       const askpassPath = join(workdir, '.git-askpass.sh');
-      await writeFile(askpassPath, `#!/bin/sh\necho "${token.replace(/"/g, '\\"')}"`, { mode: 0o700 });
+      await writeFile(
+        askpassPath,
+        `#!/bin/sh
+case "$1" in
+  Username*|*Username*|*username*) printf '%s\\n' "$GIT_AUTH_USERNAME" ;;
+  *) printf '%s\\n' "$GIT_AUTH_PASSWORD" ;;
+esac
+`,
+        { mode: 0o700 },
+      );
       await chmod(askpassPath, 0o700);
       git.env('GIT_ASKPASS', askpassPath);
       git.env('GIT_TERMINAL_PROMPT', '0');
+      git.env('GIT_AUTH_USERNAME', gitCloneAuth.username);
+      git.env('GIT_AUTH_PASSWORD', gitCloneAuth.password);
     }
 
     logger.info({ repo: opts.gitRepoUrl, branch: opts.gitBranch }, 'Cloning agent repo');

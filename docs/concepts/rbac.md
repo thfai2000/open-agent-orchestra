@@ -40,7 +40,7 @@ graph TB
 | **Variables** — Agent scope | ✅ | ✅ Own workspace | Own agents | Read only |
 | **Admin** — Users & roles | ✅ All workspaces | ✅ Own workspace | ❌ | ❌ |
 | **Admin** — Models | ✅ All workspaces | ✅ Own workspace | ❌ | ❌ |
-| **Admin** — Quota settings | ✅ All workspaces | ✅ Own workspace | ❌ | ❌ |
+| **Admin** — Rate limits | ✅ All workspaces | ✅ Own workspace | ❌ | ❌ |
 | **Admin** — Security | ✅ All workspaces | ✅ Own workspace | ❌ | ❌ |
 | **Workspaces** — CRUD | ✅ | ❌ | ❌ | ❌ |
 | **Workspaces** — Move users | ✅ | ❌ | ❌ | ❌ |

@@ -816,6 +816,7 @@ describe('Admin routes — quota', () => {
     mockFindFirst.mockResolvedValueOnce({
       workspaceId: TEST_WORKSPACE_ID,
       dailyCreditLimit: '100.00',
+      weeklyCreditLimit: '500.00',
       monthlyCreditLimit: '3000.00',
     });
 
@@ -824,6 +825,7 @@ describe('Admin routes — quota', () => {
     const json = await res.json();
     expect(json.settings).toBeDefined();
     expect(json.settings.dailyCreditLimit).toBe('100.00');
+    expect(json.settings.weeklyCreditLimit).toBe('500.00');
   });
 
   it('GET /api/admin/quota returns defaults when no settings', async () => {
@@ -833,9 +835,10 @@ describe('Admin routes — quota', () => {
     const res = await app.request('/api/admin/quota', { headers: authHeaders(token) });
     expect(res.status).toBe(200);
     const json = await res.json();
-    // Route returns: settings ?? { dailyCreditLimit: null, monthlyCreditLimit: null }
+    // Route returns empty daily/weekly/monthly settings when no record exists.
     expect(json.settings).toBeDefined();
     expect(json.settings.dailyCreditLimit).toBeNull();
+    expect(json.settings.weeklyCreditLimit).toBeNull();
     expect(json.settings.monthlyCreditLimit).toBeNull();
   });
 });
@@ -1237,6 +1240,29 @@ describe('Variable routes — extended', () => {
     const token = await getToken();
     const res = await app.request('/api/variables', { headers: authHeaders(token) });
     expect(res.status).toBe(400);
+  });
+
+  it('GET /api/variables/:id?scope=user returns variable metadata', async () => {
+    const token = await getToken();
+    const variableId = '550e8400-e29b-41d4-a716-446655440099';
+    mockFindFirst.mockResolvedValueOnce({
+      id: variableId,
+      userId: TEST_UUID,
+      key: 'API_KEY',
+      variableType: 'credential',
+      credentialSubType: 'github_token',
+      injectAsEnvVariable: true,
+      description: 'GitHub token',
+    });
+
+    const res = await app.request(`/api/variables/${variableId}?scope=user`, {
+      headers: authHeaders(token),
+    });
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.variable.key).toBe('API_KEY');
+    expect(json.variable.scope).toBe('user');
   });
 
   it('POST /api/variables creates agent-scoped variable', async () => {

@@ -77,6 +77,133 @@ variablesRouter.get('/', async (c) => {
   return c.json({ variables: vars, scope: 'agent' });
 });
 
+// GET /:id — fetch a single variable metadata record
+variablesRouter.get('/:id', async (c) => {
+  const id = uuidSchema.parse(c.req.param('id'));
+  const user = c.get('user');
+  const scope = c.req.query('scope');
+
+  if (scope === 'workspace') {
+    const variable = await db.query.workspaceVariables.findFirst({
+      where: eq(workspaceVariables.id, id),
+      columns: {
+        id: true,
+        workspaceId: true,
+        key: true,
+        variableType: true,
+        credentialSubType: true,
+        injectAsEnvVariable: true,
+        description: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!variable || variable.workspaceId !== user.workspaceId) return c.json({ error: 'Variable not found' }, 404);
+    return c.json({ variable: { ...variable, scope: 'workspace' } });
+  }
+
+  if (scope === 'user') {
+    const variable = await db.query.userVariables.findFirst({
+      where: eq(userVariables.id, id),
+      columns: {
+        id: true,
+        userId: true,
+        key: true,
+        variableType: true,
+        credentialSubType: true,
+        injectAsEnvVariable: true,
+        description: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!variable || variable.userId !== user.userId) return c.json({ error: 'Variable not found' }, 404);
+    return c.json({ variable: { ...variable, scope: 'user' } });
+  }
+
+  if (scope === 'agent') {
+    const variable = await db.query.agentVariables.findFirst({
+      where: eq(agentVariables.id, id),
+      columns: {
+        id: true,
+        agentId: true,
+        key: true,
+        variableType: true,
+        credentialSubType: true,
+        injectAsEnvVariable: true,
+        description: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!variable) return c.json({ error: 'Variable not found' }, 404);
+    const agent = await db.query.agents.findFirst({ where: eq(agents.id, variable.agentId) });
+    if (!agent || agent.workspaceId !== user.workspaceId) return c.json({ error: 'Variable not found' }, 404);
+
+    return c.json({ variable: { ...variable, scope: 'agent' } });
+  }
+
+  const userVariable = await db.query.userVariables.findFirst({
+    where: eq(userVariables.id, id),
+    columns: {
+      id: true,
+      userId: true,
+      key: true,
+      variableType: true,
+      credentialSubType: true,
+      injectAsEnvVariable: true,
+      description: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+  if (userVariable && userVariable.userId === user.userId) {
+    return c.json({ variable: { ...userVariable, scope: 'user' } });
+  }
+
+  const workspaceVariable = await db.query.workspaceVariables.findFirst({
+    where: eq(workspaceVariables.id, id),
+    columns: {
+      id: true,
+      workspaceId: true,
+      key: true,
+      variableType: true,
+      credentialSubType: true,
+      injectAsEnvVariable: true,
+      description: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+  if (workspaceVariable && workspaceVariable.workspaceId === user.workspaceId) {
+    return c.json({ variable: { ...workspaceVariable, scope: 'workspace' } });
+  }
+
+  const agentVariable = await db.query.agentVariables.findFirst({
+    where: eq(agentVariables.id, id),
+    columns: {
+      id: true,
+      agentId: true,
+      key: true,
+      variableType: true,
+      credentialSubType: true,
+      injectAsEnvVariable: true,
+      description: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+  if (!agentVariable) return c.json({ error: 'Variable not found' }, 404);
+
+  const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentVariable.agentId) });
+  if (!agent || agent.workspaceId !== user.workspaceId) return c.json({ error: 'Variable not found' }, 404);
+
+  return c.json({ variable: { ...agentVariable, scope: 'agent' } });
+});
+
 // POST / — add variable (agent-level, user-level, or workspace-level)
 const createVariableSchema = z.object({
   agentId: z.string().uuid().optional(),

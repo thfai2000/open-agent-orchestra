@@ -7,7 +7,7 @@ An **agent** is an AI personality defined as a markdown file — either hosted i
 | Source Type | Description | Best For |
 |---|---|---|
 | **GitHub Repo** | Clone from any Git repo at execution time | Version-controlled agents, team collaboration |
-| **Database** | Edit markdown files directly in the UI | Quick prototyping, simple agents |
+| **Database** | Create and edit markdown files directly in the UI | Quick prototyping, simple agents |
 
 ## Agent Markdown Structure
 
@@ -75,11 +75,40 @@ This loads every `.md` file found under `skills/` recursively — ideal when the
 
 Scope is set at creation time and **cannot be changed** afterward.
 
-## GitHub Token
+## Authentication
 
-For private repos, provide a GitHub token. You can either:
-- Enter a token directly (encrypted at rest with AES-256-GCM)
-- Reference an existing **credential variable** — the token is resolved at execution time
+Agent authentication is configured with **credential variables**. Manual token entry is not used in the agent create/edit forms.
+
+### Git Authentication
+
+For Git checkout, choose one of these options:
+
+- **No Authentication (Public Repo)** — for public repositories
+- **Credential variable** — the checkout flow automatically applies the selected credential subtype
+
+Supported Git credential subtypes:
+
+- **GitHub Token** or **Secret Text** — used as token-based HTTPS authentication
+- **GitHub App** — OAO exchanges the stored App credentials for an installation token at checkout time
+- **User Account** — uses the stored username/password pair for HTTPS authentication
+
+Git authentication is only used for repository access. It does not affect GitHub Copilot sessions.
+
+### Copilot Authentication
+
+Copilot authentication is configured separately from Git checkout.
+
+- **System default** — uses the server-level `GITHUB_TOKEN`
+- **Credential variable** — overrides the Copilot token for that agent's sessions
+
+Use a **GitHub Token** credential (or compatible Secret Text credential) for Copilot authentication.
+
+### Database File Content
+
+When an agent uses **Database Storage**, you can manage the **Agent/Skill File Content** directly in the create/edit flow.
+
+- The first root-level markdown file is treated as the main agent instruction file.
+- Additional markdown files can be stored as skills.
 
 > 📖 **See also:** [Variables](/concepts/variables) — Manage properties and credentials across all three scopes (agent → user → workspace)
 

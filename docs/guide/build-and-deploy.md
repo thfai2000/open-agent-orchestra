@@ -61,15 +61,15 @@ npm test
 ## 4. Build Docker Images
 
 ```bash
-BUILD_TAG=1.17.0 ./build.sh
+BUILD_TAG=1.17.1 ./build.sh
 ```
 
 This builds two images:
 
 | Image | Description |
 |---|---|
-| `oao-core:1.17.0` | Single backend image for all roles (API, Controller, Agent Worker) |
-| `oao-ui:1.17.0` | OAO-UI (Nuxt 3 dashboard) |
+| `oao-core:1.17.1` | Single backend image for all roles (API, Controller, Agent Worker) |
+| `oao-ui:1.17.1` | OAO-UI (Nuxt 3 dashboard) |
 
 ## 5. Deploy
 
@@ -78,10 +78,10 @@ This builds two images:
 Update image tags in `helm/oao-platform/values.yaml`:
 
 ```yaml
-coreImage: oao-core:1.17.0
+coreImage: oao-core:1.17.1
 
 ui:
-  image: oao-ui:1.17.0
+  image: oao-ui:1.17.1
 ```
 
 Run the deploy script (development convenience):
@@ -94,6 +94,8 @@ This will:
 1. Run pre-flight checks (kubectl, helm, cluster connectivity)
 2. Deploy via `helm upgrade --install` to the `open-agent-orchestra` namespace
 3. Auto-push database schema via Helm hook (Drizzle `post-install`/`post-upgrade` Job)
+
+For local Docker Desktop Kubernetes, the Helm migration hook reuses `coreImage` with `imagePullPolicy: IfNotPresent`, so a locally built `oao-core:<tag>` image can be used directly without a separate manual image import step.
 
 > **Note:** `deploy.sh` is a development convenience wrapper. For production, use `helm upgrade --install` directly — see [Host on Kubernetes](/guide/kubernetes).
 
@@ -187,7 +189,7 @@ npx tsc --noEmit -p packages/oao-api/tsconfig.json
 npm run lint && npm test
 
 # 2. Bump version and rebuild
-BUILD_TAG=1.17.0 ./build.sh
+BUILD_TAG=1.17.1 ./build.sh
 
 # 3. Update values.yaml with new tag
 # ...edit helm/oao-platform/values.yaml...
@@ -204,7 +206,7 @@ curl http://localhost:4002/health
 To publish your images and Helm chart to Docker Hub:
 
 ```bash
-DOCKER_USERNAME=myuser BUILD_TAG=1.17.0 ./publish.sh
+DOCKER_USERNAME=myuser BUILD_TAG=1.17.1 ./publish.sh
 ```
 
 This will:

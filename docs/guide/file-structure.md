@@ -66,13 +66,13 @@ oao-api/
 │   │   ├── index.ts      # Drizzle DB connection
 │   │   └── schema.ts     # All table/enum definitions (Drizzle ORM)
 │   ├── routes/
-│   │   ├── admin.ts      # User/model/quota/security management
+│   │   ├── admin.ts      # User/model/rate-limit/security management
 │   │   ├── agents.ts     # Agent CRUD
 │   │   ├── auth.ts       # Register, login, me, change-password, providers
 │   │   ├── auth-providers.ts # Auth provider CRUD (admin)
 │   │   ├── executions.ts # View/cancel/retry executions
 │   │   ├── events.ts     # System event log
-│   │   ├── quota.ts      # Quota stats
+│   │   ├── quota.ts      # Rate limit settings and usage stats
 │   │   ├── supervisor.ts # Emergency stop/resume
 │   │   ├── triggers.ts   # Trigger CRUD
 │   │   ├── variables.ts  # Variable CRUD (3-tier)
@@ -121,15 +121,16 @@ oao-ui/
 │   ├── register.vue      # Registration page
 │   └── [workspace]/      # Dynamic workspace routing
 │       ├── index.vue     # Workspace home
-│       ├── agents.vue    # Agent management
-│       ├── workflows.vue # Workflow builder
-│       ├── executions.vue # Execution history
-│       ├── variables.vue # Variable management
-│       ├── workspaces.vue # Workspace management (super_admin)
+│       ├── agents/       # Agent list + in-page create/edit pages
+│       ├── workflows/    # Workflow list + builder pages
+│       ├── executions/   # Execution history + detail pages
+│       ├── variables/    # Variable list + dedicated create/edit pages
+│       ├── workspaces/   # Workspace management (super_admin)
 │       └── admin/
 │           ├── users.vue     # User role management
 │           ├── models.vue    # Model & credit costs
-│           ├── quotas.vue    # Quota settings
+│           ├── rate-limits.vue # Rate limit settings
+│           ├── quotas.vue    # Legacy redirect to rate-limits
 │           └── security.vue  # Security settings
 ├── composables/
 │   └── useAuth.ts        # JWT token management

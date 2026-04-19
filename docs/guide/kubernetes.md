@@ -124,6 +124,7 @@ kubectl -n open-agent-orchestra rollout status deployment/oao-ui --timeout=120s
 
 > **Note:** Database schema and seed data are applied automatically via a Helm `post-install`/`post-upgrade` hook Job.
 > The hook waits for PostgreSQL to be ready, then runs `drizzle-kit push` followed by the seed script. No manual step needed.
+> When using locally built images on Docker Desktop Kubernetes, the hook reuses `coreImage` with `imagePullPolicy: IfNotPresent`, so you do not need to preload the image manually.
 > On first deploy, a **superadmin** account is created with a random password. Check the job logs:
 > ```bash
 > kubectl -n open-agent-orchestra logs job/oao-platform-db-migrate | grep -A 5 "SUPERADMIN"

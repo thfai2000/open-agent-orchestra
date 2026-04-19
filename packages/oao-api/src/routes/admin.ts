@@ -30,6 +30,16 @@ async function requireWorkspaceAdmin(c: Context, next: Next): Promise<Response |
 
 adminRouter.use('/*', requireWorkspaceAdmin);
 
+const creditLimitSchema = z.string().regex(/^\d+(\.\d{1,2})?$/).nullable().optional();
+
+function emptyRateLimitSettings() {
+  return {
+    dailyCreditLimit: null,
+    weeklyCreditLimit: null,
+    monthlyCreditLimit: null,
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // User Management (within workspace)
 // ═══════════════════════════════════════════════════════════════════════
@@ -198,22 +208,23 @@ adminRouter.delete('/models/:id', async (c) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// Workspace Quota Settings
+// Workspace Rate Limit Settings
 // ═══════════════════════════════════════════════════════════════════════
 
-// GET /quota — get workspace quota settings
+// GET /quota — get workspace rate limit settings
 adminRouter.get('/quota', async (c) => {
   const user = c.get('user');
   const settings = await db.query.workspaceQuotaSettings.findFirst({
     where: eq(workspaceQuotaSettings.workspaceId, user.workspaceId!),
   });
-  return c.json({ settings: settings ?? { dailyCreditLimit: null, monthlyCreditLimit: null } });
+  return c.json({ settings: settings ?? emptyRateLimitSettings() });
 });
 
-// PUT /quota — update workspace quota settings
+// PUT /quota — update workspace rate limit settings
 const updateQuotaSchema = z.object({
-  dailyCreditLimit: z.string().regex(/^\d+(\.\d{1,2})?$/).nullable().optional(),
-  monthlyCreditLimit: z.string().regex(/^\d+(\.\d{1,2})?$/).nullable().optional(),
+  dailyCreditLimit: creditLimitSchema,
+  weeklyCreditLimit: creditLimitSchema,
+  monthlyCreditLimit: creditLimitSchema,
 });
 
 adminRouter.put('/quota', async (c) => {
@@ -229,6 +240,7 @@ adminRouter.put('/quota', async (c) => {
       .update(workspaceQuotaSettings)
       .set({
         dailyCreditLimit: body.dailyCreditLimit ?? existing.dailyCreditLimit,
+        weeklyCreditLimit: body.weeklyCreditLimit ?? existing.weeklyCreditLimit,
         monthlyCreditLimit: body.monthlyCreditLimit ?? existing.monthlyCreditLimit,
         updatedBy: user.userId,
         updatedAt: new Date(),
@@ -243,6 +255,7 @@ adminRouter.put('/quota', async (c) => {
     .values({
       workspaceId: user.workspaceId!,
       dailyCreditLimit: body.dailyCreditLimit ?? null,
+      weeklyCreditLimit: body.weeklyCreditLimit ?? null,
       monthlyCreditLimit: body.monthlyCreditLimit ?? null,
       updatedBy: user.userId,
     })

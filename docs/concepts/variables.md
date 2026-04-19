@@ -2,6 +2,12 @@
 
 The platform provides a three-tier encrypted variable system for managing credentials and configuration.
 
+The UI manages variables with in-page breadcrumb workflows:
+
+- `/{workspace}/variables` — list all workspace, user, and agent-scoped variables
+- `/{workspace}/variables/new` — create a new credential or property
+- `/{workspace}/variables/:id` — edit metadata or rotate the stored secret value
+
 ## Variable Types
 
 | Type | Storage | Use Case |
@@ -26,11 +32,14 @@ Credentials are injected into the Copilot session's credential map. They are use
 - **MCP JSON templates** — via Jinja2 <span v-pre>`{{ credentials.KEY }}`</span> to pass credentials as environment variables to MCP servers
 - **`simple_http_request` tool** — via Jinja2 <span v-pre>`{{ credentials.KEY }}`</span> in headers, auth, and URLs
 - **Prompt templates** — via Jinja2 <span v-pre>`{{ credentials.KEY }}`</span> (use <span v-pre>`{{ properties.KEY }}`</span> for non-secret config instead)
-- **Git authentication** — agents can reference a credential for GitHub token
+- **Git authentication** — agents can reference a credential and OAO applies subtype-specific checkout behavior
+- **Copilot authentication** — agents can reference a credential variable to override the default GitHub Copilot token
 
 Credentials are **never exposed to agents directly**. They are resolved server-side during Jinja2 template rendering. See [AI Security](/concepts/security).
 
 When displayed in the UI or via `read_variables`, credential values are **masked**.
+
+Structured credential subtypes such as GitHub App, User Account, Private Key, and Certificate are serialized as encrypted JSON payloads so the runtime can apply subtype-specific behavior without exposing the underlying fields in the agent configuration.
 
 ## Scoping & Priority
 
@@ -87,7 +96,19 @@ All variable keys must match: `^[A-Z_][A-Z0-9_]*$` (UPPER_SNAKE_CASE)
 
 ## Credential Reference
 
-When creating agents with private GitHub repos, you can reference a credential variable instead of entering a token directly. The credential is resolved at execution time, keeping the actual secret out of the agent configuration.
+When creating or editing agents, authentication selectors load **credential variables** from the available scopes:
+
+- **Agent variables**
+- **User variables**
+- **Workspace variables**
+
+For Git checkout, OAO interprets the selected credential subtype automatically:
+
+- **GitHub Token / Secret Text** — token-based HTTPS checkout
+- **GitHub App** — installation token exchange at runtime
+- **User Account** — username/password HTTPS checkout
+
+For Copilot authentication, use a **GitHub Token** (or compatible Secret Text) credential variable. The credential is resolved at execution time, keeping the actual secret out of the agent configuration.
 
 ## API Examples
 

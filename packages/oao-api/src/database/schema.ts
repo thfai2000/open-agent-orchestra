@@ -457,7 +457,7 @@ export const models = pgTable('models', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// ─── Workspace Quota Settings (per-workspace) ──────────────────────
+// ─── Workspace Rate Limit Settings (per-workspace) ─────────────────
 
 export const workspaceQuotaSettings = pgTable('workspace_quota_settings', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -466,12 +466,13 @@ export const workspaceQuotaSettings = pgTable('workspace_quota_settings', {
     .references(() => workspaces.id, { onDelete: 'cascade' })
     .unique(),
   dailyCreditLimit: decimal('daily_credit_limit', { precision: 10, scale: 2 }),
+  weeklyCreditLimit: decimal('weekly_credit_limit', { precision: 10, scale: 2 }),
   monthlyCreditLimit: decimal('monthly_credit_limit', { precision: 10, scale: 2 }),
   updatedBy: uuid('updated_by').references(() => users.id),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// ─── User Quota Settings (self-managed per user) ─────────────────────
+// ─── User Rate Limit Settings (self-managed per user) ────────────────
 
 export const userQuotaSettings = pgTable('user_quota_settings', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -480,11 +481,12 @@ export const userQuotaSettings = pgTable('user_quota_settings', {
     .references(() => users.id, { onDelete: 'cascade' })
     .unique(),
   dailyCreditLimit: decimal('daily_credit_limit', { precision: 10, scale: 2 }),
+  weeklyCreditLimit: decimal('weekly_credit_limit', { precision: 10, scale: 2 }),
   monthlyCreditLimit: decimal('monthly_credit_limit', { precision: 10, scale: 2 }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// ─── Credit Usage (per-user, per-model, per-date tracking) ──────────
+// ─── Credit Usage (per-user, per-model, per-date snapshot tracking) ─
 
 export const creditUsage = pgTable(
   'credit_usage',
@@ -497,6 +499,7 @@ export const creditUsage = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     modelName: varchar('model_name', { length: 100 }).notNull(),
+    creditCostSnapshot: decimal('credit_cost_snapshot', { precision: 10, scale: 2 }).notNull().default('1.00'),
     creditsConsumed: decimal('credits_consumed', { precision: 10, scale: 2 }).notNull().default('0'),
     sessionCount: integer('session_count').notNull().default(0),
     date: date('date').notNull(),
@@ -507,6 +510,7 @@ export const creditUsage = pgTable(
       table.userId,
       table.modelName,
       table.date,
+      table.creditCostSnapshot,
     ),
     creditUsageUserDateIdx: index('credit_usage_user_date_idx').on(table.userId, table.date),
   }),

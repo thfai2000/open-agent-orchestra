@@ -203,6 +203,32 @@ describe('Agent routes — authenticated', () => {
     expect(res.status).toBe(201);
   });
 
+  it('POST /api/agents creates database-backed files during agent creation', async () => {
+    const token = await getToken();
+    mockInsertReturning.mockResolvedValueOnce([{
+      id: TEST_AGENT_ID,
+      name: 'Database Agent',
+      sourceType: 'database',
+      githubTokenEncrypted: null,
+    }]);
+
+    const res = await app.request('/api/agents', {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify({
+        name: 'Database Agent',
+        sourceType: 'database',
+        files: [
+          { filePath: 'agent.md', content: '# Agent Instructions' },
+          { filePath: 'skills/research.md', content: '# Research Skill' },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockDb.insert).toHaveBeenCalledTimes(2);
+  });
+
   it('POST /api/agents rejects missing name', async () => {
     const token = await getToken();
     const res = await app.request('/api/agents', {
@@ -295,6 +321,7 @@ describe('Agent routes — authenticated', () => {
       workspaceId: TEST_WORKSPACE_ID,
       userId: TEST_UUID,
       status: 'active',
+      githubTokenEncrypted: 'encrypted-token',
     });
 
     const res = await app.request(`/api/agents/${TEST_AGENT_ID}`, {
@@ -304,6 +331,8 @@ describe('Agent routes — authenticated', () => {
     const json = await res.json();
     expect(json.agent).toBeDefined();
     expect(json.agent.id).toBe(TEST_AGENT_ID);
+    expect(json.agent.hasInlineGitToken).toBe(true);
+    expect(json.agent.githubTokenEncrypted).toBeUndefined();
   });
 
   it('DELETE /api/agents/:id returns 404 when agent not found', async () => {

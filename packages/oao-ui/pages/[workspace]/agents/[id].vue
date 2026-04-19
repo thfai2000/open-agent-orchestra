@@ -46,9 +46,9 @@
                 <div class="flex justify-between"><dt class="text-muted-foreground">Branch</dt><dd class="font-mono text-xs">{{ agent.gitBranch || 'main' }}</dd></div>
                 <div class="flex justify-between"><dt class="text-muted-foreground">Agent File</dt><dd class="font-mono text-xs">{{ agent.agentFilePath }}</dd></div>
                 <div v-if="(agent as any).skillsDirectory" class="flex justify-between"><dt class="text-muted-foreground">Skills Dir</dt><dd class="font-mono text-xs">{{ (agent as any).skillsDirectory }}</dd></div>
-                <div class="flex justify-between"><dt class="text-muted-foreground">Git Auth</dt><dd><Badge v-if="(agent as any).githubTokenCredentialId" variant="outline">Credential</Badge><Badge v-else-if="(agent as any).githubTokenEncrypted" variant="outline">Direct Token</Badge><span v-else class="text-muted-foreground text-xs">None (public)</span></dd></div>
+                <div class="flex justify-between gap-3"><dt class="text-muted-foreground">Git Auth</dt><dd class="text-right text-xs">{{ formatGitAuthDisplay(agent) }}</dd></div>
               </template>
-              <div class="flex justify-between"><dt class="text-muted-foreground">Copilot Auth</dt><dd><Badge v-if="(agent as any).copilotTokenCredentialId" variant="outline">Credential</Badge><span v-else class="text-muted-foreground text-xs">System default</span></dd></div>
+              <div class="flex justify-between gap-3"><dt class="text-muted-foreground">Copilot Auth</dt><dd class="text-right text-xs">{{ formatCopilotAuthDisplay(agent) }}</dd></div>
               <div class="flex justify-between"><dt class="text-muted-foreground">Built-in Tools</dt><dd>{{ ((agent as any).builtinToolsEnabled || []).length }} / {{ BUILTIN_TOOLS.length }}</dd></div>
               <div class="flex justify-between"><dt class="text-muted-foreground">Last Session</dt><dd>{{ agent.lastSessionAt ? new Date(agent.lastSessionAt).toLocaleString() : 'Never' }}</dd></div>
             </dl>
@@ -83,7 +83,7 @@
                 </div>
                 <div class="space-y-2">
                   <Label>Scope</Label>
-                  <Input :value="agent.scope === 'workspace' ? 'Workspace (shared, admin-managed)' : 'Personal (owned by you)'" disabled class="bg-muted" />
+                  <div class="flex h-10 items-center rounded-md border border-input bg-muted px-3 text-sm">{{ formatScopeLabel(agent?.scope) }}</div>
                   <p class="text-xs text-muted-foreground">Scope cannot be changed after creation.</p>
                 </div>
               </div>
@@ -98,7 +98,7 @@
           <!-- Agent Files Source -->
           <Card>
             <CardHeader>
-              <CardTitle>Agent Files Source</CardTitle>
+              <CardTitle>Agent File Sources</CardTitle>
               <CardDescription>How the agent's instruction and skill files are provided.</CardDescription>
             </CardHeader>
             <CardContent class="space-y-4">
@@ -143,38 +143,100 @@
                 </div>
                 <div class="space-y-2">
                   <Label>Git Authentication</Label>
-                  <p class="text-xs text-muted-foreground">Credential used for cloning private repositories. Not used for Copilot sessions.</p>
-                  <select v-model="editForm.githubTokenSource"
-                    class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring max-w-md">
-                    <option value="">No authentication (public repo)</option>
-                    <option v-for="cred in credentials" :key="cred.id" :value="cred.id">{{ cred.key }} ({{ cred.scopeLabel }})</option>
+                  <select v-model="editForm.githubAuthSelection"
+                    class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring max-w-xl">
+                    <option value="">No Authentication (Public Repo)</option>
+                    <option v-if="legacyGitAuthOption" :value="legacyGitAuthOption.id">{{ legacyGitAuthOption.optionLabel }}</option>
+                    <option v-for="cred in gitAuthCredentials" :key="cred.id" :value="cred.id">{{ cred.optionLabel }}</option>
                   </select>
-                  <Input v-if="!editForm.githubTokenSource" v-model="editForm.githubToken" type="password" class="max-w-md" placeholder="Or enter a token directly (ghp_...)" />
+                  <p class="text-xs text-muted-foreground">Uses credential variables only. Git checkout automatically applies the selected credential subtype, such as GitHub Token, GitHub App, or User Account.</p>
                 </div>
               </div>
 
               <!-- Database Source Info -->
               <div v-if="editForm.sourceType === 'database'" class="p-4 rounded-lg bg-muted/50 text-sm text-muted-foreground">
-                <p>&#x1f4a1; Manage agent files (instructions, skills) in the Agent Files section below.</p>
+                <p>&#x1f4a1; Manage the database-stored instruction and skill files in the Agent/Skill File Content section below.</p>
               </div>
             </CardContent>
           </Card>
 
-          <!-- Copilot CLI Setting -->
+          <Card v-if="editForm.sourceType === 'database'">
+            <CardHeader>
+              <div class="flex items-center justify-between">
+                <div>
+                  <CardTitle>Agent/Skill File Content</CardTitle>
+                  <CardDescription>Markdown files stored in the database. The first root-level markdown file is the main agent instruction.</CardDescription>
+                </div>
+                <Button size="sm" @click="showFileForm = true">+ Add File</Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div v-if="showFileForm" class="mb-4 p-4 rounded-lg border border-border bg-muted/30">
+                <div v-if="fileError" class="mb-3 p-2 rounded-md bg-destructive/10 text-destructive text-sm">{{ fileError }}</div>
+                <form @submit.prevent="handleCreateFile" class="space-y-3">
+                  <div class="space-y-1.5">
+                    <Label class="text-xs">File Path *</Label>
+                    <Input v-model="fileForm.filePath" required placeholder="agent.md or skills/research.md" class="font-mono" />
+                    <p class="text-xs text-muted-foreground">Use forward slashes for subdirectories.</p>
+                  </div>
+                  <div class="space-y-1.5">
+                    <Label class="text-xs">Content *</Label>
+                    <Textarea v-model="fileForm.content" required rows="8" class="font-mono text-xs" placeholder="# Agent Instructions&#10;&#10;Your markdown content..." />
+                  </div>
+                  <div class="flex gap-2">
+                    <Button type="submit" size="sm" :disabled="savingFile">{{ savingFile ? 'Creating...' : 'Create File' }}</Button>
+                    <Button variant="outline" size="sm" type="button" @click="showFileForm = false; fileError = ''">Cancel</Button>
+                  </div>
+                </form>
+              </div>
+
+              <div class="space-y-2">
+                <div v-for="f in agentFiles" :key="f.id" class="rounded-lg border border-border overflow-hidden">
+                  <div class="flex items-center justify-between p-3 bg-muted/30 cursor-pointer" @click="toggleFileExpand(f.id)">
+                    <div class="flex items-center gap-2">
+                      <span class="text-xs">{{ expandedFileId === f.id ? '&#x25bc;' : '&#x25b6;' }}</span>
+                      <span class="font-mono text-sm font-medium">{{ f.filePath }}</span>
+                      <Badge v-if="isMainAgentFile(f.filePath)" variant="default" class="text-[10px]">Main</Badge>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <span class="text-xs text-muted-foreground">{{ new Date(f.updatedAt).toLocaleDateString() }}</span>
+                      <Button variant="ghost" size="sm" class="h-7 text-xs" @click.stop="startEditFile(f)">Edit</Button>
+                      <Button variant="ghost" size="sm" class="text-destructive h-7 text-xs" @click.stop="handleDeleteFile(f.id, f.filePath)">Delete</Button>
+                    </div>
+                  </div>
+                  <div v-if="expandedFileId === f.id" class="border-t border-border">
+                    <div v-if="editingFileId === f.id" class="p-3">
+                      <Textarea v-model="editFileContent" rows="12" class="font-mono text-xs" />
+                      <div class="flex gap-2 mt-2">
+                        <Button size="sm" :disabled="savingFile" @click="handleUpdateFile(f.id)">{{ savingFile ? 'Saving...' : 'Save' }}</Button>
+                        <Button variant="outline" size="sm" @click="editingFileId = ''">Cancel</Button>
+                      </div>
+                    </div>
+                    <div v-else class="p-3 max-h-64 overflow-auto">
+                      <pre class="whitespace-pre-wrap font-mono text-xs text-muted-foreground">{{ f.content }}</pre>
+                    </div>
+                  </div>
+                </div>
+                <p v-if="agentFiles.length === 0 && !showFileForm" class="text-muted-foreground text-sm">No agent files yet. Add your main agent instruction file to get started.</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <!-- Copilot Authentication -->
           <Card>
             <CardHeader>
-              <CardTitle>Copilot CLI Setting</CardTitle>
+              <CardTitle>Copilot Authentication</CardTitle>
               <CardDescription>Configure authentication for GitHub Copilot SDK sessions. This is separate from Git authentication used for cloning repositories.</CardDescription>
             </CardHeader>
             <CardContent class="space-y-4">
               <div class="space-y-2">
                 <Label>Copilot Authentication</Label>
-                <select v-model="editForm.copilotTokenSource"
-                  class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring max-w-md">
+                <select v-model="editForm.copilotTokenCredentialId"
+                  class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring max-w-xl">
                   <option value="">Use system default (GITHUB_TOKEN env var)</option>
-                  <option v-for="cred in credentials" :key="cred.id" :value="cred.id">{{ cred.key }} ({{ cred.scopeLabel }})</option>
+                  <option v-for="cred in copilotCredentials" :key="cred.id" :value="cred.id">{{ cred.optionLabel }}</option>
                 </select>
-                <p class="text-xs text-muted-foreground">Select a credential to override the system-level GITHUB_TOKEN for this agent's Copilot sessions.</p>
+                <p class="text-xs text-muted-foreground">Copilot authentication accepts credential variables only. Use a GitHub Token credential when you want this agent to override the system default token.</p>
               </div>
             </CardContent>
           </Card>
@@ -187,13 +249,13 @@
             </CardHeader>
             <CardContent>
               <div class="flex gap-2 mb-3">
-                <Button type="button" variant="outline" size="sm" @click="editForm.builtinToolsEnabled = BUILTIN_TOOLS.map(t => t.name)">Select All</Button>
-                <Button type="button" variant="outline" size="sm" @click="editForm.builtinToolsEnabled = []">Deselect All</Button>
+                <Button type="button" variant="outline" size="sm" @click.prevent="selectAllBuiltinTools">Select All</Button>
+                <Button type="button" variant="outline" size="sm" @click.prevent="deselectAllBuiltinTools">Deselect All</Button>
               </div>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
                 <label v-for="tool in BUILTIN_TOOLS" :key="tool.name"
                   class="flex items-center gap-2 p-2 rounded-md border border-border hover:bg-muted/50 cursor-pointer">
-                  <Checkbox :checked="editForm.builtinToolsEnabled.includes(tool.name)" @update:checked="toggleTool(tool.name, $event)" />
+                  <Checkbox :checked="editForm.builtinToolsEnabled.includes(tool.name)" @update:checked="toggleEditTool(tool.name, $event)" />
                   <div>
                     <p class="text-sm font-medium">{{ tool.label }}</p>
                     <p class="text-xs text-muted-foreground">{{ tool.description }}</p>
@@ -229,11 +291,11 @@
       </template>
 
       <!-- Agent Files Section (Database source only) -->
-      <Card v-if="(agent as any).sourceType === 'database'">
+      <Card v-if="!editing && (agent as any).sourceType === 'database'">
         <CardHeader>
           <div class="flex items-center justify-between">
             <div>
-              <CardTitle>Agent Files</CardTitle>
+              <CardTitle>Agent/Skill File Content</CardTitle>
               <CardDescription>Markdown files stored in database. The first root-level .md file is the main agent instruction.</CardDescription>
             </div>
             <Button size="sm" @click="showFileForm = true">+ Add File</Button>
@@ -376,12 +438,17 @@
 </template>
 
 <script setup lang="ts">
+import { useAgentCredentialOptions } from '~/composables/useAgentCredentialOptions';
+
 const { authHeaders } = useAuth();
 const headers = authHeaders();
 const route = useRoute();
 const router = useRouter();
 const ws = computed(() => (route.params.workspace as string) || 'default');
 const agentId = route.params.id as string;
+const { buildCredentialOptions, filterGitAuthCredentialOptions, filterCopilotCredentialOptions, findCredentialOption } = useAgentCredentialOptions();
+
+const LEGACY_INLINE_GIT_TOKEN_ID = '__legacy_inline_git_token__';
 
 const BUILTIN_TOOLS = [
   { name: 'schedule_next_workflow_execution', label: 'Schedule Next Workflow Execution', description: 'Self-scheduling via exact datetime triggers' },
@@ -420,14 +487,63 @@ const agentFiles = computed(() => (filesData.value as any)?.files ?? []);
 // Credentials for token selectors
 const { data: userVarData } = await useFetch('/api/variables?scope=user', { headers });
 const { data: wsVarData } = await useFetch('/api/variables?scope=workspace', { headers });
-const credentials = computed(() => {
-  const userCreds = (userVarData.value as any)?.variables?.filter((v: any) => v.variableType === 'credential') ?? [];
-  const wsCreds = (wsVarData.value as any)?.variables?.filter((v: any) => v.variableType === 'credential') ?? [];
-  return [
-    ...userCreds.map((v: any) => ({ ...v, scopeLabel: 'Personal' })),
-    ...wsCreds.map((v: any) => ({ ...v, scopeLabel: 'Workspace' })),
-  ];
+const credentialOptions = computed(() => buildCredentialOptions([
+  {
+    scope: 'agent',
+    scopeLabel: 'Agent',
+    variables: (agentVariables.value ?? []) as any[],
+  },
+  {
+    scope: 'user',
+    scopeLabel: 'Personal',
+    variables: ((userVarData.value as any)?.variables ?? []) as any[],
+  },
+  {
+    scope: 'workspace',
+    scopeLabel: 'Workspace',
+    variables: ((wsVarData.value as any)?.variables ?? []) as any[],
+  },
+]));
+
+const legacyGitAuthOption = computed(() => {
+  if ((agent.value as any)?.hasInlineGitToken && !(agent.value as any)?.githubTokenCredentialId) {
+    return {
+      id: LEGACY_INLINE_GIT_TOKEN_ID,
+      optionLabel: 'Legacy manual token (replace recommended)',
+    };
+  }
+  return null;
 });
+
+const gitAuthCredentials = computed(() => filterGitAuthCredentialOptions(
+  credentialOptions.value,
+  editForm.githubAuthSelection || (agent.value as any)?.githubTokenCredentialId || null,
+));
+const copilotCredentials = computed(() => filterCopilotCredentialOptions(
+  credentialOptions.value,
+  editForm.copilotTokenCredentialId || (agent.value as any)?.copilotTokenCredentialId || null,
+));
+
+function formatScopeLabel(scope?: string): string {
+  return scope === 'workspace' ? 'Workspace (shared, admin-managed)' : 'Personal (owned by you)';
+}
+
+function formatGitAuthDisplay(agentRecord: any): string {
+  if (agentRecord?.githubTokenCredentialId) {
+    return findCredentialOption(credentialOptions.value, agentRecord.githubTokenCredentialId)?.optionLabel || 'Credential variable';
+  }
+  if (agentRecord?.hasInlineGitToken) {
+    return 'Legacy manual token';
+  }
+  return 'No Authentication (Public Repo)';
+}
+
+function formatCopilotAuthDisplay(agentRecord: any): string {
+  if (agentRecord?.copilotTokenCredentialId) {
+    return findCredentialOption(credentialOptions.value, agentRecord.copilotTokenCredentialId)?.optionLabel || 'Credential variable';
+  }
+  return 'System default (GITHUB_TOKEN env var)';
+}
 
 // -- Inline Edit -----------------------------------------------------------
 const editing = ref(false);
@@ -441,9 +557,8 @@ const editForm = reactive({
   gitBranch: '',
   agentFilePath: '',
   skillsDirectory: '',
-  githubToken: '',
-  githubTokenSource: '' as string,
-  copilotTokenSource: '' as string,
+  githubAuthSelection: '' as string,
+  copilotTokenCredentialId: '' as string,
   builtinToolsEnabled: [] as string[],
   mcpJsonTemplate: '',
 });
@@ -457,9 +572,8 @@ function startEdit() {
     gitBranch: agent.value?.gitBranch || 'main',
     agentFilePath: agent.value?.agentFilePath || '',
     skillsDirectory: (agent.value as any)?.skillsDirectory || '',
-    githubToken: '',
-    githubTokenSource: (agent.value as any)?.githubTokenCredentialId || '',
-    copilotTokenSource: (agent.value as any)?.copilotTokenCredentialId || '',
+    githubAuthSelection: (agent.value as any)?.githubTokenCredentialId || ((agent.value as any)?.hasInlineGitToken ? LEGACY_INLINE_GIT_TOKEN_ID : ''),
+    copilotTokenCredentialId: (agent.value as any)?.copilotTokenCredentialId || '',
     builtinToolsEnabled: Array.isArray((agent.value as any)?.builtinToolsEnabled)
       ? [...(agent.value as any).builtinToolsEnabled]
       : BUILTIN_TOOLS.map(t => t.name),
@@ -469,11 +583,24 @@ function startEdit() {
   editing.value = true;
 }
 
-function toggleTool(name: string, checked: boolean | string) {
+function replaceEditBuiltinTools(nextToolNames: string[]) {
+  editForm.builtinToolsEnabled.splice(0, editForm.builtinToolsEnabled.length, ...nextToolNames);
+}
+
+function selectAllBuiltinTools() {
+  replaceEditBuiltinTools(BUILTIN_TOOLS.map((tool) => tool.name));
+}
+
+function deselectAllBuiltinTools() {
+  replaceEditBuiltinTools([]);
+}
+
+function toggleEditTool(name: string, checked: boolean | string) {
   if (checked) {
     if (!editForm.builtinToolsEnabled.includes(name)) editForm.builtinToolsEnabled.push(name);
   } else {
-    editForm.builtinToolsEnabled = editForm.builtinToolsEnabled.filter(t => t !== name);
+    const index = editForm.builtinToolsEnabled.indexOf(name);
+    if (index >= 0) editForm.builtinToolsEnabled.splice(index, 1);
   }
 }
 
@@ -492,16 +619,13 @@ async function handleSave() {
       body.gitBranch = editForm.gitBranch;
       body.agentFilePath = editForm.agentFilePath;
       body.skillsDirectory = editForm.skillsDirectory || null;
-      if (editForm.githubTokenSource) {
-        body.githubTokenCredentialId = editForm.githubTokenSource;
-      } else if (editForm.githubToken) {
-        body.githubToken = editForm.githubToken;
-      } else if ((agent.value as any)?.githubTokenCredentialId) {
+      if (editForm.githubAuthSelection !== LEGACY_INLINE_GIT_TOKEN_ID) {
         body.githubTokenCredentialId = null;
+        if (editForm.githubAuthSelection) body.githubTokenCredentialId = editForm.githubAuthSelection;
       }
     }
-    if (editForm.copilotTokenSource) {
-      body.copilotTokenCredentialId = editForm.copilotTokenSource;
+    if (editForm.copilotTokenCredentialId) {
+      body.copilotTokenCredentialId = editForm.copilotTokenCredentialId;
     } else if ((agent.value as any)?.copilotTokenCredentialId) {
       body.copilotTokenCredentialId = null;
     }

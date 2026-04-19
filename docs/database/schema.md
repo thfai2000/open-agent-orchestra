@@ -73,4 +73,4 @@ erDiagram
 For full table definitions, see:
 
 - [Core Tables](/database/schema-core) — Tenancy, Agents, Workflows, Executions
-- [Support Tables](/database/schema-support) — Variables, Admin & Quota, Audit & Memory, Auth & Tokens
+- [Support Tables](/database/schema-support) — Variables, Admin & Rate Limits, Audit & Memory, Auth & Tokens

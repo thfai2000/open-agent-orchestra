@@ -41,11 +41,11 @@ Building production AI automation also requires solving infrastructure challenge
 
 Organizations adopting AI automation at scale face additional requirements that OAO addresses:
 
-- **Workspace isolation** — Each workspace provides a fully isolated boundary for administration, credentials, agents, and workflows. Teams share the same platform without risk of cross-tenant data leakage. Workspace admins manage their own users, quotas, and secrets independently.
+- **Workspace isolation** — Each workspace provides a fully isolated boundary for administration, credentials, agents, and workflows. Teams share the same platform without risk of cross-tenant data leakage. Workspace admins manage their own users, rate limits, and secrets independently.
 
 - **Prompt templating with variables** — Workflow steps use Jinja2 templates with user-defined variables (e.g., <span v-pre>`{{ properties.REPORT_DATE }}`</span>) and webhook payload data (e.g., <span v-pre>`{{ inputs.issue_url }}`</span>). This eliminates prompt duplication and enables operations teams to configure workflows without modifying agent code.
 
-- **Request usage management** — Per-workspace quota settings enforce daily and monthly token limits. Usage is tracked per user, model, and day. Quota enforcement blocks execution when limits are exceeded, preventing cost overruns. Administrators define limits per workspace; individual agents inherit or override them.
+- **Request usage management** — Workspace defaults and user overrides support daily, weekly, and monthly credit limits. Usage is tracked per user, model, day, and stored credit-cost snapshot so historical totals remain stable even when model records change later.
 
 - **Role-based access control (RBAC)** — Four roles (super_admin, workspace_admin, creator, viewer) control who can create agents, trigger workflows, manage credentials, and access admin functions. Fine-grained scopes on Personal Access Tokens restrict API access for integrations.
 

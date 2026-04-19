@@ -13,7 +13,29 @@ import { authMiddleware } from '@oao/shared';
 const quotaRouter = new Hono();
 quotaRouter.use('/*', authMiddleware);
 
-// GET /settings — get current user's quota settings + workspace defaults
+const creditLimitSchema = z.string().regex(/^\d+(\.\d{1,2})?$/).nullable().optional();
+
+function emptyRateLimitSettings() {
+  return {
+    dailyCreditLimit: null,
+    weeklyCreditLimit: null,
+    monthlyCreditLimit: null,
+  };
+}
+
+function toDateOnly(value: Date): string {
+  return value.toISOString().split('T')[0];
+}
+
+function getWeekStart(date: Date): Date {
+  const weekStart = new Date(date);
+  const day = weekStart.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  weekStart.setDate(weekStart.getDate() + diff);
+  return weekStart;
+}
+
+// GET /settings — get current user's rate limit settings + workspace defaults
 quotaRouter.get('/settings', async (c) => {
   const user = c.get('user');
 
@@ -29,15 +51,16 @@ quotaRouter.get('/settings', async (c) => {
   ]);
 
   return c.json({
-    userSettings: userSettings ?? { dailyCreditLimit: null, monthlyCreditLimit: null },
-    workspaceSettings: wsSettings ?? { dailyCreditLimit: null, monthlyCreditLimit: null },
+    userSettings: userSettings ?? emptyRateLimitSettings(),
+    workspaceSettings: wsSettings ?? emptyRateLimitSettings(),
   });
 });
 
-// PUT /settings — update own quota settings
+// PUT /settings — update own rate limit settings
 const updateSettingsSchema = z.object({
-  dailyCreditLimit: z.string().regex(/^\d+(\.\d{1,2})?$/).nullable().optional(),
-  monthlyCreditLimit: z.string().regex(/^\d+(\.\d{1,2})?$/).nullable().optional(),
+  dailyCreditLimit: creditLimitSchema,
+  weeklyCreditLimit: creditLimitSchema,
+  monthlyCreditLimit: creditLimitSchema,
 });
 
 quotaRouter.put('/settings', async (c) => {
@@ -53,6 +76,7 @@ quotaRouter.put('/settings', async (c) => {
       .update(userQuotaSettings)
       .set({
         dailyCreditLimit: body.dailyCreditLimit !== undefined ? body.dailyCreditLimit : existing.dailyCreditLimit,
+        weeklyCreditLimit: body.weeklyCreditLimit !== undefined ? body.weeklyCreditLimit : existing.weeklyCreditLimit,
         monthlyCreditLimit: body.monthlyCreditLimit !== undefined ? body.monthlyCreditLimit : existing.monthlyCreditLimit,
         updatedAt: new Date(),
       })
@@ -66,6 +90,7 @@ quotaRouter.put('/settings', async (c) => {
     .values({
       userId: user.userId,
       dailyCreditLimit: body.dailyCreditLimit ?? null,
+      weeklyCreditLimit: body.weeklyCreditLimit ?? null,
       monthlyCreditLimit: body.monthlyCreditLimit ?? null,
     })
     .returning();
@@ -78,7 +103,7 @@ quotaRouter.get('/usage', async (c) => {
   const days = z.coerce.number().min(1).max(90).default(30).parse(c.req.query('days'));
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - days);
-  const startDateStr = startDate.toISOString().split('T')[0];
+  const startDateStr = toDateOnly(startDate);
 
   // Daily totals
   const dailyUsage = await db
@@ -104,7 +129,8 @@ quotaRouter.get('/usage', async (c) => {
     .groupBy(creditUsage.modelName);
 
   // Today's usage
-  const today = new Date().toISOString().split('T')[0];
+  const todayDate = new Date();
+  const today = toDateOnly(todayDate);
   const todayUsageResult = await db
     .select({
       totalCredits: sql<string>`coalesce(sum(${creditUsage.creditsConsumed}), '0')`,
@@ -113,10 +139,20 @@ quotaRouter.get('/usage', async (c) => {
     .from(creditUsage)
     .where(and(eq(creditUsage.userId, user.userId), eq(creditUsage.date, today)));
 
+  // This week's usage
+  const weekStartStr = toDateOnly(getWeekStart(todayDate));
+  const weekUsageResult = await db
+    .select({
+      totalCredits: sql<string>`coalesce(sum(${creditUsage.creditsConsumed}), '0')`,
+      totalSessions: sql<number>`coalesce(sum(${creditUsage.sessionCount}), 0)::int`,
+    })
+    .from(creditUsage)
+    .where(and(eq(creditUsage.userId, user.userId), gte(creditUsage.date, weekStartStr)));
+
   // This month's usage
   const monthStart = new Date();
   monthStart.setDate(1);
-  const monthStartStr = monthStart.toISOString().split('T')[0];
+  const monthStartStr = toDateOnly(monthStart);
   const monthUsageResult = await db
     .select({
       totalCredits: sql<string>`coalesce(sum(${creditUsage.creditsConsumed}), '0')`,
@@ -129,6 +165,7 @@ quotaRouter.get('/usage', async (c) => {
     dailyUsage,
     modelUsage,
     todayUsage: todayUsageResult[0],
+    weekUsage: weekUsageResult[0],
     monthUsage: monthUsageResult[0],
     days,
   });

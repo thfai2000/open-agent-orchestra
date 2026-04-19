@@ -107,16 +107,16 @@ Requires `workspace_admin` or `super_admin` role.
 | GET | `/api/admin/users` | List workspace users |
 | PUT | `/api/admin/users/:id/role` | Change user role |
 | GET/POST/PUT/DELETE | `/api/admin/models[/:id]` | Model CRUD (workspace-scoped) |
-| GET/PUT | `/api/admin/quota-settings` | Workspace quota settings |
-| GET | `/api/admin/credit-stats` | Workspace credit usage breakdown |
+| GET/PUT | `/api/admin/quota` | Workspace rate limit settings |
+| GET | `/api/admin/usage/summary` | Workspace credit usage breakdown |
 
-## Quota
+## Rate Limits
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/quota/models` | Active models (for dropdowns) |
-| GET | `/api/quota/settings` | User quota limits |
-| GET | `/api/quota/usage` | Credit usage stats (daily/model/month) |
+| GET/PUT | `/api/quota/settings` | User rate limit settings |
+| GET | `/api/quota/usage` | Credit usage stats (daily/weekly/monthly + model breakdown) |
 
 ## Workspaces
 

@@ -1,6 +1,6 @@
 # Support Tables
 
-Variables, Admin & Quota, Audit & Memory, and Auth & Token tables. For the ER diagram and enums, see [Schema Overview](/database/schema).
+Variables, Admin & Rate Limit, Audit & Memory, and Auth & Token tables. For the ER diagram and enums, see [Schema Overview](/database/schema).
 
 ## Variable Tables
 
@@ -48,7 +48,7 @@ All variable tables share the same structure: `key` (UPPER_SNAKE_CASE), `valueEn
 | createdAt, updatedAt | timestamp | |
 | | | UNIQUE(workspaceId, key) |
 
-## Admin & Quota Tables
+## Admin & Rate Limit Tables
 
 ### models
 
@@ -70,6 +70,7 @@ All variable tables share the same structure: `key` (UPPER_SNAKE_CASE), `valueEn
 | id | UUID PK | |
 | workspaceId | UUID FK | UNIQUE |
 | dailyCreditLimit | decimal(10,2) | Null = unlimited |
+| weeklyCreditLimit | decimal(10,2) | Null = unlimited |
 | monthlyCreditLimit | decimal(10,2) | Null = unlimited |
 | updatedBy | UUID FK → users | |
 | updatedAt | timestamp | |
@@ -81,6 +82,7 @@ All variable tables share the same structure: `key` (UPPER_SNAKE_CASE), `valueEn
 | id | UUID PK | |
 | userId | UUID FK | UNIQUE |
 | dailyCreditLimit | decimal(10,2) | Null = use workspace default |
+| weeklyCreditLimit | decimal(10,2) | Null = use workspace default |
 | monthlyCreditLimit | decimal(10,2) | Null = use workspace default |
 | updatedAt | timestamp | |
 
@@ -92,11 +94,12 @@ All variable tables share the same structure: `key` (UPPER_SNAKE_CASE), `valueEn
 | workspaceId | UUID FK | |
 | userId | UUID FK | |
 | modelName | varchar(100) | |
+| creditCostSnapshot | decimal(10,2) | Stored model credit cost at execution time |
 | creditsConsumed | decimal(10,2) | Default: 0 |
 | sessionCount | integer | |
 | date | date | |
 | createdAt | timestamp | |
-| | | UNIQUE(userId, modelName, date) |
+| | | UNIQUE(userId, modelName, date, creditCostSnapshot) |
 
 ## Audit & Memory Tables
 

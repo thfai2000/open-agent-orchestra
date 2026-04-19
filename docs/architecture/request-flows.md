@@ -70,6 +70,6 @@ All UI routes are workspace-scoped: `/{workspace-slug}/{page}`
 | `/{ws}/variables` | Variable management |
 | `/{ws}/admin/users` | User administration |
 | `/{ws}/admin/models` | Model registry |
-| `/{ws}/admin/quotas` | Quota settings |
+| `/{ws}/admin/rate-limits` | Rate limit settings |
 | `/{ws}/workspaces` | Workspace management (super_admin) |
 | `/{ws}/settings/tokens` | Personal Access Tokens |
