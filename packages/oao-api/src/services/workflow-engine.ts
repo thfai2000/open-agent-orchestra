@@ -27,6 +27,7 @@ import { renderTemplate, buildTemplateContext } from './jinja-renderer.js';
 import { createAgentPod, waitForPodCompletion, deleteAgentPod } from './k8s-provisioner.js';
 import { registerEphemeralInstance, terminateEphemeralInstance } from './agent-instance-registry.js';
 import { AGENT_STEP_QUEUE } from '../workers/agent-worker.js';
+import { publishRealtimeEvent } from './realtime-bus.js';
 
 const logger = createLogger('workflow-engine');
 
@@ -417,6 +418,17 @@ export async function enqueueWorkflowExecution(
   );
 
   logger.info({ executionId: execution.id, workflowId, version: workflow.version }, 'Workflow execution enqueued');
+
+  // Broadcast realtime event for new execution
+  publishRealtimeEvent({
+    type: 'execution.created',
+    executionId: execution.id,
+    workflowId,
+    workspaceId: workflow.workspaceId ?? undefined,
+    data: { status: 'pending', totalSteps: steps.length, workflowName: workflow.name },
+    timestamp: new Date().toISOString(),
+  });
+
   return execution;
 }
 
@@ -512,6 +524,16 @@ export async function retryWorkflowExecution(failedExecutionId: string) {
     { executionId: newExecution.id, retryOf: failedExecutionId, startFromStep: failedStepIdx + 1 },
     'Retry execution enqueued',
   );
+
+  publishRealtimeEvent({
+    type: 'execution.created',
+    executionId: newExecution.id,
+    workflowId: workflow.id,
+    workspaceId: workflow.workspaceId ?? undefined,
+    data: { status: 'pending', totalSteps: steps.length, retryOf: failedExecutionId },
+    timestamp: new Date().toISOString(),
+  });
+
   return newExecution;
 }
 
@@ -547,6 +569,15 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
     .update(workflowExecutions)
     .set({ status: 'running', startedAt: new Date(), currentStep: startFromStep + 1 })
     .where(eq(workflowExecutions.id, executionId));
+
+  publishRealtimeEvent({
+    type: 'execution.started',
+    executionId,
+    workflowId: workflow.id,
+    workspaceId: workflow.workspaceId ?? undefined,
+    data: { status: 'running', totalSteps: steps.length, startFromStep },
+    timestamp: new Date().toISOString(),
+  });
 
   // Execute each step using the configured execution mode
   for (let i = startFromStep; i < steps.length; i++) {
@@ -618,6 +649,16 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
         .update(workflowExecutions)
         .set({ status: 'failed', error: errorMsg, completedAt: new Date() })
         .where(eq(workflowExecutions.id, executionId));
+
+      publishRealtimeEvent({
+        type: 'execution.failed',
+        executionId,
+        workflowId: workflow.id,
+        workspaceId: workflow.workspaceId ?? undefined,
+        data: { status: 'failed', error: errorMsg, stepOrder: step.stepOrder },
+        timestamp: new Date().toISOString(),
+      });
+
       logger.error({ executionId, stepOrder: step.stepOrder, error: errorMsg }, 'Step failed');
       return;
     }
@@ -630,6 +671,15 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
     .update(workflowExecutions)
     .set({ status: 'completed', completedAt: new Date() })
     .where(eq(workflowExecutions.id, executionId));
+
+  publishRealtimeEvent({
+    type: 'execution.completed',
+    executionId,
+    workflowId: workflow.id,
+    workspaceId: workflow.workspaceId ?? undefined,
+    data: { status: 'completed', totalSteps: steps.length },
+    timestamp: new Date().toISOString(),
+  });
 
   // Update lastSessionAt for all agents used in the workflow
   const agentIdsUsed = [...new Set(steps.map((s) => s.agentId || workflow.defaultAgentId).filter(Boolean))] as string[];

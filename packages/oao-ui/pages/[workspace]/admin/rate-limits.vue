@@ -1,233 +1,94 @@
 <template>
-  <div class="space-y-6">
-    <Breadcrumb>
-      <BreadcrumbList>
-        <BreadcrumbItem><BreadcrumbLink :href="`/${ws}`">Home</BreadcrumbLink></BreadcrumbItem>
-        <BreadcrumbSeparator />
-        <BreadcrumbItem><BreadcrumbPage>Rate Limits</BreadcrumbPage></BreadcrumbItem>
-      </BreadcrumbList>
+  <div>
+    <Breadcrumb :model="[{ label: 'Home', route: `/${ws}` }, { label: 'Admin' }, { label: 'Rate Limits & Quotas' }]" class="mb-4">
+      <template #item="{ item }">
+        <NuxtLink v-if="item.route" :to="item.route" class="text-primary hover:underline">{{ item.label }}</NuxtLink>
+        <span v-else>{{ item.label }}</span>
+      </template>
     </Breadcrumb>
 
-    <div class="mt-4 space-y-1">
-      <h1 class="text-3xl font-bold">Rate Limits</h1>
-      <p class="text-muted-foreground text-sm">Manage workspace defaults, personal overrides, and historical credit usage totals calculated from stored cost snapshots.</p>
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-2xl font-semibold">Rate Limits & Quotas</h1>
+        <p class="text-surface-500 text-sm mt-1">Configure daily credit limits and view usage</p>
+      </div>
     </div>
 
-    <div class="rounded-lg border border-blue-200 bg-blue-50/60 p-4 text-sm text-blue-700 dark:border-blue-800 dark:bg-blue-950/20 dark:text-blue-300">
-      <p><strong>How limits are applied:</strong> user-level limits override workspace defaults. Daily, weekly, and monthly usage totals are calculated from historical usage rows that keep the model credit cost captured at execution time.</p>
-    </div>
+    <!-- Settings Card -->
+    <Card class="mb-6">
+      <template #title>Quota Settings</template>
+      <template #content>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="flex flex-col gap-2"><label class="text-sm font-medium">Daily Credit Limit</label>
+            <InputNumber v-model="settings.dailyCreditLimit" :min="0" />
+          </div>
+          <div class="flex flex-col gap-2"><label class="text-sm font-medium">Max Concurrent Executions</label>
+            <InputNumber v-model="settings.maxConcurrentExecutions" :min="1" />
+          </div>
+          <div class="flex flex-col gap-2"><label class="text-sm font-medium">Max Step Timeout (seconds)</label>
+            <InputNumber v-model="settings.maxStepTimeout" :min="10" />
+          </div>
+        </div>
+        <div class="flex justify-end mt-4">
+          <Button label="Save Settings" icon="pi pi-check" :loading="savingSettings" @click="handleSaveSettings" />
+        </div>
+      </template>
+    </Card>
 
-    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
-      <Card v-if="isAdmin">
-        <CardHeader>
-          <CardTitle>Workspace Default Rate Limits</CardTitle>
-          <CardDescription>Fallback limits applied to workspace users who do not set their own overrides.</CardDescription>
-        </CardHeader>
-        <CardContent class="space-y-4">
-          <div class="space-y-2">
-            <Label>Daily Credit Limit</Label>
-            <Input v-model="workspaceForm.dailyCreditLimit" type="text" placeholder="Unlimited" />
-          </div>
-          <div class="space-y-2">
-            <Label>Weekly Credit Limit</Label>
-            <Input v-model="workspaceForm.weeklyCreditLimit" type="text" placeholder="Unlimited" />
-          </div>
-          <div class="space-y-2">
-            <Label>Monthly Credit Limit</Label>
-            <Input v-model="workspaceForm.monthlyCreditLimit" type="text" placeholder="Unlimited" />
-          </div>
-          <div class="flex items-center gap-3">
-            <Button @click="saveWorkspaceLimits">Save Workspace Limits</Button>
-            <span v-if="workspaceMessage" class="text-sm text-muted-foreground">{{ workspaceMessage }}</span>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>My Rate Limits</CardTitle>
-          <CardDescription>Optional personal overrides for your account. Leave a field empty to inherit the workspace default.</CardDescription>
-        </CardHeader>
-        <CardContent class="space-y-4">
-          <div class="space-y-2">
-            <Label>Daily Credit Limit</Label>
-            <Input v-model="userForm.dailyCreditLimit" type="text" placeholder="Use workspace default" />
-          </div>
-          <div class="space-y-2">
-            <Label>Weekly Credit Limit</Label>
-            <Input v-model="userForm.weeklyCreditLimit" type="text" placeholder="Use workspace default" />
-          </div>
-          <div class="space-y-2">
-            <Label>Monthly Credit Limit</Label>
-            <Input v-model="userForm.monthlyCreditLimit" type="text" placeholder="Use workspace default" />
-          </div>
-          <div class="flex items-center gap-3">
-            <Button @click="saveUserLimits">Save My Limits</Button>
-            <span v-if="userMessage" class="text-sm text-muted-foreground">{{ userMessage }}</span>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-
+    <!-- Usage Summary -->
     <Card>
-      <CardHeader>
-        <CardTitle>My Usage Summary</CardTitle>
-        <CardDescription>Usage totals for the current day, calendar week, and calendar month.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <div class="rounded-lg border border-border p-4">
-            <p class="text-sm text-muted-foreground">Today's Credits</p>
-            <p class="text-2xl font-bold">{{ todayCredits }}</p>
-            <p class="text-sm text-muted-foreground">Limit: {{ formatLimit(effectiveDailyLimit) }}</p>
-          </div>
-          <div class="rounded-lg border border-border p-4">
-            <p class="text-sm text-muted-foreground">This Week's Credits</p>
-            <p class="text-2xl font-bold">{{ weekCredits }}</p>
-            <p class="text-sm text-muted-foreground">Limit: {{ formatLimit(effectiveWeeklyLimit) }}</p>
-          </div>
-          <div class="rounded-lg border border-border p-4">
-            <p class="text-sm text-muted-foreground">This Month's Credits</p>
-            <p class="text-2xl font-bold">{{ monthCredits }}</p>
-            <p class="text-sm text-muted-foreground">Limit: {{ formatLimit(effectiveMonthlyLimit) }}</p>
-          </div>
-        </div>
-
-        <div v-if="modelUsage.length > 0" class="mt-6 space-y-3">
-          <div>
-            <h2 class="text-lg font-semibold">Credits by Model</h2>
-            <p class="text-sm text-muted-foreground">Last 30 days, summed across stored cost snapshots for each model.</p>
-          </div>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Model</TableHead>
-                <TableHead>Credits</TableHead>
-                <TableHead>Sessions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              <TableRow v-for="usage in modelUsage" :key="usage.modelName">
-                <TableCell class="font-medium">{{ usage.modelName }}</TableCell>
-                <TableCell>{{ usage.totalCredits }}</TableCell>
-                <TableCell>{{ usage.totalSessions }}</TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
-        </div>
-
-        <div v-else class="mt-6 py-8 text-center text-sm text-muted-foreground">No credit usage recorded yet.</div>
-      </CardContent>
+      <template #title>Usage (Last 30 days)</template>
+      <template #content>
+        <DataTable :value="usage" stripedRows :loading="loadingUsage">
+          <template #empty><div class="text-center py-8 text-surface-400">No usage data.</div></template>
+          <Column header="Date" style="width: 140px">
+            <template #body="{ data }"><span class="text-sm font-mono">{{ data.date }}</span></template>
+          </Column>
+          <Column header="Agent">
+            <template #body="{ data }"><span class="text-sm">{{ data.agentName || data.agentId?.substring(0, 8) + '…' }}</span></template>
+          </Column>
+          <Column header="Tokens Used" style="width: 140px">
+            <template #body="{ data }"><span class="text-sm font-mono">{{ (data.tokensUsed || 0).toLocaleString() }}</span></template>
+          </Column>
+          <Column header="Credits" style="width: 120px">
+            <template #body="{ data }"><span class="text-sm font-mono">{{ Number(data.creditsUsed || 0).toFixed(2) }}</span></template>
+          </Column>
+        </DataTable>
+      </template>
     </Card>
   </div>
 </template>
 
 <script setup lang="ts">
-interface RateLimitSettings {
-  dailyCreditLimit: string | null;
-  weeklyCreditLimit: string | null;
-  monthlyCreditLimit: string | null;
-}
-
-interface UsageTotal {
-  totalCredits: string;
-  totalSessions: number;
-}
-
-interface UsageResponse {
-  todayUsage: UsageTotal;
-  weekUsage: UsageTotal;
-  monthUsage: UsageTotal;
-  modelUsage: Array<{ modelName: string; totalCredits: string; totalSessions: number }>;
-}
-
-const { user, authHeaders } = useAuth();
-const route = useRoute();
+const { authHeaders } = useAuth();
 const headers = authHeaders();
+const route = useRoute();
+const toast = useToast();
 const ws = computed(() => (route.params.workspace as string) || 'default');
-const isAdmin = computed(() => user.value?.role === 'workspace_admin' || user.value?.role === 'super_admin');
 
-const emptySettings: RateLimitSettings = {
-  dailyCreditLimit: null,
-  weeklyCreditLimit: null,
-  monthlyCreditLimit: null,
-};
+const savingSettings = ref(false);
+const loadingUsage = ref(false);
 
-const { data: settingsData, refresh: refreshSettings } = await useFetch('/api/quota/settings', { headers });
-const { data: usageData, refresh: refreshUsage } = await useFetch('/api/quota/usage?days=30', { headers });
+const settings = reactive({ dailyCreditLimit: 100, maxConcurrentExecutions: 5, maxStepTimeout: 600 });
 
-const workspaceSettings = computed<RateLimitSettings>(() => ((settingsData.value as { workspaceSettings?: RateLimitSettings })?.workspaceSettings ?? emptySettings));
-const userSettings = computed<RateLimitSettings>(() => ((settingsData.value as { userSettings?: RateLimitSettings })?.userSettings ?? emptySettings));
-
-const workspaceForm = reactive({
-  dailyCreditLimit: '',
-  weeklyCreditLimit: '',
-  monthlyCreditLimit: '',
-});
-
-const userForm = reactive({
-  dailyCreditLimit: '',
-  weeklyCreditLimit: '',
-  monthlyCreditLimit: '',
-});
-
-const workspaceMessage = ref('');
-const userMessage = ref('');
-
-function syncForm(target: { dailyCreditLimit: string; weeklyCreditLimit: string; monthlyCreditLimit: string }, settings: RateLimitSettings) {
-  target.dailyCreditLimit = settings.dailyCreditLimit ?? '';
-  target.weeklyCreditLimit = settings.weeklyCreditLimit ?? '';
-  target.monthlyCreditLimit = settings.monthlyCreditLimit ?? '';
-}
-
-watch(workspaceSettings, (settings) => {
-  syncForm(workspaceForm, settings);
+const { data: settingsData } = await useFetch('/api/quota/settings', { headers });
+watch(settingsData, (d) => {
+  if (d) Object.assign(settings, (d as any).settings || d);
 }, { immediate: true });
 
-watch(userSettings, (settings) => {
-  syncForm(userForm, settings);
-}, { immediate: true });
+const { data: usageData, pending: loadingUsagePending } = await useFetch('/api/quota/usage?days=30', { headers });
+const usage = computed(() => (usageData.value as any)?.usage ?? []);
+watchEffect(() => { loadingUsage.value = loadingUsagePending.value; });
 
-const todayCredits = computed(() => (usageData.value as UsageResponse | undefined)?.todayUsage?.totalCredits ?? '0');
-const weekCredits = computed(() => (usageData.value as UsageResponse | undefined)?.weekUsage?.totalCredits ?? '0');
-const monthCredits = computed(() => (usageData.value as UsageResponse | undefined)?.monthUsage?.totalCredits ?? '0');
-const modelUsage = computed(() => (usageData.value as UsageResponse | undefined)?.modelUsage ?? []);
-
-const effectiveDailyLimit = computed(() => userSettings.value.dailyCreditLimit ?? workspaceSettings.value.dailyCreditLimit ?? null);
-const effectiveWeeklyLimit = computed(() => userSettings.value.weeklyCreditLimit ?? workspaceSettings.value.weeklyCreditLimit ?? null);
-const effectiveMonthlyLimit = computed(() => userSettings.value.monthlyCreditLimit ?? workspaceSettings.value.monthlyCreditLimit ?? null);
-
-function formatLimit(value: string | null) {
-  return value || 'Unlimited';
-}
-
-async function saveWorkspaceLimits() {
-  workspaceMessage.value = '';
-  await $fetch('/api/admin/quota', {
-    method: 'PUT',
-    headers,
-    body: {
-      dailyCreditLimit: workspaceForm.dailyCreditLimit || null,
-      weeklyCreditLimit: workspaceForm.weeklyCreditLimit || null,
-      monthlyCreditLimit: workspaceForm.monthlyCreditLimit || null,
-    },
-  });
-  await refreshSettings();
-  workspaceMessage.value = 'Workspace limits saved.';
-}
-
-async function saveUserLimits() {
-  userMessage.value = '';
-  await $fetch('/api/quota/settings', {
-    method: 'PUT',
-    headers,
-    body: {
-      dailyCreditLimit: userForm.dailyCreditLimit || null,
-      weeklyCreditLimit: userForm.weeklyCreditLimit || null,
-      monthlyCreditLimit: userForm.monthlyCreditLimit || null,
-    },
-  });
-  await Promise.all([refreshSettings(), refreshUsage()]);
-  userMessage.value = 'Personal limits saved.';
+async function handleSaveSettings() {
+  savingSettings.value = true;
+  try {
+    await $fetch('/api/quota/settings', { method: 'PUT', headers, body: settings });
+    toast.add({ severity: 'success', summary: 'Settings saved', life: 3000 });
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e?.data?.error || 'Failed', life: 5000 });
+  } finally {
+    savingSettings.value = false;
+  }
 }
 </script>

@@ -1,58 +1,61 @@
 <template>
   <div>
-    <Breadcrumb>
-      <BreadcrumbList>
-        <BreadcrumbItem><BreadcrumbLink href="/">Home</BreadcrumbLink></BreadcrumbItem>
-        <BreadcrumbSeparator />
-        <BreadcrumbItem><BreadcrumbPage>Executions</BreadcrumbPage></BreadcrumbItem>
-      </BreadcrumbList>
+    <Breadcrumb :model="[{ label: 'Home', route: `/${ws}` }, { label: 'Executions' }]" class="mb-4">
+      <template #item="{ item }">
+        <NuxtLink v-if="item.route" :to="item.route" class="text-primary hover:underline">{{ item.label }}</NuxtLink>
+        <span v-else>{{ item.label }}</span>
+      </template>
     </Breadcrumb>
 
-    <h1 class="text-3xl font-bold mt-4 mb-6">Workflow Executions</h1>
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-3xl font-bold">Workflow Executions</h1>
+        <p class="text-muted-foreground text-sm mt-1">Execution history across all workflows
+          <span v-if="streamConnected" class="inline-flex items-center gap-1 text-xs text-green-600 ml-2">
+            <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Live
+          </span>
+        </p>
+      </div>
+    </div>
 
-    <Card>
-      <CardContent class="pt-6">
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="border-b border-border">
-                <th class="text-left py-3 px-4 font-medium">Execution ID</th>
-                <th class="text-left py-3 px-4 font-medium">Workflow</th>
-                <th class="text-center py-3 px-4 font-medium">Version</th>
-                <th class="text-left py-3 px-4 font-medium">Trigger</th>
-                <th class="text-center py-3 px-4 font-medium">Status</th>
-                <th class="text-left py-3 px-4 font-medium">Started</th>
-                <th class="text-left py-3 px-4 font-medium">Completed</th>
-                <th class="text-left py-3 px-4 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="exec in executions" :key="exec.id" class="border-b border-border hover:bg-muted/50">
-                <td class="py-3 px-4 font-mono text-xs">{{ exec.id.substring(0, 8) }}…</td>
-                <td class="py-3 px-4">{{ exec.workflowId?.substring(0, 8) }}…</td>
-                <td class="py-3 px-4 text-center">
-                  <Badge v-if="exec.workflowVersion" variant="outline" class="font-mono text-xs">v{{ exec.workflowVersion }}</Badge>
-                  <span v-else class="text-muted-foreground">—</span>
-                </td>
-                <td class="py-3 px-4 text-xs">
-                  <Badge variant="secondary">{{ formatTriggerType(exec.triggerMetadata?.type || 'manual') }}</Badge>
-                  <Badge v-if="exec.triggerMetadata?.retryOf" variant="outline" class="ml-1 text-amber-600">retry</Badge>
-                </td>
-                <td class="py-3 px-4 text-center">
-                  <Badge :variant="exec.status === 'completed' ? 'default' : exec.status === 'failed' ? 'destructive' : 'secondary'">{{ exec.status }}</Badge>
-                </td>
-                <td class="py-3 px-4 text-muted-foreground text-xs">{{ exec.startedAt ? new Date(exec.startedAt).toLocaleString() : '—' }}</td>
-                <td class="py-3 px-4 text-muted-foreground text-xs">{{ exec.completedAt ? new Date(exec.completedAt).toLocaleString() : '—' }}</td>
-                <td class="py-3 px-4">
-                  <NuxtLink :to="`/${ws}/executions/${exec.id}`"><Button variant="ghost" size="sm" class="text-xs h-7">Detail →</Button></NuxtLink>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <p v-if="executions.length === 0" class="text-center text-muted-foreground py-8">No executions yet.</p>
-        </div>
-      </CardContent>
-    </Card>
+    <DataTable :value="executions" paginator :rows="limit" :totalRecords="total" lazy @page="onPage($event)"
+      stripedRows :loading="pending" dataKey="id" :rowsPerPageOptions="[10, 20, 50, 100]"
+      @update:rows="onRowsChange">
+      <template #empty><div class="text-center py-8 text-surface-400">No executions yet.</div></template>
+      <Column header="ID" style="width: 120px">
+        <template #body="{ data }">
+          <NuxtLink :to="`/${ws}/executions/${data.id}`" class="text-primary font-mono text-sm hover:underline">{{ data.id.substring(0, 8) }}&hellip;</NuxtLink>
+        </template>
+      </Column>
+      <Column header="Workflow" style="min-width: 150px">
+        <template #body="{ data }"><span class="text-sm">{{ data.workflowName || data.workflowId?.substring(0, 8) + '\u2026' }}</span></template>
+      </Column>
+      <Column header="Version" style="width: 80px">
+        <template #body="{ data }"><span class="font-mono text-sm">v{{ data.workflowVersion || '?' }}</span></template>
+      </Column>
+      <Column header="Trigger" style="width: 120px">
+        <template #body="{ data }">
+          <Tag :value="formatTriggerType(data.triggerMetadata?.type || 'manual')" severity="secondary" />
+        </template>
+      </Column>
+      <Column header="Status" style="width: 110px">
+        <template #body="{ data }"><Tag :value="data.status" :severity="getStatusSeverity(data.status)" /></template>
+      </Column>
+      <Column header="Progress" style="width: 100px">
+        <template #body="{ data }"><span class="text-sm text-surface-500">{{ data.currentStep ?? 0 }}/{{ data.totalSteps ?? '?' }}</span></template>
+      </Column>
+      <Column header="Started" style="width: 170px">
+        <template #body="{ data }"><span class="text-sm text-surface-500">{{ data.startedAt ? new Date(data.startedAt).toLocaleString() : '\u2014' }}</span></template>
+      </Column>
+      <Column header="Completed" style="width: 170px">
+        <template #body="{ data }"><span class="text-sm text-surface-500">{{ data.completedAt ? new Date(data.completedAt).toLocaleString() : '\u2014' }}</span></template>
+      </Column>
+      <Column header="" style="width: 60px">
+        <template #body="{ data }">
+          <NuxtLink :to="`/${ws}/executions/${data.id}`"><Button icon="pi pi-arrow-right" text rounded size="small" /></NuxtLink>
+        </template>
+      </Column>
+    </DataTable>
   </div>
 </template>
 
@@ -62,17 +65,28 @@ const headers = authHeaders();
 const route = useRoute();
 const ws = computed(() => (route.params.workspace as string) || 'default');
 
-const { data } = await useFetch('/api/executions?limit=50', { headers });
-const executions = computed(() => data.value?.executions ?? []);
+const page = ref(1);
+const limit = ref(20);
 
-function formatTriggerType(type: string): string {
-  const labels: Record<string, string> = {
-    time_schedule: 'Repeatable Schedule',
-    exact_datetime: 'Exact Datetime',
-    webhook: 'Webhook',
-    event: 'Event',
-    manual: 'Manual',
-  };
-  return labels[type] || type;
-}
+const { data, pending, refresh } = await useFetch(
+  computed(() => `/api/executions?page=${page.value}&limit=${limit.value}`),
+  { headers, watch: [page, limit] },
+);
+const executions = computed(() => (data.value as any)?.executions ?? []);
+const total = computed(() => (data.value as any)?.total ?? 0);
+
+// ─── Real-time Updates ───────────────────────────────────────────────
+const { connected: streamConnected, on: onStreamEvent } = useExecutionListStream();
+
+// Refresh listing when executions are created or change status
+onStreamEvent('execution.created', () => { refresh(); });
+onStreamEvent('execution.started', () => { refresh(); });
+onStreamEvent('execution.completed', () => { refresh(); });
+onStreamEvent('execution.failed', () => { refresh(); });
+onStreamEvent('execution.cancelled', () => { refresh(); });
+
+function onPage(event: any) { page.value = event.page + 1; }
+function onRowsChange(newRows: number) { limit.value = newRows; page.value = 1; }
+function formatTriggerType(t: string) { return { time_schedule: 'Schedule', webhook: 'Webhook', event: 'Event', manual: 'Manual', exact_datetime: 'Exact Time' }[t] || t; }
+function getStatusSeverity(s: string) { return { completed: 'success', running: 'warn', pending: 'warn', failed: 'danger', cancelled: 'secondary' }[s] || 'secondary'; }
 </script>

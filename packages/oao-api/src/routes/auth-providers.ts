@@ -175,35 +175,60 @@ authProvidersRouter.delete('/:id', async (c) => {
 // ── Test LDAP connection (dry-run without user bind) ──
 
 const testSchema = z.object({
-  url: z.string().url(),
-  bindDn: z.string().min(1),
-  bindCredential: z.string().min(1), // raw password for testing
-  searchBase: z.string().min(1),
-  startTls: z.boolean().optional(),
-  tlsRejectUnauthorized: z.boolean().optional(),
+  providerId: z.string().uuid(),
 });
 
 authProvidersRouter.post('/test-connection', async (c) => {
+  const user = c.get('user');
   if (!requireAdmin(c)) return c.json({ error: 'Forbidden' }, 403);
 
   const body = testSchema.parse(await c.req.json());
 
+  const provider = await db.query.authProviders.findFirst({
+    where: and(
+      eq(authProviders.id, body.providerId),
+      eq(authProviders.workspaceId, user.workspaceId!),
+    ),
+  });
+  if (!provider) return c.json({ error: 'Provider not found' }, 404);
+  if (provider.providerType !== 'ldap') return c.json({ error: 'Test connection is only supported for LDAP providers' }, 400);
+
+  const config = (provider.config ?? {}) as Record<string, unknown>;
+  const url = config.url as string | undefined;
+  const bindDn = config.bindDn as string | undefined;
+  const searchBase = config.searchBase as string | undefined;
+
+  if (!url || !bindDn || !searchBase) {
+    return c.json({ success: false, message: 'LDAP config incomplete: url, bindDn, and searchBase are required' }, 400);
+  }
+
+  // Decrypt bind credential if stored encrypted
+  let bindCredential = '';
+  if (config.bindCredentialEncrypted && typeof config.bindCredentialEncrypted === 'string' && config.bindCredentialEncrypted !== '***') {
+    const { decrypt } = await import('@oao/shared');
+    bindCredential = decrypt(config.bindCredentialEncrypted);
+  }
+
+  if (!bindCredential) {
+    return c.json({ success: false, message: 'No bind credential stored for this provider. Edit the provider and set a bind password first.' }, 400);
+  }
+
   try {
     const ldapts = await import('ldapts');
     const client = new ldapts.Client({
-      url: body.url,
-      tlsOptions: body.tlsRejectUnauthorized === false ? { rejectUnauthorized: false } : undefined,
+      url,
+      tlsOptions: config.tlsRejectUnauthorized === false ? { rejectUnauthorized: false } : undefined,
       strictDN: false,
     });
 
-    if (body.startTls) {
-      await client.startTLS(body.tlsRejectUnauthorized === false ? { rejectUnauthorized: false } : {});
+    if (config.startTls) {
+      await client.startTLS(config.tlsRejectUnauthorized === false ? { rejectUnauthorized: false } : {});
     }
 
-    await client.bind(body.bindDn, body.bindCredential);
+    await client.bind(bindDn, bindCredential);
 
     // Quick search to verify access
-    const { searchEntries } = await client.search(body.searchBase, {
+    const { searchEntries } = await client.search(searchBase, {
       scope: 'sub',
       filter: '(objectClass=*)',
       sizeLimit: 1,

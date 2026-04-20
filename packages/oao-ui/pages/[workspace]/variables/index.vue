@@ -1,230 +1,232 @@
 <template>
-  <div class="space-y-6">
-    <Breadcrumb>
-      <BreadcrumbList>
-        <BreadcrumbItem><BreadcrumbLink :href="`/${ws}`">Home</BreadcrumbLink></BreadcrumbItem>
-        <BreadcrumbSeparator />
-        <BreadcrumbItem><BreadcrumbPage>Variables</BreadcrumbPage></BreadcrumbItem>
-      </BreadcrumbList>
+  <div>
+    <Breadcrumb :model="[{ label: 'Home', route: `/${ws}` }, { label: 'Variables' }]" class="mb-4">
+      <template #item="{ item }">
+        <NuxtLink v-if="item.route" :to="item.route" class="text-primary hover:underline">{{ item.label }}</NuxtLink>
+        <span v-else>{{ item.label }}</span>
+      </template>
     </Breadcrumb>
 
-    <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between mt-4">
+    <div class="flex items-center justify-between mb-6">
       <div>
-        <h1 class="text-3xl font-bold">Variables</h1>
-        <p class="text-muted-foreground text-sm mt-1">Manage credential and property variables with breadcrumb-based create and edit flows. Priority order is Agent &gt; User &gt; Workspace.</p>
+        <h1 class="text-2xl font-semibold">Variables</h1>
+        <p class="text-surface-500 text-sm mt-1">Manage scoped variables for agents and workflows</p>
       </div>
-      <NuxtLink v-if="canManageVariables" :to="`/${ws}/variables/new`">
-        <Button>+ Create Variable</Button>
-      </NuxtLink>
+      <Button label="Create Variable" icon="pi pi-plus" @click="showCreate = true" />
     </div>
 
-    <div class="rounded-lg border border-blue-200 bg-blue-50/60 p-4 text-sm text-blue-700 dark:border-blue-800 dark:bg-blue-950/20 dark:text-blue-300">
-      <p>
-        <strong>Tip:</strong> Properties can be referenced in prompts with
-        <code class="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-mono dark:bg-blue-900" v-text="'{{ Properties.KEY_NAME }}'" />.
-        Variables marked as environment variables are written into the agent execution environment.
-      </p>
+    <!-- Scope filter -->
+    <div class="flex gap-2 mb-4">
+      <SelectButton v-model="scope" :options="scopeOptions" optionLabel="label" optionValue="value" />
     </div>
 
-    <Card v-if="isAdmin">
-      <CardHeader>
-        <CardTitle>Workspace Variables</CardTitle>
-        <CardDescription>Shared defaults for everyone in the workspace. User and agent variables override these entries when keys overlap.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div v-if="workspaceVariables.length" class="space-y-3">
-          <div
-            v-for="variable in workspaceVariables"
-            :key="variable.id"
-            class="flex flex-col gap-4 rounded-lg border border-border p-4 lg:flex-row lg:items-start lg:justify-between"
-          >
-            <div class="space-y-2">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="font-mono font-semibold">{{ variable.key }}</span>
-                <Badge :variant="variable.variableType === 'property' ? 'outline' : 'secondary'">{{ formatVariableType(variable.variableType) }}</Badge>
-                <Badge v-if="variable.variableType === 'credential' && variable.credentialSubType && variable.credentialSubType !== 'secret_text'" variant="outline">{{ formatCredentialSubType(variable.credentialSubType) }}</Badge>
-                <Badge v-if="variable.injectAsEnvVariable" variant="outline">Environment</Badge>
-              </div>
-              <p v-if="variable.description" class="text-sm text-muted-foreground">{{ variable.description }}</p>
-              <p class="text-xs text-muted-foreground">Updated {{ formatDate(variable.updatedAt) }}</p>
-            </div>
-            <div class="flex items-center gap-2">
-              <NuxtLink :to="variableDetailLocation(variable.id, 'workspace')">
-                <Button variant="outline" size="sm">Edit</Button>
-              </NuxtLink>
-              <Button v-if="canManageVariables" variant="ghost" size="sm" class="text-destructive" @click="handleDelete(variable.id, variable.key, 'workspace')">Delete</Button>
-            </div>
+    <DataTable :value="filteredVars" stripedRows dataKey="id"
+      paginator :rows="20" :rowsPerPageOptions="[10, 20, 50, 100]">
+      <template #empty><div class="text-center py-8 text-surface-400">No variables found. Select a scope or create one.</div></template>
+      <Column header="Key" sortable field="key" style="min-width: 160px">
+        <template #body="{ data }"><span class="font-medium font-mono">{{ data.key }}</span></template>
+      </Column>
+      <Column header="Scope" style="width: 120px">
+        <template #body="{ data }"><Tag :value="data._scope" :severity="scopeSeverity(data._scope)" /></template>
+      </Column>
+      <Column header="Type" style="width: 120px">
+        <template #body="{ data }"><Tag :value="data.variableType" :severity="data.variableType === 'credential' ? 'warn' : 'secondary'" /></template>
+      </Column>
+      <Column header="Sub-Type" style="width: 140px">
+        <template #body="{ data }"><span class="text-sm">{{ data.credentialSubType || '\u2014' }}</span></template>
+      </Column>
+      <Column header="Description" style="min-width: 180px">
+        <template #body="{ data }"><span class="text-sm text-surface-500">{{ data.description || '\u2014' }}</span></template>
+      </Column>
+      <Column header="Inject ENV" style="width: 100px">
+        <template #body="{ data }"><Tag :value="data.injectAsEnvVariable ? 'Yes' : 'No'" :severity="data.injectAsEnvVariable ? 'success' : 'secondary'" /></template>
+      </Column>
+      <Column header="" style="width: 100px">
+        <template #body="{ data }">
+          <div class="flex gap-1">
+            <Button icon="pi pi-pencil" text rounded size="small" @click="startEdit(data)" />
+            <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click="handleDelete(data)" />
           </div>
-        </div>
-        <div v-else class="py-10 text-center text-sm text-muted-foreground">No workspace-level variables stored yet.</div>
-      </CardContent>
-    </Card>
+        </template>
+      </Column>
+    </DataTable>
 
-    <Card>
-      <CardHeader>
-        <CardTitle>User Variables</CardTitle>
-        <CardDescription>Available across your workflow runs. Agent-scoped values with the same key win during execution.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div v-if="userVariables.length" class="space-y-3">
-          <div
-            v-for="variable in userVariables"
-            :key="variable.id"
-            class="flex flex-col gap-4 rounded-lg border border-border p-4 lg:flex-row lg:items-start lg:justify-between"
-          >
-            <div class="space-y-2">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="font-mono font-semibold">{{ variable.key }}</span>
-                <Badge :variant="variable.variableType === 'property' ? 'outline' : 'secondary'">{{ formatVariableType(variable.variableType) }}</Badge>
-                <Badge v-if="variable.variableType === 'credential' && variable.credentialSubType && variable.credentialSubType !== 'secret_text'" variant="outline">{{ formatCredentialSubType(variable.credentialSubType) }}</Badge>
-                <Badge v-if="variable.injectAsEnvVariable" variant="outline">Environment</Badge>
-              </div>
-              <p v-if="variable.description" class="text-sm text-muted-foreground">{{ variable.description }}</p>
-              <p class="text-xs text-muted-foreground">Updated {{ formatDate(variable.updatedAt) }}</p>
-            </div>
-            <div class="flex items-center gap-2">
-              <NuxtLink :to="variableDetailLocation(variable.id, 'user')">
-                <Button variant="outline" size="sm">Edit</Button>
-              </NuxtLink>
-              <Button v-if="canManageVariables" variant="ghost" size="sm" class="text-destructive" @click="handleDelete(variable.id, variable.key, 'user')">Delete</Button>
-            </div>
-          </div>
+    <!-- Create Dialog -->
+    <Dialog v-model:visible="showCreate" header="Create Variable" :style="{ width: '550px' }" modal>
+      <Message v-if="formError" severity="error" :closable="false" class="mb-3">{{ formError }}</Message>
+      <div class="flex flex-col gap-3">
+        <div class="flex flex-col gap-2"><label class="text-sm font-medium">Scope *</label>
+          <Select v-model="form.scope" :options="[{ label: 'User', value: 'user' }, { label: 'Workspace', value: 'workspace' }, { label: 'Agent', value: 'agent' }]" optionLabel="label" optionValue="value" />
         </div>
-        <div v-else class="py-10 text-center text-sm text-muted-foreground">No user-level variables stored yet.</div>
-      </CardContent>
-    </Card>
+        <div v-if="form.scope === 'agent'" class="flex flex-col gap-2"><label class="text-sm font-medium">Agent *</label>
+          <Select v-model="form.agentId" :options="agentOptions" optionLabel="name" optionValue="id" placeholder="Select agent" />
+        </div>
+        <div class="flex flex-col gap-2"><label class="text-sm font-medium">Key *</label>
+          <InputText v-model="form.key" placeholder="MY_SECRET_KEY" />
+          <small class="text-surface-400">Must match: A-Z, 0-9, underscores</small>
+        </div>
+        <div class="flex flex-col gap-2"><label class="text-sm font-medium">Value *</label><Textarea v-model="form.value" rows="3" /></div>
+        <div class="flex flex-col gap-2"><label class="text-sm font-medium">Type</label>
+          <Select v-model="form.variableType" :options="[{ label: 'Credential', value: 'credential' }, { label: 'Property', value: 'property' }]" optionLabel="label" optionValue="value" />
+        </div>
+        <div v-if="form.variableType === 'credential'" class="flex flex-col gap-2"><label class="text-sm font-medium">Credential Sub-Type</label>
+          <Select v-model="form.credentialSubType" :options="credSubTypes" optionLabel="label" optionValue="value" />
+        </div>
+        <div class="flex flex-col gap-2"><label class="text-sm font-medium">Description</label><InputText v-model="form.description" /></div>
+        <div class="flex items-center gap-2"><Checkbox v-model="form.injectAsEnvVariable" :binary="true" inputId="injectEnv" /><label for="injectEnv" class="text-sm">Inject as environment variable</label></div>
+      </div>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" @click="showCreate = false" />
+        <Button label="Create" icon="pi pi-check" :loading="saving" @click="handleCreate" />
+      </template>
+    </Dialog>
 
-    <Card>
-      <CardHeader>
-        <CardTitle>Agent Variables</CardTitle>
-        <CardDescription>Scoped to a single agent. These values override user and workspace variables during that agent's execution.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div v-if="allAgentVariables.length" class="space-y-6">
-          <div v-for="agent in agents" :key="agent.id">
-            <div v-if="varsByAgent[agent.id]?.length" class="space-y-3">
-              <div class="flex items-center gap-2">
-                <h2 class="text-sm font-semibold">{{ agent.name }}</h2>
-                <Badge variant="secondary">{{ varsByAgent[agent.id].length }}</Badge>
-              </div>
-              <div
-                v-for="variable in varsByAgent[agent.id]"
-                :key="variable.id"
-                class="flex flex-col gap-4 rounded-lg border border-border p-4 lg:flex-row lg:items-start lg:justify-between"
-              >
-                <div class="space-y-2">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <span class="font-mono font-semibold">{{ variable.key }}</span>
-                    <Badge :variant="variable.variableType === 'property' ? 'outline' : 'secondary'">{{ formatVariableType(variable.variableType) }}</Badge>
-                    <Badge v-if="variable.variableType === 'credential' && variable.credentialSubType && variable.credentialSubType !== 'secret_text'" variant="outline">{{ formatCredentialSubType(variable.credentialSubType) }}</Badge>
-                    <Badge v-if="variable.injectAsEnvVariable" variant="outline">Environment</Badge>
-                  </div>
-                  <p v-if="variable.description" class="text-sm text-muted-foreground">{{ variable.description }}</p>
-                  <p class="text-xs text-muted-foreground">Updated {{ formatDate(variable.updatedAt) }}</p>
-                </div>
-                <div class="flex items-center gap-2">
-                  <NuxtLink :to="variableDetailLocation(variable.id, 'agent')">
-                    <Button variant="outline" size="sm">Edit</Button>
-                  </NuxtLink>
-                  <Button v-if="canManageVariables" variant="ghost" size="sm" class="text-destructive" @click="handleDelete(variable.id, variable.key, 'agent')">Delete</Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div v-else class="py-10 text-center text-sm text-muted-foreground">No agent-level variables stored yet.</div>
-      </CardContent>
-    </Card>
+    <!-- Edit Dialog -->
+    <Dialog v-model:visible="showEdit" header="Edit Variable" :style="{ width: '500px' }" modal>
+      <div class="flex flex-col gap-3">
+        <div class="flex flex-col gap-2"><label class="text-sm font-medium">Key</label><InputText :model-value="editForm.key" disabled /></div>
+        <div class="flex flex-col gap-2"><label class="text-sm font-medium">New Value</label><Textarea v-model="editForm.value" rows="3" placeholder="Enter new value (leave empty to keep current)" /></div>
+        <div class="flex flex-col gap-2"><label class="text-sm font-medium">Description</label><InputText v-model="editForm.description" /></div>
+        <div class="flex items-center gap-2"><Checkbox v-model="editForm.injectAsEnvVariable" :binary="true" inputId="editInjectEnv" /><label for="editInjectEnv" class="text-sm">Inject as environment variable</label></div>
+      </div>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" @click="showEdit = false" />
+        <Button label="Save" icon="pi pi-check" :loading="saving" @click="handleUpdate" />
+      </template>
+    </Dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { useVariableEditor, type VariableScope, type VariableSummary, type VariableType } from '~/composables/useVariableEditor';
-
-interface AgentSummary {
-  id: string;
-  name: string;
-}
-
-type VariableRecord = VariableSummary & { agentId?: string | null };
-
-const { authHeaders, user } = useAuth();
-const route = useRoute();
+const { authHeaders } = useAuth();
 const headers = authHeaders();
+const route = useRoute();
+const toast = useToast();
+const confirm = useConfirm();
 const ws = computed(() => (route.params.workspace as string) || 'default');
-const isAdmin = computed(() => user.value?.role === 'workspace_admin' || user.value?.role === 'super_admin');
-const canManageVariables = computed(() => user.value?.role !== 'view_user');
 
-const { formatCredentialSubType } = useVariableEditor();
+const scope = ref('workspace');
+const showCreate = ref(false);
+const showEdit = ref(false);
+const saving = ref(false);
+const formError = ref('');
+
+const scopeOptions = [
+  { label: 'Workspace', value: 'workspace' },
+  { label: 'User', value: 'user' },
+  { label: 'Agent', value: 'agent' },
+];
+
+const credSubTypes = [
+  { label: 'Secret Text', value: 'secret_text' },
+  { label: 'GitHub Token', value: 'github_token' },
+  { label: 'GitHub App', value: 'github_app' },
+  { label: 'User Account', value: 'user_account' },
+  { label: 'Private Key', value: 'private_key' },
+  { label: 'Certificate', value: 'certificate' },
+];
+
+const form = reactive({
+  scope: 'workspace' as string, agentId: null as string | null,
+  key: '', value: '', variableType: 'credential', credentialSubType: 'secret_text',
+  description: '', injectAsEnvVariable: false,
+});
+const editForm = reactive({ id: '', key: '', value: '', description: '', injectAsEnvVariable: false, _scope: '', agentId: null as string | null });
+
+// Fetch variables for each scope
+const { data: wsVarsData, refresh: refreshWs } = await useFetch('/api/variables?scope=workspace', { headers });
+const { data: userVarsData, refresh: refreshUser } = await useFetch('/api/variables?scope=user', { headers });
 
 const { data: agentsData } = await useFetch('/api/agents', { headers });
-const agents = computed<AgentSummary[]>(() => (agentsData.value?.agents ?? []) as AgentSummary[]);
+const agentOptions = computed(() => (agentsData.value as any)?.agents ?? []);
 
-const userVariables = ref<VariableRecord[]>([]);
-const workspaceVariables = ref<VariableRecord[]>([]);
-const allAgentVariables = ref<VariableRecord[]>([]);
+const agentVarsMap = ref<Record<string, any[]>>({});
 
-const varsByAgent = computed<Record<string, VariableRecord[]>>(() => {
-  const grouped: Record<string, VariableRecord[]> = {};
-
-  for (const variable of allAgentVariables.value) {
-    if (!variable.agentId) continue;
-    if (!grouped[variable.agentId]) grouped[variable.agentId] = [];
-    grouped[variable.agentId].push(variable);
+async function loadAgentVars() {
+  const map: Record<string, any[]> = {};
+  for (const agent of agentOptions.value) {
+    try {
+      const res = await $fetch<any>(`/api/variables?scope=agent&agentId=${agent.id}`, { headers });
+      map[agent.id] = (res?.variables ?? []).map((v: any) => ({ ...v, _scope: 'agent', _agentName: agent.name }));
+    } catch { /* skip */ }
   }
+  agentVarsMap.value = map;
+}
 
-  return grouped;
+onMounted(() => { if (agentOptions.value.length > 0) loadAgentVars(); });
+watch(agentOptions, (a) => { if (a.length > 0) loadAgentVars(); });
+
+const wsVars = computed(() => ((wsVarsData.value as any)?.variables ?? []).map((v: any) => ({ ...v, _scope: 'workspace' })));
+const userVars = computed(() => ((userVarsData.value as any)?.variables ?? []).map((v: any) => ({ ...v, _scope: 'user' })));
+const agentVars = computed(() => Object.values(agentVarsMap.value).flat());
+
+const filteredVars = computed(() => {
+  if (scope.value === 'agent') return agentVars.value;
+  if (scope.value === 'user') return userVars.value;
+  return wsVars.value;
 });
 
-function formatVariableType(variableType: VariableType): string {
-  return variableType === 'credential' ? 'Credential' : 'Property';
+function scopeSeverity(s: string) { return { user: 'info', workspace: 'success', agent: 'warn' }[s] || 'secondary'; }
+
+async function refreshAll() {
+  await Promise.all([refreshWs(), refreshUser(), loadAgentVars()]);
 }
 
-function formatDate(dateValue?: string): string {
-  if (!dateValue) return 'just now';
-  return new Date(dateValue).toLocaleString();
-}
-
-function variableDetailLocation(id: string, scope: VariableScope) {
-  return {
-    path: `/${ws.value}/variables/${id}`,
-    query: { scope },
-  };
-}
-
-async function fetchAllVariables() {
-  const [userResult, workspaceResult, agentResults] = await Promise.all([
-    $fetch<{ variables: VariableRecord[] }>('/api/variables?scope=user', { headers }).catch(() => ({ variables: [] })),
-    isAdmin.value
-      ? $fetch<{ variables: VariableRecord[] }>('/api/variables?scope=workspace', { headers }).catch(() => ({ variables: [] }))
-      : Promise.resolve({ variables: [] as VariableRecord[] }),
-    Promise.all(
-      agents.value.map(async (agent) => {
-        const result = await $fetch<{ variables: VariableRecord[] }>(`/api/variables?agentId=${agent.id}`, { headers }).catch(() => ({ variables: [] as VariableRecord[] }));
-        return result.variables.map((variable) => ({ ...variable, agentId: agent.id }));
-      }),
-    ),
-  ]);
-
-  userVariables.value = userResult.variables;
-  workspaceVariables.value = workspaceResult.variables;
-  allAgentVariables.value = agentResults.flat();
-}
-
-await fetchAllVariables();
-
-async function handleDelete(id: string, key: string, scope: VariableScope) {
-  if (!confirm(`Delete variable "${key}"?`)) return;
-
+async function handleCreate() {
+  formError.value = '';
+  saving.value = true;
   try {
-    const query = scope === 'agent' ? '' : `?scope=${scope}`;
-    await $fetch(`/api/variables/${id}${query}`, {
-      method: 'DELETE',
-      headers,
-    });
-    await fetchAllVariables();
-  } catch {
-    alert('Failed to delete variable');
+    const body: any = {
+      key: form.key, value: form.value, variableType: form.variableType,
+      credentialSubType: form.credentialSubType, description: form.description,
+      injectAsEnvVariable: form.injectAsEnvVariable, scope: form.scope,
+    };
+    if (form.scope === 'agent') body.agentId = form.agentId;
+    await $fetch('/api/variables', { method: 'POST', headers, body });
+    showCreate.value = false;
+    toast.add({ severity: 'success', summary: 'Created', life: 3000 });
+    Object.assign(form, { key: '', value: '', variableType: 'credential', credentialSubType: 'secret_text', description: '', injectAsEnvVariable: false, agentId: null });
+    await refreshAll();
+  } catch (e: any) {
+    formError.value = e?.data?.error || 'Failed to create variable';
+  } finally {
+    saving.value = false;
   }
+}
+
+function startEdit(v: any) {
+  Object.assign(editForm, { id: v.id, key: v.key, value: '', description: v.description || '', injectAsEnvVariable: v.injectAsEnvVariable || false, _scope: v._scope, agentId: v.agentId || null });
+  showEdit.value = true;
+}
+
+async function handleUpdate() {
+  saving.value = true;
+  try {
+    const body: any = { description: editForm.description, injectAsEnvVariable: editForm.injectAsEnvVariable, scope: editForm._scope };
+    if (editForm.value) body.value = editForm.value;
+    if (editForm.agentId) body.agentId = editForm.agentId;
+    await $fetch(`/api/variables/${editForm.id}`, { method: 'PUT', headers, body });
+    showEdit.value = false;
+    toast.add({ severity: 'success', summary: 'Updated', life: 3000 });
+    await refreshAll();
+  } catch (e: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: e?.data?.error || 'Failed', life: 5000 });
+  } finally {
+    saving.value = false;
+  }
+}
+
+function handleDelete(v: any) {
+  confirm.require({
+    message: `Delete variable "${v.key}"?`, header: 'Confirm', icon: 'pi pi-exclamation-triangle',
+    rejectProps: { label: 'Cancel', severity: 'secondary' }, acceptProps: { label: 'Delete', severity: 'danger' },
+    accept: async () => {
+      const params = new URLSearchParams({ scope: v._scope });
+      if (v.agentId) params.set('agentId', v.agentId);
+      await $fetch(`/api/variables/${v.id}?${params.toString()}`, { method: 'DELETE', headers });
+      toast.add({ severity: 'success', summary: 'Deleted', life: 3000 });
+      await refreshAll();
+    },
+  });
 }
 </script>

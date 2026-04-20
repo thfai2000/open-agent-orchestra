@@ -22,6 +22,7 @@ import eventsRouter from './routes/events.js';
 import agentFilesRouter from './routes/agent-files.js';
 import agentInstancesRouter from './routes/agent-instances.js';
 import tokensRouter, { validatePat } from './routes/tokens.js';
+import { startRealtimeSubscriber } from './services/realtime-bus.js';
 
 const logger = createLogger('oao-api');
 const port = Number(process.env.AGENT_API_PORT) || 4002;
@@ -58,6 +59,7 @@ const app = createApp({
 });
 
 if (process.env.NODE_ENV !== 'test') {
+  startRealtimeSubscriber();
   serve({ fetch: app.fetch, port }, () => {
     logger.info(`Agent API running on http://localhost:${port}`);
   });

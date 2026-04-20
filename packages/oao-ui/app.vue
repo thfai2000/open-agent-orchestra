@@ -1,101 +1,89 @@
 <template>
-  <div class="min-h-screen bg-background text-foreground">
-    <!-- Top bar (always visible) -->
-    <header class="h-14 border-b border-border bg-card flex items-center justify-between px-4 fixed top-0 left-0 right-0 z-30">
+  <div class="min-h-screen bg-surface-50">
+    <Toast />
+    <ConfirmDialog />
+
+    <!-- Topbar -->
+    <header class="h-14 bg-white bg-surface-0 border-b border-surface-200 flex items-center justify-between px-4 fixed top-0 left-0 right-0 z-40 backdrop-blur-sm">
       <div class="flex items-center gap-3">
-        <button v-if="isAuthenticated" @click="sidebarOpen = !sidebarOpen" class="p-1.5 rounded-md hover:bg-muted">
-          <span class="text-lg">☰</span>
+        <button v-if="isAuthenticated" @click="sidebarOpen = !sidebarOpen" class="lg:hidden p-2 rounded-lg hover:bg-surface-100 transition">
+          <i class="pi pi-bars text-surface-600"></i>
         </button>
-        <NuxtLink :to="`/${ws}`" class="text-lg font-bold text-primary">OAO</NuxtLink>
+        <NuxtLink :to="`/${ws}`" class="flex items-center gap-2">
+          <img src="/logo.png" alt="OAO" class="w-7 h-7 rounded-full" />
+          <span class="text-xl font-bold text-primary">OAO</span>
+          <span class="text-xs text-surface-400 hidden sm:inline">Open Agent Orchestra</span>
+        </NuxtLink>
       </div>
-      <div class="flex items-center gap-4">
+      <div class="flex items-center gap-3">
         <template v-if="isAuthenticated">
-          <DropdownMenu>
-            <DropdownMenuTrigger as-child>
-              <button class="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-muted transition text-sm">
-                <span class="inline-flex items-center justify-center h-7 w-7 rounded-full bg-primary/10 text-primary text-xs font-bold">
-                  {{ user?.name?.charAt(0)?.toUpperCase() || '?' }}
-                </span>
-                <span class="hidden sm:inline text-foreground">{{ user?.name }}</span>
-                <span class="hidden sm:inline text-[10px] text-muted-foreground">({{ roleLabel }})</span>
-                <span class="text-xs text-muted-foreground">▾</span>
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" class="w-52">
-              <DropdownMenuLabel class="font-normal">
-                <p class="text-sm font-medium">{{ user?.name }}</p>
-                <p class="text-xs text-muted-foreground">{{ user?.email }}</p>
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem as-child>
-                <NuxtLink :to="`/${ws}/settings/change-password`" class="cursor-pointer">
-                  <span class="mr-2">🔑</span>Change Password
-                </NuxtLink>
-              </DropdownMenuItem>
-              <DropdownMenuItem as-child>
-                <NuxtLink :to="`/${ws}/settings/tokens`" class="cursor-pointer">
-                  <span class="mr-2">🎟️</span>Access Tokens
-                </NuxtLink>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem class="text-destructive cursor-pointer" @click="logout">
-                <span class="mr-2">🚪</span>Logout
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Button type="button" text rounded :label="user?.name || ''" icon="pi pi-user" @click="toggleUserMenu" size="small" severity="secondary" />
+          <Menu ref="userMenu" :model="userMenuItems" :popup="true" />
         </template>
         <template v-else>
-          <NuxtLink :to="`/${ws}/login`" class="text-sm text-muted-foreground hover:text-foreground transition">Login</NuxtLink>
+          <NuxtLink :to="`/${ws}/login`">
+            <Button label="Login" size="small" />
+          </NuxtLink>
         </template>
       </div>
     </header>
 
     <div class="pt-14 flex">
-      <!-- Sidebar overlay (mobile) -->
-      <div v-if="sidebarOpen && isAuthenticated" class="fixed inset-0 bg-black/30 z-20 lg:hidden" @click="sidebarOpen = false" />
+      <!-- Mobile overlay -->
+      <div v-if="sidebarOpen && isAuthenticated" class="fixed inset-0 bg-black/30 z-30 lg:hidden" @click="sidebarOpen = false" />
 
       <!-- Sidebar -->
       <aside v-if="isAuthenticated"
-        :class="[
-          'fixed top-14 bottom-0 z-20 w-56 bg-card border-r border-border flex flex-col transition-transform duration-200',
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0 lg:w-56',
-        ]">
-        <nav class="flex-1 overflow-y-auto py-4 px-3 space-y-1">
-          <p class="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-1">Main</p>
-          <NuxtLink v-for="item in mainNav" :key="item.to" :to="item.to"
-            :class="['flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition',
-              isActiveRoute(item.to) ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted']"
-            @click="closeMobileSidebar">
-            <span>{{ item.icon }}</span><span>{{ item.label }}</span>
-          </NuxtLink>
-
+        :class="['fixed top-14 bottom-0 z-30 w-60 bg-white bg-surface-0 border-r border-surface-200 flex flex-col transition-transform duration-200 overflow-y-auto',
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0']">
+        <nav class="flex-1 py-4 px-3">
+          <div class="mb-4">
+            <span class="text-xs font-semibold text-surface-400 uppercase tracking-wider px-3">Main</span>
+            <div class="mt-2 flex flex-col gap-0.5">
+              <NuxtLink v-for="item in mainNav" :key="item.to" :to="item.to"
+                :class="['flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors',
+                  isActiveRoute(item.to) ? 'bg-primary-50 text-primary-700 font-medium' : 'text-surface-600 hover:text-surface-900 hover:bg-surface-100']"
+                @click="closeMobileSidebar">
+                <i :class="[item.icon, 'text-base']"></i>
+                <span>{{ item.label }}</span>
+              </NuxtLink>
+            </div>
+          </div>
           <template v-if="isAdmin">
-            <Separator class="my-3" />
-            <p class="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-1">Admin</p>
-            <NuxtLink v-for="item in adminNav" :key="item.to" :to="item.to"
-              :class="['flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition',
-                isActiveRoute(item.to) ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted']"
-              @click="closeMobileSidebar">
-              <span>{{ item.icon }}</span><span>{{ item.label }}</span>
-            </NuxtLink>
+            <Divider />
+            <div class="mb-4">
+              <span class="text-xs font-semibold text-surface-400 uppercase tracking-wider px-3">Admin</span>
+              <div class="mt-2 flex flex-col gap-0.5">
+                <NuxtLink v-for="item in adminNav" :key="item.to" :to="item.to"
+                  :class="['flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors',
+                    isActiveRoute(item.to) ? 'bg-primary-50 text-primary-700 font-medium' : 'text-surface-600 hover:text-surface-900 hover:bg-surface-100']"
+                  @click="closeMobileSidebar">
+                  <i :class="[item.icon, 'text-base']"></i>
+                  <span>{{ item.label }}</span>
+                </NuxtLink>
+              </div>
+            </div>
           </template>
-
           <template v-if="user?.role === 'super_admin'">
-            <Separator class="my-3" />
-            <p class="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-1">System</p>
-            <NuxtLink :to="`/${ws}/workspaces`"
-              :class="['flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition',
-                isActiveRoute(`/${ws}/workspaces`) ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted']"
-              @click="closeMobileSidebar">
-              <span>🏢</span><span>Workspaces</span>
-            </NuxtLink>
+            <Divider />
+            <div>
+              <span class="text-xs font-semibold text-surface-400 uppercase tracking-wider px-3">System</span>
+              <div class="mt-2 flex flex-col gap-0.5">
+                <NuxtLink :to="`/${ws}/workspaces`"
+                  :class="['flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors',
+                    isActiveRoute(`/${ws}/workspaces`) ? 'bg-primary-50 text-primary-700 font-medium' : 'text-surface-600 hover:text-surface-900 hover:bg-surface-100']"
+                  @click="closeMobileSidebar">
+                  <i class="pi pi-building text-base"></i>
+                  <span>Workspaces</span>
+                </NuxtLink>
+              </div>
+            </div>
           </template>
         </nav>
       </aside>
 
       <!-- Main content -->
-      <main :class="['flex-1 min-h-[calc(100vh-3.5rem)] transition-all duration-200',
-        isAuthenticated ? 'lg:ml-56' : '']">
+      <main :class="['flex-1 min-h-[calc(100vh-3.5rem)] transition-all duration-200', isAuthenticated ? 'lg:ml-60' : '']">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <NuxtPage />
         </div>
@@ -107,66 +95,46 @@
 <script setup lang="ts">
 const { user, isAuthenticated, logout } = useAuth();
 const route = useRoute();
+const router = useRouter();
 const sidebarOpen = ref(false);
+const userMenu = ref();
 
 const ws = computed(() => user.value?.workspaceSlug || (route.params.workspace as string) || 'default');
 const isAdmin = computed(() => user.value?.role === 'workspace_admin' || user.value?.role === 'super_admin');
+
 const roleLabel = computed(() => {
-  const r = user.value?.role;
-  if (r === 'super_admin') return 'Super Admin';
-  if (r === 'workspace_admin') return 'Admin';
-  if (r === 'view_user') return 'Viewer';
-  return 'Creator';
+  const map: Record<string, string> = { super_admin: 'Super Admin', workspace_admin: 'Admin', creator_user: 'Creator', view_user: 'Viewer' };
+  return map[user.value?.role || ''] || 'User';
 });
 
 const mainNav = computed(() => [
-  { to: `/${ws.value}`, icon: '🏠', label: 'Dashboard' },
-  { to: `/${ws.value}/agents`, icon: '🤖', label: 'Agents' },
-  { to: `/${ws.value}/workflows`, icon: '⚡', label: 'Workflows' },
-  { to: `/${ws.value}/executions`, icon: '📋', label: 'Executions' },
-  { to: `/${ws.value}/instances`, icon: '🖥️', label: 'Instances' },
-  { to: `/${ws.value}/events`, icon: '📡', label: 'Events' },
-  { to: `/${ws.value}/variables`, icon: '🔑', label: 'Variables' },
-  { to: `/${ws.value}/admin/rate-limits`, icon: '📊', label: 'Rate Limits' },
+  { to: `/${ws.value}`, icon: 'pi pi-home', label: 'Dashboard' },
+  { to: `/${ws.value}/agents`, icon: 'pi pi-microchip-ai', label: 'Agents' },
+  { to: `/${ws.value}/workflows`, icon: 'pi pi-sitemap', label: 'Workflows' },
+  { to: `/${ws.value}/executions`, icon: 'pi pi-play-circle', label: 'Executions' },
+  { to: `/${ws.value}/instances`, icon: 'pi pi-server', label: 'Instances' },
+  { to: `/${ws.value}/events`, icon: 'pi pi-bell', label: 'Events' },
+  { to: `/${ws.value}/variables`, icon: 'pi pi-key', label: 'Variables' },
 ]);
 
 const adminNav = computed(() => [
-  { to: `/${ws.value}/admin/users`, icon: '👥', label: 'Users' },
-  { to: `/${ws.value}/admin/models`, icon: '🧠', label: 'Models' },
-  { to: `/${ws.value}/admin/auth-providers`, icon: '🔐', label: 'Auth Providers' },
+  { to: `/${ws.value}/admin/users`, icon: 'pi pi-users', label: 'Users' },
+  { to: `/${ws.value}/admin/models`, icon: 'pi pi-box', label: 'Models' },
+  { to: `/${ws.value}/admin/auth-providers`, icon: 'pi pi-lock', label: 'Auth Providers' },
+  { to: `/${ws.value}/admin/rate-limits`, icon: 'pi pi-gauge', label: 'Rate Limits' },
 ]);
 
-function isActiveRoute(path: string) {
-  if (path === `/${ws.value}`) return route.path === path;
-  return route.path.startsWith(path);
-}
+const userMenuItems = computed(() => [
+  { label: user.value?.name || 'User', disabled: true, class: 'font-semibold' },
+  { label: `${user.value?.email} (${roleLabel.value})`, disabled: true, class: 'text-xs' },
+  { separator: true },
+  { label: 'Change Password', icon: 'pi pi-key', command: () => router.push(`/${ws.value}/settings/change-password`) },
+  { label: 'Access Tokens', icon: 'pi pi-ticket', command: () => router.push(`/${ws.value}/settings/tokens`) },
+  { separator: true },
+  { label: 'Logout', icon: 'pi pi-sign-out', command: () => logout() },
+]);
 
-function closeMobileSidebar() {
-  if (window.innerWidth < 1024) sidebarOpen.value = false;
-}
+function toggleUserMenu(event: Event) { userMenu.value.toggle(event); }
+function isActiveRoute(path: string) { return path === `/${ws.value}` ? route.path === path : route.path.startsWith(path); }
+function closeMobileSidebar() { if (typeof window !== 'undefined' && window.innerWidth < 1024) sidebarOpen.value = false; }
 </script>
-
-<style>
-:root {
-  --background: 0 0% 100%;
-  --foreground: 222.2 84% 4.9%;
-  --card: 0 0% 100%;
-  --card-foreground: 222.2 84% 4.9%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 222.2 84% 4.9%;
-  --primary: 262.1 83.3% 57.8%;
-  --primary-foreground: 210 40% 98%;
-  --secondary: 210 40% 96%;
-  --secondary-foreground: 222.2 47.4% 11.2%;
-  --muted: 210 40% 96%;
-  --muted-foreground: 215.4 16.3% 46.9%;
-  --accent: 210 40% 96%;
-  --accent-foreground: 222.2 47.4% 11.2%;
-  --destructive: 0 84.2% 60.2%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 214.3 31.8% 91.4%;
-  --input: 214.3 31.8% 91.4%;
-  --ring: 262.1 83.3% 57.8%;
-  --radius: 0.5rem;
-}
-</style>

@@ -1,194 +1,152 @@
 <template>
   <div>
-    <Breadcrumb>
-      <BreadcrumbList>
-        <BreadcrumbItem><BreadcrumbLink :href="`/${ws}`">Home</BreadcrumbLink></BreadcrumbItem>
-        <BreadcrumbSeparator />
-        <BreadcrumbItem><BreadcrumbPage>Workspaces</BreadcrumbPage></BreadcrumbItem>
-      </BreadcrumbList>
+    <Breadcrumb :model="[{ label: 'Home', route: `/${ws}` }, { label: 'Workspaces' }]" class="mb-4">
+      <template #item="{ item }">
+        <NuxtLink v-if="item.route" :to="item.route" class="text-primary hover:underline">{{ item.label }}</NuxtLink>
+        <span v-else>{{ item.label }}</span>
+      </template>
     </Breadcrumb>
 
-    <div class="flex items-center justify-between mt-4 mb-6">
+    <div class="flex items-center justify-between mb-6">
       <div>
-        <h1 class="text-3xl font-bold">Workspaces</h1>
-        <p class="text-muted-foreground text-sm mt-1">Manage tenant workspaces (super admin only)</p>
+        <h1 class="text-2xl font-semibold">Workspaces</h1>
+        <p class="text-surface-500 text-sm mt-1">Manage your workspaces</p>
       </div>
-      <Button @click="showCreateDialog = true">+ Create Workspace</Button>
+      <Button label="Create Workspace" icon="pi pi-plus" @click="showCreate = true" />
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <Card v-for="w in workspaces" :key="w.id" class="relative">
-        <CardHeader class="pb-2">
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <Card v-for="w in workspaces" :key="w.id" class="cursor-pointer hover:shadow-md transition-shadow" @click="navigateToWorkspace(w.slug)">
+        <template #content>
           <div class="flex items-center justify-between">
-            <CardTitle class="text-lg">{{ w.name }}</CardTitle>
-            <div class="flex items-center gap-2">
-              <Badge v-if="w.isDefault" variant="default">Default</Badge>
-              <Badge variant="outline" class="font-mono text-xs">/{{ w.slug }}</Badge>
+            <div>
+              <h3 class="text-lg font-semibold">{{ w.name }}</h3>
+              <p class="text-sm text-surface-400 font-mono">{{ w.slug }}</p>
+              <p v-if="w.description" class="text-sm text-surface-500 mt-1">{{ w.description }}</p>
+            </div>
+            <div class="flex flex-col items-end gap-2">
+              <Tag :value="w.slug === ws ? 'Current' : 'Other'" :severity="w.slug === ws ? 'success' : 'secondary'" />
+              <div class="flex gap-1">
+                <Button icon="pi pi-pencil" text rounded size="small" @click.stop="startEditWorkspace(w)" />
+                <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click.stop="handleDelete(w)" v-if="w.slug !== 'default'" />
+              </div>
             </div>
           </div>
-          <CardDescription v-if="w.description">{{ w.description }}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div class="flex items-center justify-between text-xs text-muted-foreground">
-            <span>{{ w.memberCount ?? 0 }} members</span>
-            <span>Created: {{ new Date(w.createdAt).toLocaleDateString() }}</span>
-          </div>
-          <div class="flex gap-2 mt-3">
-            <Button size="sm" variant="outline" @click="viewWorkspace(w)">View Members</Button>
-            <Button v-if="!w.isDefault" size="sm" variant="destructive" @click="deleteWorkspace(w)">Delete</Button>
-          </div>
-        </CardContent>
+          <div class="text-xs text-surface-400 mt-3">Created {{ new Date(w.createdAt).toLocaleDateString() }}</div>
+        </template>
       </Card>
     </div>
-    <p v-if="workspaces.length === 0" class="text-muted-foreground text-center py-8">No workspaces found.</p>
 
-    <!-- Create Workspace Dialog -->
-    <Dialog v-model:open="showCreateDialog">
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Create Workspace</DialogTitle>
-          <DialogDescription>Create a new tenant workspace with a unique slug.</DialogDescription>
-        </DialogHeader>
-        <div class="space-y-4 py-2">
-          <div v-if="createError" class="p-3 rounded-md bg-destructive/10 text-destructive text-sm">{{ createError }}</div>
-          <div>
-            <Label for="ws-name">Name</Label>
-            <Input id="ws-name" v-model="createForm.name" placeholder="My Workspace" />
-          </div>
-          <div>
-            <Label for="ws-slug">Slug (URL path)</Label>
-            <Input id="ws-slug" v-model="createForm.slug" placeholder="my-workspace" class="font-mono" />
-            <p class="text-xs text-muted-foreground mt-1">Lowercase letters, numbers, and hyphens only.</p>
-          </div>
-          <div>
-            <Label for="ws-desc">Description (optional)</Label>
-            <Textarea id="ws-desc" v-model="createForm.description" rows="2" />
-          </div>
+    <p v-if="workspaces.length === 0" class="text-center text-surface-400 py-8">No workspaces found.</p>
+
+    <Dialog v-model:visible="showCreate" header="Create Workspace" :style="{ width: '450px' }" modal>
+      <Message v-if="formError" severity="error" :closable="false" class="mb-3">{{ formError }}</Message>
+      <div class="flex flex-col gap-3">
+        <div class="flex flex-col gap-2"><label class="text-sm font-medium">Name *</label><InputText v-model="form.name" /></div>
+        <div class="flex flex-col gap-2"><label class="text-sm font-medium">Slug *</label><InputText v-model="form.slug" placeholder="my-workspace" />
+          <small class="text-surface-400">URL-friendly identifier (lowercase, hyphens only)</small>
         </div>
-        <DialogFooter>
-          <Button variant="outline" @click="showCreateDialog = false">Cancel</Button>
-          <Button :disabled="creating" @click="handleCreate">{{ creating ? 'Creating...' : 'Create' }}</Button>
-        </DialogFooter>
-      </DialogContent>
+        <div class="flex flex-col gap-2"><label class="text-sm font-medium">Description</label><Textarea v-model="form.description" rows="2" /></div>
+      </div>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" @click="showCreate = false" />
+        <Button label="Create" icon="pi pi-check" :loading="saving" @click="handleCreate" />
+      </template>
     </Dialog>
 
-    <!-- View Members Dialog -->
-    <Dialog v-model:open="showMembersDialog">
-      <DialogContent class="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Members — {{ selectedWorkspace?.name }}</DialogTitle>
-        </DialogHeader>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Email</TableHead>
-              <TableHead>Role</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow v-for="m in members" :key="m.id">
-              <TableCell>{{ m.name }}</TableCell>
-              <TableCell>{{ m.email }}</TableCell>
-              <TableCell>
-                <Badge :variant="m.role === 'workspace_admin' || m.role === 'super_admin' ? 'default' : 'secondary'">
-                  {{ roleLabel(m.role) }}
-                </Badge>
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-        <p v-if="members.length === 0" class="text-muted-foreground text-center py-4">No members in this workspace.</p>
-      </DialogContent>
+    <!-- Edit Workspace Dialog -->
+    <Dialog v-model:visible="showEdit" header="Edit Workspace" :style="{ width: '450px' }" modal>
+      <Message v-if="editFormError" severity="error" :closable="false" class="mb-3">{{ editFormError }}</Message>
+      <div class="flex flex-col gap-3">
+        <div class="flex flex-col gap-2"><label class="text-sm font-medium">Name *</label><InputText v-model="editForm.name" /></div>
+        <div class="flex flex-col gap-2">
+          <label class="text-sm font-medium">Slug</label>
+          <InputText :model-value="editForm.slug" disabled />
+          <small class="text-surface-400">Slug cannot be changed after creation</small>
+        </div>
+        <div class="flex flex-col gap-2"><label class="text-sm font-medium">Description</label><Textarea v-model="editForm.description" rows="2" /></div>
+      </div>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" @click="showEdit = false" />
+        <Button label="Save" icon="pi pi-check" :loading="savingEdit" @click="handleSaveEdit" />
+      </template>
     </Dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-const { authHeaders, user } = useAuth();
+const { authHeaders } = useAuth();
 const headers = authHeaders();
 const route = useRoute();
+const router = useRouter();
+const toast = useToast();
+const confirm = useConfirm();
 const ws = computed(() => (route.params.workspace as string) || 'default');
 
-// Redirect non-super_admin
-if (user.value?.role !== 'super_admin') {
-  navigateTo(`/${ws.value}`);
+const showCreate = ref(false);
+const saving = ref(false);
+const formError = ref('');
+
+const form = reactive({ name: '', slug: '', description: '' });
+
+const showEdit = ref(false);
+const savingEdit = ref(false);
+const editFormError = ref('');
+const editForm = reactive({ id: '', name: '', slug: '', description: '' });
+
+const { data: wsData, refresh } = await useFetch('/api/workspaces', { headers });
+const workspaces = computed(() => (wsData.value as any)?.workspaces ?? []);
+
+function navigateToWorkspace(slug: string) {
+  router.push(`/${slug}`);
 }
-
-interface Workspace {
-  id: string;
-  name: string;
-  slug: string;
-  description?: string;
-  isDefault: boolean;
-  memberCount?: number;
-  createdAt: string;
-}
-
-const { data, refresh } = await useFetch<{ workspaces: Workspace[] }>('/api/workspaces', { headers });
-const workspaces = computed(() => data.value?.workspaces ?? []);
-
-// Create dialog
-const showCreateDialog = ref(false);
-const creating = ref(false);
-const createError = ref('');
-const createForm = reactive({ name: '', slug: '', description: '' });
 
 async function handleCreate() {
-  createError.value = '';
-  creating.value = true;
+  formError.value = '';
+  saving.value = true;
   try {
-    await $fetch('/api/workspaces', {
-      method: 'POST',
-      headers,
-      body: {
-        name: createForm.name,
-        slug: createForm.slug,
-        description: createForm.description || undefined,
-      },
-    });
-    showCreateDialog.value = false;
-    createForm.name = '';
-    createForm.slug = '';
-    createForm.description = '';
+    await $fetch('/api/workspaces', { method: 'POST', headers, body: form });
+    showCreate.value = false;
+    toast.add({ severity: 'success', summary: 'Workspace created', life: 3000 });
+    Object.assign(form, { name: '', slug: '', description: '' });
     await refresh();
   } catch (e: any) {
-    createError.value = e?.data?.error || 'Failed to create workspace';
+    formError.value = e?.data?.error || 'Failed';
   } finally {
-    creating.value = false;
+    saving.value = false;
   }
 }
 
-// Members dialog
-const showMembersDialog = ref(false);
-const selectedWorkspace = ref<Workspace | null>(null);
-const members = ref<Array<{ id: string; name: string; email: string; role: string }>>([]);
-
-async function viewWorkspace(w: Workspace) {
-  selectedWorkspace.value = w;
-  showMembersDialog.value = true;
-  try {
-    const res = await $fetch<{ workspace: any; members: typeof members.value }>(`/api/workspaces/${w.id}`, { headers });
-    members.value = res.members ?? [];
-  } catch {
-    members.value = [];
-  }
+function startEditWorkspace(w: any) {
+  Object.assign(editForm, { id: w.id, name: w.name, slug: w.slug, description: w.description || '' });
+  editFormError.value = '';
+  showEdit.value = true;
 }
 
-async function deleteWorkspace(w: Workspace) {
-  if (!confirm(`Delete workspace "${w.name}"? This will affect all members and data.`)) return;
+async function handleSaveEdit() {
+  editFormError.value = '';
+  savingEdit.value = true;
   try {
-    await $fetch(`/api/workspaces/${w.id}`, { method: 'DELETE', headers });
+    await $fetch(`/api/workspaces/${editForm.id}`, { method: 'PUT', headers, body: { name: editForm.name, description: editForm.description } });
+    showEdit.value = false;
+    toast.add({ severity: 'success', summary: 'Workspace updated', life: 3000 });
     await refresh();
   } catch (e: any) {
-    alert(e?.data?.error || 'Failed to delete workspace');
+    editFormError.value = e?.data?.error || 'Failed';
+  } finally {
+    savingEdit.value = false;
   }
 }
 
-function roleLabel(role: string) {
-  if (role === 'super_admin') return 'Super Admin';
-  if (role === 'workspace_admin') return 'Admin';
-  if (role === 'view_user') return 'Viewer';
-  return 'Creator';
+function handleDelete(w: any) {
+  confirm.require({
+    message: `Delete workspace "${w.name}"? This cannot be undone.`, header: 'Confirm Delete', icon: 'pi pi-exclamation-triangle',
+    rejectProps: { label: 'Cancel', severity: 'secondary' }, acceptProps: { label: 'Delete', severity: 'danger' },
+    accept: async () => {
+      await $fetch(`/api/workspaces/${w.id}`, { method: 'DELETE', headers });
+      toast.add({ severity: 'success', summary: 'Workspace deleted', life: 3000 });
+      await refresh();
+    },
+  });
 }
 </script>

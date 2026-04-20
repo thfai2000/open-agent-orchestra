@@ -94,6 +94,21 @@ adminRouter.post('/users', async (c) => {
   return c.json({ user: newUser }, 201);
 });
 
+// GET /users/:id — get single user
+adminRouter.get('/users/:id', async (c) => {
+  const user = c.get('user');
+  const id = uuidSchema.parse(c.req.param('id'));
+
+  const existing = await db.query.users.findFirst({
+    where: eq(users.id, id),
+    columns: { passwordHash: false },
+  });
+  if (!existing) return c.json({ error: 'User not found' }, 404);
+  if (existing.workspaceId !== user.workspaceId) return c.json({ error: 'User not in your workspace' }, 403);
+
+  return c.json({ user: existing });
+});
+
 // PUT /users/:id/role — update user role within workspace
 const updateRoleSchema = z.object({
   role: z.enum(['workspace_admin', 'creator_user', 'view_user']),

@@ -1,395 +1,218 @@
 <template>
   <div>
-    <Breadcrumb>
-      <BreadcrumbList>
-        <BreadcrumbItem><BreadcrumbLink href="/">Home</BreadcrumbLink></BreadcrumbItem>
-        <BreadcrumbSeparator />
-        <BreadcrumbItem><BreadcrumbLink href="/workflows">Workflows</BreadcrumbLink></BreadcrumbItem>
-        <BreadcrumbSeparator />
-        <BreadcrumbItem><BreadcrumbPage>New Workflow</BreadcrumbPage></BreadcrumbItem>
-      </BreadcrumbList>
+    <Breadcrumb :model="[{ label: 'Home', route: `/${ws}` }, { label: 'Workflows', route: `/${ws}/workflows` }, { label: 'Create Workflow' }]" class="mb-4">
+      <template #item="{ item }">
+        <NuxtLink v-if="item.route" :to="item.route" class="text-primary hover:underline">{{ item.label }}</NuxtLink>
+        <span v-else>{{ item.label }}</span>
+      </template>
     </Breadcrumb>
 
-    <h1 class="text-3xl font-bold mt-4 mb-6">Create New Workflow</h1>
+    <h1 class="text-2xl font-semibold mb-6">Create Workflow</h1>
+    <Message v-if="error" severity="error" :closable="false" class="mb-4">{{ error }}</Message>
 
-    <div v-if="formError" class="mb-4 p-3 rounded-md bg-destructive/10 text-destructive text-sm">{{ formError }}</div>
-
-    <form @submit.prevent="handleCreate" class="space-y-6">
-      <!-- Basic Info -->
+    <div class="flex flex-col gap-6">
       <Card>
-        <CardHeader><CardTitle>Basic Info</CardTitle></CardHeader>
-        <CardContent class="space-y-4">
-          <div class="space-y-2">
-            <Label>Name *</Label>
-            <Input v-model="form.name" required placeholder="Daily Market Analysis" />
-          </div>
-          <div class="space-y-2">
-            <Label>Description</Label>
-            <Textarea v-model="form.description" rows="2" placeholder="What does this workflow do?" />
-          </div>
-          <div class="space-y-2">
-            <Label>Labels</Label>
-            <div class="flex flex-wrap gap-2 mb-2">
-              <Badge v-for="(label, idx) in form.labels" :key="idx" variant="secondary" class="gap-1">
-                {{ label }}
-                <button type="button" class="ml-1 text-muted-foreground hover:text-foreground" @click="form.labels.splice(idx, 1)">&times;</button>
-              </Badge>
+        <template #title>Basic Information</template>
+        <template #content>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Name *</label><InputText v-model="form.name" placeholder="My Workflow" /></div>
+            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Scope</label>
+              <Select v-model="form.scope" :options="[{ label: 'Personal', value: 'user' }, { label: 'Workspace', value: 'workspace' }]" optionLabel="label" optionValue="value" />
             </div>
-            <div class="flex gap-2">
-              <Input v-model="newLabel" placeholder="Add label…" class="max-w-xs" @keydown.enter.prevent="addLabel" />
-              <Button type="button" variant="outline" size="sm" @click="addLabel">Add</Button>
+            <div class="flex flex-col gap-2 md:col-span-2"><label class="text-sm font-medium">Description</label><Textarea v-model="form.description" rows="2" /></div>
+            <div class="flex flex-col gap-2 md:col-span-2">
+              <label class="text-sm font-medium">Labels</label>
+              <InputText v-model="labelsInput" placeholder="Comma-separated labels" />
+              <small class="text-surface-400">e.g. production, daily, reports</small>
             </div>
-            <p class="text-xs text-muted-foreground">Tags for organizing and filtering workflows. Max 10 labels.</p>
           </div>
-          <div class="space-y-2">
-            <Label>Scope</Label>
-            <select v-model="form.scope"
-              class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring max-w-xs">
-              <option value="user">Personal (owned by you)</option>
-              <option v-if="isAdmin" value="workspace">Workspace (shared, admin-managed)</option>
-            </select>
-            <p class="text-xs text-muted-foreground">Scope cannot be changed after creation.</p>
-          </div>
-        </CardContent>
+        </template>
       </Card>
 
-      <!-- Workflow Defaults -->
       <Card>
-        <CardHeader>
-          <CardTitle>Workflow Defaults</CardTitle>
-          <CardDescription>Steps inherit these defaults unless overridden at the step level.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
-            <div class="space-y-2">
-              <Label>Default Agent</Label>
-              <select v-model="form.defaultAgentId"
-                class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                <option value="">None</option>
-                <option v-for="a in agents" :key="a.id" :value="a.id">{{ a.name }}</option>
-              </select>
+        <template #title>Workflow Defaults</template>
+        <template #content>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Default Agent</label>
+              <Select v-model="form.defaultAgentId" :options="agentOptions" optionLabel="name" optionValue="id" placeholder="Select agent" showClear />
             </div>
-            <div class="space-y-2">
-              <Label>Default Model</Label>
-              <select v-model="form.defaultModel"
-                class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                <option value="">None</option>
-                <option v-for="m in availableModels" :key="m.id" :value="m.name">{{ m.name }}</option>
-              </select>
+            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Default Model</label>
+              <Select v-model="form.defaultModel" :options="modelOptions" optionLabel="name" optionValue="name" placeholder="Default" showClear />
             </div>
-            <div class="space-y-2">
-              <Label>Default Reasoning Effort</Label>
-              <select v-model="form.defaultReasoningEffort"
-                class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                <option value="">None</option>
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
-              </select>
+            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Default Reasoning Effort</label>
+              <Select v-model="form.defaultReasoningEffort" :options="reasoningOptions" optionLabel="label" optionValue="value" showClear placeholder="None" />
             </div>
-            <div class="space-y-2">
-              <Label>Worker Runtime</Label>
-              <select v-model="form.workerRuntime"
-                class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                <option value="static">Static Worker</option>
-                <option value="ephemeral">Ephemeral Worker (Kubernetes)</option>
-              </select>
-              <p class="text-xs text-muted-foreground">Static uses the shared BullMQ worker pool. Ephemeral starts one Kubernetes pod per step for stronger isolation.</p>
+            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Worker Runtime</label>
+              <Select v-model="form.workerRuntime" :options="[{ label: 'Static', value: 'static' }, { label: 'Ephemeral', value: 'ephemeral' }]" optionLabel="label" optionValue="value" />
             </div>
-            <div class="space-y-2">
-              <Label>Step Allocation Timeout (s)</Label>
-              <Input v-model.number="form.stepAllocationTimeoutSeconds" type="number" min="15" max="3600" />
-              <p class="text-xs text-muted-foreground">How long a step can wait for a worker runtime to become ready before the workflow fails.</p>
+            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Step Timeout (seconds)</label>
+              <InputNumber v-model="form.stepAllocationTimeoutSeconds" :min="10" :max="3600" />
             </div>
           </div>
-        </CardContent>
+        </template>
       </Card>
 
-      <!-- Steps -->
       <Card>
-        <CardHeader>
-          <div class="flex items-center justify-between">
-            <div>
-              <CardTitle>Steps *</CardTitle>
-              <CardDescription>Define the sequential steps for this workflow. Use Jinja2 templating: <code v-pre class="bg-muted px-1 rounded text-xs">{{ precedent_output }}</code> for previous step output, <code v-pre class="bg-muted px-1 rounded text-xs">{{ inputs.KEY }}</code> for webhook/manual-run parameters, <code v-pre class="bg-muted px-1 rounded text-xs">{{ properties.KEY }}</code> and <code v-pre class="bg-muted px-1 rounded text-xs">{{ credentials.KEY }}</code> for variables.</CardDescription>
-            </div>
-            <Button variant="outline" size="sm" type="button" @click="addStep">+ Add Step</Button>
-          </div>
-        </CardHeader>
-        <CardContent class="space-y-4">
-          <Card v-for="(step, idx) in form.steps" :key="idx" class="bg-muted/20">
-            <CardHeader class="pb-2">
-              <div class="flex items-center justify-between">
-                <CardTitle class="text-sm">Step {{ idx + 1 }}</CardTitle>
-                <Button v-if="form.steps.length > 1" variant="ghost" size="sm" class="text-destructive h-7 text-xs" type="button" @click="form.steps.splice(idx, 1)">Remove</Button>
-              </div>
-            </CardHeader>
-            <CardContent class="space-y-3">
-              <div class="space-y-1.5">
-                <Label class="text-xs">Step Name *</Label>
-                <Input v-model="step.name" required placeholder="Step name" />
-              </div>
-              <div class="space-y-1.5">
-                <Label class="text-xs">Prompt Template *</Label>
-                <Textarea v-model="step.promptTemplate" rows="6" required class="font-mono text-xs"
-                  placeholder="Jinja2 prompt template: {{ precedent_output }}, {{ properties.KEY }}, {{ credentials.KEY }}" />
-              </div>
-              <details class="rounded-md border border-dashed border-border bg-background/60 px-3 py-2">
-                <summary class="cursor-pointer text-xs font-medium text-foreground">Advanced Settings</summary>
-                <p class="mt-1 text-xs text-muted-foreground">Control the agent, model, reasoning, worker runtime, and timeout for this step.</p>
-                <div class="mt-3 grid grid-cols-1 md:grid-cols-5 gap-3">
-                  <div class="space-y-1">
-                    <Label class="text-xs">Agent</Label>
-                    <select v-model="step.agentId" class="w-full px-2 py-1.5 rounded-md border border-input bg-background text-xs focus:outline-none focus:ring-2 focus:ring-ring">
-                      <option value="">{{ form.defaultAgentId ? 'Use Default' : 'Select...' }}</option>
-                      <option v-for="a in agents" :key="a.id" :value="a.id">{{ a.name }}</option>
-                    </select>
-                  </div>
-                  <div class="space-y-1">
-                    <Label class="text-xs">Model</Label>
-                    <select v-model="step.model" class="w-full px-2 py-1.5 rounded-md border border-input bg-background text-xs focus:outline-none focus:ring-2 focus:ring-ring">
-                      <option value="">{{ form.defaultModel ? 'Use Default' : 'None' }}</option>
-                      <option v-for="m in availableModels" :key="m.id" :value="m.name">{{ m.name }}</option>
-                    </select>
-                  </div>
-                  <div class="space-y-1">
-                    <Label class="text-xs">Reasoning</Label>
-                    <select v-model="step.reasoningEffort" class="w-full px-2 py-1.5 rounded-md border border-input bg-background text-xs focus:outline-none focus:ring-2 focus:ring-ring">
-                      <option value="">{{ form.defaultReasoningEffort ? 'Use Default' : 'None' }}</option>
-                      <option value="high">High</option>
-                      <option value="medium">Medium</option>
-                      <option value="low">Low</option>
-                    </select>
-                  </div>
-                  <div class="space-y-1">
-                    <Label class="text-xs">Worker Runtime</Label>
-                    <select v-model="step.workerRuntime" class="w-full px-2 py-1.5 rounded-md border border-input bg-background text-xs focus:outline-none focus:ring-2 focus:ring-ring">
-                      <option value="">Use Workflow Default</option>
-                      <option value="static">Static Worker</option>
-                      <option value="ephemeral">Ephemeral Worker</option>
-                    </select>
-                  </div>
-                  <div class="space-y-1">
-                    <Label class="text-xs">Timeout (s)</Label>
-                    <Input v-model.number="step.timeoutSeconds" type="number" min="30" max="3600" class="text-xs" />
-                  </div>
-                </div>
-              </details>
-            </CardContent>
-          </Card>
-        </CardContent>
-      </Card>
-
-      <!-- Triggers -->
-      <Card>
-        <CardHeader>
-          <div class="flex items-center justify-between">
-            <div>
-              <CardTitle>Triggers</CardTitle>
-              <CardDescription>A default webhook trigger is pre-filled. The <strong>Manual Run</strong> button on the detail page uses the webhook trigger to collect inputs. Use <code v-pre class="bg-muted px-1 rounded text-xs">{{ inputs.PARAM_NAME }}</code> in prompt templates. Triggers can be edited or removed after creation.</CardDescription>
-            </div>
-            <Button variant="outline" size="sm" type="button" @click="addTrigger">+ Add Trigger</Button>
-          </div>
-        </CardHeader>
-        <CardContent class="space-y-3">
-          <Card v-for="(trigger, idx) in form.triggers" :key="idx" class="bg-muted/20">
-            <CardContent class="pt-4">
+        <template #title>Steps</template>
+        <template #content>
+          <div class="flex flex-col gap-4">
+            <div v-for="(step, idx) in form.steps" :key="idx" class="border border-surface-200 rounded-lg p-4">
               <div class="flex items-center justify-between mb-3">
-                <span class="text-sm font-medium">Trigger {{ idx + 1 }}</span>
-                <Button variant="ghost" size="sm" class="text-destructive h-7 text-xs" type="button" @click="form.triggers.splice(idx, 1)">Remove</Button>
+                <span class="font-medium">Step {{ idx + 1 }}</span>
+                <div class="flex gap-1">
+                  <Button icon="pi pi-arrow-up" text rounded size="small" :disabled="idx === 0" @click="moveStep(idx, -1)" />
+                  <Button icon="pi pi-arrow-down" text rounded size="small" :disabled="idx === form.steps.length - 1" @click="moveStep(idx, 1)" />
+                  <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click="form.steps.splice(idx, 1)" />
+                </div>
               </div>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div class="space-y-1">
-                  <Label class="text-xs">Type *</Label>
-                  <select v-model="trigger.triggerType" class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                    <option value="time_schedule">Repeatable Schedule (Cron)</option>
-                    <option value="exact_datetime">Exact Datetime</option>
-                    <option value="webhook">Webhook</option>
-                    <option value="event">Event</option>
-                  </select>
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Name *</label><InputText v-model="step.name" placeholder="Step name" /></div>
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Agent Override</label>
+                  <Select v-model="step.agentId" :options="agentOptions" optionLabel="name" optionValue="id" placeholder="Use default" showClear />
                 </div>
-                <div v-if="trigger.triggerType === 'time_schedule'" class="space-y-1">
-                  <Label class="text-xs">Cron Expression *</Label>
-                  <Input v-model="trigger.cron" class="font-mono" placeholder="0 9 * * 1-5" />
-                  <p class="text-xs text-muted-foreground">e.g. "0 9 * * 1-5" = 9am weekdays</p>
+                <div class="flex flex-col gap-2 md:col-span-2"><label class="text-sm font-medium">Prompt Template *</label>
+                  <Textarea v-model="step.promptTemplate" rows="6" placeholder="Use {{ precedent_output }} for previous step output, {{ inputs.PARAM }} for webhook params" />
                 </div>
-                <div v-if="trigger.triggerType === 'exact_datetime'" class="space-y-1">
-                  <Label class="text-xs">Datetime *</Label>
-                  <Input v-model="trigger.datetime" type="datetime-local" />
-                  <p class="text-xs text-muted-foreground">Fires once at this exact datetime then deactivates.</p>
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Model Override</label>
+                  <Select v-model="step.model" :options="modelOptions" optionLabel="name" optionValue="name" placeholder="Use default" showClear />
                 </div>
-                <div v-if="trigger.triggerType === 'webhook'" class="space-y-1">
-                  <Label class="text-xs">Webhook Path *</Label>
-                  <Input v-model="trigger.webhookPath" class="font-mono" placeholder="/my-webhook" />
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Reasoning Effort</label>
+                  <Select v-model="step.reasoningEffort" :options="reasoningOptions" optionLabel="label" optionValue="value" placeholder="Use default" showClear />
                 </div>
-                <div v-if="trigger.triggerType === 'event'" class="space-y-1">
-                  <Label class="text-xs">Event Name *</Label>
-                  <select v-model="trigger.eventType" class="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                    <option value="">Select event...</option>
-                    <option v-for="name in eventNames" :key="name" :value="name">{{ name }}</option>
-                  </select>
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Worker Runtime</label>
+                  <Select v-model="step.workerRuntime" :options="[{ label: 'Static', value: 'static' }, { label: 'Ephemeral', value: 'ephemeral' }]" optionLabel="label" optionValue="value" placeholder="Use default" showClear />
                 </div>
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Timeout (seconds)</label><InputNumber v-model="step.timeoutSeconds" :min="10" :max="3600" /></div>
               </div>
-              <!-- Webhook Parameters -->
-              <div v-if="trigger.triggerType === 'webhook'" class="mt-3 space-y-2">
-                <div class="flex items-center justify-between">
-                  <Label class="text-xs">Webhook Parameters</Label>
-                  <Button variant="ghost" size="sm" class="h-6 text-xs" type="button" @click="trigger.webhookParams.push({ name: '', required: false, description: '' })">+ Add Parameter</Button>
-                </div>
-                <div v-for="(param, pi) in trigger.webhookParams" :key="pi" class="flex gap-2 items-center">
-                  <Input v-model="param.name" placeholder="Name" class="flex-1 text-xs" />
-                  <Input v-model="param.description" placeholder="Description (optional)" class="flex-1 text-xs" />
-                  <label class="flex items-center gap-1 text-xs whitespace-nowrap"><input type="checkbox" v-model="param.required" /> Required</label>
-                  <Button variant="ghost" size="sm" class="h-6 w-6 p-0 text-destructive" type="button" @click="trigger.webhookParams.splice(pi, 1)">×</Button>
-                </div>
-                <p class="text-xs text-muted-foreground">Define inputs for this webhook. Access in prompts: <code v-pre class="bg-muted px-1 rounded">{{ inputs.paramName }}</code>. Required parameters are validated on both webhook calls and Manual Run.</p>
-              </div>
-              <!-- Event Conditions -->
-              <div v-if="trigger.triggerType === 'event'" class="mt-3 space-y-2">
-                <div class="flex items-center justify-between">
-                  <Label class="text-xs">Event Data Conditions (optional)</Label>
-                  <Button variant="ghost" size="sm" class="h-6 text-xs" type="button" @click="trigger.conditions.push({ key: '', value: '' })">+ Add Condition</Button>
-                </div>
-                <div v-for="(cond, ci) in trigger.conditions" :key="ci" class="flex gap-2 items-center">
-                  <Input v-model="cond.key" placeholder="Key (e.g. scope)" class="flex-1 text-xs" />
-                  <span class="text-xs text-muted-foreground">=</span>
-                  <Input v-model="cond.value" placeholder="Value (e.g. workspace)" class="flex-1 text-xs" />
-                  <Button variant="ghost" size="sm" class="h-6 w-6 p-0 text-destructive" type="button" @click="trigger.conditions.splice(ci, 1)">×</Button>
-                </div>
-                <p class="text-xs text-muted-foreground">Only fire when event data matches all conditions. Common keys: agentId, agentName, scope</p>
-              </div>
-            </CardContent>
-          </Card>
-          <p v-if="form.triggers.length === 0" class="text-muted-foreground text-sm">No triggers added. Add a webhook trigger to enable Manual Run from the workflow detail page.</p>
-        </CardContent>
+            </div>
+            <Button label="Add Step" icon="pi pi-plus" severity="secondary" @click="addStep" />
+          </div>
+        </template>
       </Card>
 
-      <div class="flex gap-3">
-        <Button type="submit" :disabled="submitting">{{ submitting ? 'Creating...' : 'Create Workflow' }}</Button>
-        <NuxtLink :to="`/${ws}/workflows`"><Button variant="outline" type="button">Cancel</Button></NuxtLink>
+      <Card>
+        <template #title>Triggers</template>
+        <template #content>
+          <div class="flex flex-col gap-4">
+            <div v-for="(trigger, idx) in form.triggers" :key="idx" class="border border-surface-200 rounded-lg p-4">
+              <div class="flex items-center justify-between mb-3">
+                <Tag :value="trigger.triggerType" />
+                <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click="form.triggers.splice(idx, 1)" />
+              </div>
+              <div class="flex flex-col gap-3">
+                <template v-if="trigger.triggerType === 'time_schedule'">
+                  <div class="flex flex-col gap-2"><label class="text-sm font-medium">Cron Expression</label><InputText v-model="trigger.configuration.cron" placeholder="0 9 * * 1-5" /></div>
+                </template>
+                <template v-if="trigger.triggerType === 'webhook'">
+                  <div class="flex flex-col gap-2"><label class="text-sm font-medium">Webhook Path</label><InputText v-model="trigger.configuration.path" placeholder="/my-webhook" /></div>
+                  <div class="flex flex-col gap-2">
+                    <label class="text-sm font-medium">Parameters</label>
+                    <div v-for="(p, pi) in (trigger.configuration.parameters || [])" :key="pi" class="flex gap-2 items-center">
+                      <InputText v-model="p.name" placeholder="param_name" class="flex-1" />
+                      <Checkbox v-model="p.required" :binary="true" /><label class="text-sm">Required</label>
+                      <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click="trigger.configuration.parameters!.splice(pi, 1)" />
+                    </div>
+                    <Button label="Add Parameter" icon="pi pi-plus" text size="small" @click="trigger.configuration.parameters = [...(trigger.configuration.parameters || []), { name: '', required: false, description: '' }]" />
+                  </div>
+                </template>
+                <template v-if="trigger.triggerType === 'event'">
+                  <div class="flex flex-col gap-2"><label class="text-sm font-medium">Event Name</label><InputText v-model="trigger.configuration.eventName" /></div>
+                </template>
+                <template v-if="trigger.triggerType === 'exact_datetime'">
+                  <div class="flex flex-col gap-2"><label class="text-sm font-medium">Date &amp; Time</label><InputText v-model="trigger.configuration.datetime" type="datetime-local" /></div>
+                </template>
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <Button label="Schedule" icon="pi pi-clock" severity="secondary" size="small" @click="addTrigger('time_schedule')" />
+              <Button label="Webhook" icon="pi pi-link" severity="secondary" size="small" @click="addTrigger('webhook')" />
+              <Button label="Event" icon="pi pi-bell" severity="secondary" size="small" @click="addTrigger('event')" />
+              <Button label="Exact Time" icon="pi pi-calendar" severity="secondary" size="small" @click="addTrigger('exact_datetime')" />
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <div class="flex justify-end gap-2">
+        <NuxtLink :to="`/${ws}/workflows`"><Button label="Cancel" severity="secondary" /></NuxtLink>
+        <Button label="Create Workflow" icon="pi pi-check" :loading="saving" @click="handleCreate" />
       </div>
-    </form>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-interface StepForm { name: string; promptTemplate: string; agentId: string; model: string; reasoningEffort: string; workerRuntime: string; timeoutSeconds: number; }
-interface WebhookParam { name: string; required: boolean; description: string; }
-interface TriggerForm { triggerType: string; cron: string; webhookPath: string; webhookParams: WebhookParam[]; eventType: string; datetime: string; conditions: Array<{ key: string; value: string }>; }
-
-const { authHeaders, user } = useAuth();
+const { authHeaders } = useAuth();
 const headers = authHeaders();
-const router = useRouter();
 const route = useRoute();
+const router = useRouter();
+const toast = useToast();
 const ws = computed(() => (route.params.workspace as string) || 'default');
-const isAdmin = computed(() => user.value?.role === 'workspace_admin' || user.value?.role === 'super_admin');
 
-const submitting = ref(false);
-const formError = ref('');
+const error = ref('');
+const saving = ref(false);
+const labelsInput = ref('');
+
+const reasoningOptions = [
+  { label: 'High', value: 'high' },
+  { label: 'Medium', value: 'medium' },
+  { label: 'Low', value: 'low' },
+];
+
 const form = reactive({
-  name: '',
-  description: '',
-  labels: [] as string[],
-  defaultAgentId: '',
-  defaultModel: '',
-  defaultReasoningEffort: '',
-  workerRuntime: 'static' as 'static' | 'ephemeral',
-  stepAllocationTimeoutSeconds: 300,
-  scope: 'user' as 'user' | 'workspace',
-  steps: [{ name: '', promptTemplate: '', agentId: '', model: '', reasoningEffort: '', workerRuntime: '', timeoutSeconds: 300 }] as StepForm[],
-  triggers: [{ triggerType: 'webhook', cron: '', webhookPath: `/${randomWebhookPath()}`, webhookParams: [] as WebhookParam[], eventType: '', datetime: '', conditions: [] }] as TriggerForm[],
+  name: '', description: '', scope: 'user', defaultAgentId: null as string | null,
+  defaultModel: null as string | null, defaultReasoningEffort: null as string | null,
+  workerRuntime: 'static', stepAllocationTimeoutSeconds: 300,
+  steps: [{ name: 'Step 1', promptTemplate: '', agentId: null as string | null, model: null as string | null, reasoningEffort: null as string | null, workerRuntime: null as string | null, timeoutSeconds: 300 }] as any[],
+  triggers: [] as any[],
 });
 
-// Browser `crypto.randomUUID` is only available in secure contexts (HTTPS or localhost).
-// Fall back to Math.random so http:// deployments (e.g. http://oao.local) still work.
-function randomWebhookPath(): string {
-  const c = (globalThis as any).crypto;
-  if (c && typeof c.randomUUID === 'function') {
-    try { return c.randomUUID().slice(0, 12); } catch { /* fall through */ }
-  }
-  return Math.random().toString(36).slice(2, 14);
-}
-
 const { data: agentsData } = await useFetch('/api/agents', { headers });
-const agents = computed(() => agentsData.value?.agents ?? []);
-
-const { data: namesData } = await useFetch('/api/events/names', { headers });
-const eventNames = computed(() => (namesData.value as any)?.eventNames ?? []);
-
-const { data: modelsData } = await useFetch('/api/quota/models', { headers });
-const availableModels = computed(() => (modelsData.value as any)?.models ?? []);
-
-const newLabel = ref('');
-function addLabel() {
-  const label = newLabel.value.trim();
-  if (label && !form.labels.includes(label) && form.labels.length < 10) {
-    form.labels.push(label);
-  }
-  newLabel.value = '';
-}
+const { data: modelsData } = await useFetch('/api/admin/models', { headers });
+const agentOptions = computed(() => (agentsData.value as any)?.agents ?? []);
+const modelOptions = computed(() => (modelsData.value as any)?.models ?? []);
 
 function addStep() {
-  form.steps.push({ name: '', promptTemplate: '', agentId: '', model: '', reasoningEffort: '', workerRuntime: '', timeoutSeconds: 300 });
+  form.steps.push({ name: `Step ${form.steps.length + 1}`, promptTemplate: '', agentId: null, model: null, reasoningEffort: null, workerRuntime: null, timeoutSeconds: 300 });
 }
-function addTrigger() {
-  form.triggers.push({ triggerType: 'time_schedule', cron: '', webhookPath: '', webhookParams: [] as WebhookParam[], eventType: '', datetime: '', conditions: [] });
+
+function moveStep(idx: number, dir: number) {
+  const newIdx = idx + dir;
+  [form.steps[idx], form.steps[newIdx]] = [form.steps[newIdx], form.steps[idx]];
+}
+
+function randomWebhookPath() {
+  const rand = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().substring(0, 8) : Math.random().toString(36).substring(2, 10);
+  return `/wh-${rand}`;
+}
+
+function addTrigger(type: string) {
+  const config: any = {};
+  if (type === 'time_schedule') config.cron = '';
+  if (type === 'webhook') { config.path = randomWebhookPath(); config.parameters = []; }
+  if (type === 'event') config.eventName = '';
+  if (type === 'exact_datetime') config.datetime = '';
+  form.triggers.push({ triggerType: type, configuration: config });
 }
 
 async function handleCreate() {
-  formError.value = '';
-  submitting.value = true;
+  error.value = '';
+  saving.value = true;
   try {
-    const triggerPayloads = form.triggers.map((t) => {
-      const configuration: Record<string, unknown> = {};
-      if (t.triggerType === 'time_schedule') configuration.cron = t.cron;
-      if (t.triggerType === 'exact_datetime') configuration.datetime = new Date(t.datetime).toISOString();
-      if (t.triggerType === 'webhook') {
-        configuration.path = t.webhookPath;
-        if (t.webhookParams.length > 0) {
-          configuration.parameters = t.webhookParams.filter(p => p.name.trim()).map(p => ({
-            name: p.name.trim(),
-            required: p.required,
-            ...(p.description.trim() ? { description: p.description.trim() } : {}),
-          }));
-        }
-      }
-      if (t.triggerType === 'event') {
-        configuration.eventName = t.eventType;
-        if (t.conditions.length > 0) {
-          const conds: Record<string, string> = {};
-          for (const c of t.conditions) { if (c.key.trim()) conds[c.key.trim()] = c.value; }
-          if (Object.keys(conds).length > 0) configuration.conditions = conds;
-        }
-      }
-      return { triggerType: t.triggerType, configuration };
-    });
-
-    const res = await $fetch<{ workflow: { id: string } }>('/api/workflows', {
-      method: 'POST',
-      headers,
-      body: {
-        name: form.name,
-        description: form.description || undefined,
-        labels: form.labels.length > 0 ? form.labels : undefined,
-        defaultAgentId: form.defaultAgentId || undefined,
-        defaultModel: form.defaultModel || undefined,
-        defaultReasoningEffort: form.defaultReasoningEffort || undefined,
-        workerRuntime: form.workerRuntime,
-        stepAllocationTimeoutSeconds: form.stepAllocationTimeoutSeconds,
-        scope: form.scope,
-        steps: form.steps.map((s, i) => ({
-          name: s.name, promptTemplate: s.promptTemplate, stepOrder: i + 1,
-          agentId: s.agentId || undefined, model: s.model || undefined,
-          reasoningEffort: s.reasoningEffort || undefined, workerRuntime: s.workerRuntime || undefined, timeoutSeconds: s.timeoutSeconds,
-        })),
-        triggers: triggerPayloads.length > 0 ? triggerPayloads : undefined,
-      },
-    });
-    router.push(`/${ws.value}/workflows/${res.workflow.id}`);
+    const labels = labelsInput.value.split(',').map(s => s.trim()).filter(Boolean);
+    const steps = form.steps.map((s, i) => ({
+      name: s.name, promptTemplate: s.promptTemplate, stepOrder: i + 1,
+      agentId: s.agentId || undefined, model: s.model || undefined,
+      reasoningEffort: s.reasoningEffort || undefined, workerRuntime: s.workerRuntime || undefined,
+      timeoutSeconds: s.timeoutSeconds,
+    }));
+    await $fetch('/api/workflows', { method: 'POST', headers, body: { ...form, labels, steps, triggers: form.triggers } });
+    toast.add({ severity: 'success', summary: 'Success', detail: 'Workflow created', life: 3000 });
+    router.push(`/${ws.value}/workflows`);
   } catch (e: any) {
-    formError.value = e?.data?.error || 'Failed to create workflow';
+    error.value = e?.data?.error || 'Failed to create workflow.';
   } finally {
-    submitting.value = false;
+    saving.value = false;
   }
 }
 </script>

@@ -1,122 +1,59 @@
 <template>
   <div>
-    <Breadcrumb>
-      <BreadcrumbList>
-        <BreadcrumbItem><BreadcrumbLink :href="`/${ws}`">Home</BreadcrumbLink></BreadcrumbItem>
-        <BreadcrumbSeparator />
-        <BreadcrumbItem><BreadcrumbPage>Workflows</BreadcrumbPage></BreadcrumbItem>
-      </BreadcrumbList>
+    <Breadcrumb :model="[{ label: 'Home', route: `/${ws}` }, { label: 'Workflows' }]" class="mb-4">
+      <template #item="{ item }">
+        <NuxtLink v-if="item.route" :to="item.route" class="text-primary hover:underline">{{ item.label }}</NuxtLink>
+        <span v-else>{{ item.label }}</span>
+      </template>
     </Breadcrumb>
 
-    <div class="flex items-center justify-between mt-4 mb-6">
+    <div class="flex items-center justify-between mb-6">
       <div>
-        <h1 class="text-3xl font-bold">Workflows</h1>
-        <p class="text-muted-foreground text-sm mt-1">Multi-step AI workflows with scheduled and manual triggers</p>
+        <h1 class="text-2xl font-semibold">Workflows</h1>
+        <p class="text-surface-500 text-sm mt-1">Automated multi-step AI workflow definitions</p>
       </div>
-      <div class="flex items-center gap-2">
-        <div class="flex border rounded-md">
-          <button @click="viewMode = 'card'" :class="['px-3 py-1.5 text-xs', viewMode === 'card' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted']">Cards</button>
-          <button @click="viewMode = 'table'" :class="['px-3 py-1.5 text-xs', viewMode === 'table' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted']">Table</button>
-        </div>
-        <NuxtLink :to="`/${ws}/workflows/new`">
-          <Button>+ Create Workflow</Button>
-        </NuxtLink>
-      </div>
-    </div>
-
-    <!-- Label filter -->
-    <div v-if="allLabels.length > 0" class="mb-4 flex flex-wrap items-center gap-2">
-      <span class="text-sm text-muted-foreground mr-1">Filter by label:</span>
-      <Badge
-        v-for="label in allLabels" :key="label"
-        :variant="selectedLabels.includes(label) ? 'default' : 'outline'"
-        class="cursor-pointer select-none"
-        @click="toggleLabel(label)"
-      >
-        {{ label }}
-      </Badge>
-      <button v-if="selectedLabels.length > 0" class="text-xs text-muted-foreground hover:text-foreground ml-2" @click="selectedLabels = []">Clear</button>
-    </div>
-
-    <!-- Card View -->
-    <div v-if="viewMode === 'card'" class="space-y-3">
-      <NuxtLink v-for="wf in filteredWorkflows" :key="wf.id" :to="`/${ws}/workflows/${wf.id}`" class="block">
-        <Card class="hover:border-primary/40 transition">
-          <CardHeader class="pb-2">
-            <CardTitle class="text-lg">{{ wf.name }}</CardTitle>
-            <div class="flex flex-wrap items-center gap-1.5 mt-1">
-              <Badge :variant="wf.isActive ? 'default' : 'secondary'">{{ wf.isActive ? 'Active' : 'Inactive' }}</Badge>
-              <Badge v-if="wf.scope === 'workspace'" variant="outline" class="text-xs">Workspace</Badge>
-              <Badge variant="outline" class="font-mono text-xs">v{{ wf.version }}</Badge>
-              <Badge v-for="label in (wf.labels || [])" :key="label" variant="secondary" class="text-xs">{{ label }}</Badge>
-            </div>
-            <CardDescription v-if="wf.description" class="mt-1">{{ wf.description }}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div class="flex items-center gap-4 text-xs text-muted-foreground">
-              <span>Owner: {{ wf.ownerName || 'Unknown' }}</span>
-              <span v-if="wf.lastExecutionAt">Last Run: {{ new Date(wf.lastExecutionAt).toLocaleString() }}</span>
-              <span v-else class="italic">Never run</span>
-            </div>
-          </CardContent>
-        </Card>
+      <NuxtLink :to="`/${ws}/workflows/new`">
+        <Button label="Create Workflow" icon="pi pi-plus" />
       </NuxtLink>
     </div>
 
-    <!-- Table View -->
-    <Card v-if="viewMode === 'table'">
-      <CardContent class="pt-4">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Version</TableHead>
-              <TableHead>Labels</TableHead>
-              <TableHead>Owner</TableHead>
-              <TableHead>Last Run</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow v-for="wf in filteredWorkflows" :key="wf.id" class="cursor-pointer hover:bg-muted/50" @click="navigateTo(`/${ws}/workflows/${wf.id}`)">
-              <TableCell class="font-medium">
-                {{ wf.name }}
-                <p v-if="wf.description" class="text-xs text-muted-foreground truncate max-w-[200px]">{{ wf.description }}</p>
-              </TableCell>
-              <TableCell>
-                <Badge :variant="wf.isActive ? 'default' : 'secondary'" class="text-xs">{{ wf.isActive ? 'Active' : 'Inactive' }}</Badge>
-              </TableCell>
-              <TableCell class="font-mono text-sm">v{{ wf.version }}</TableCell>
-              <TableCell>
-                <div class="flex flex-wrap gap-1">
-                  <Badge v-for="label in (wf.labels || [])" :key="label" variant="secondary" class="text-xs">{{ label }}</Badge>
-                </div>
-              </TableCell>
-              <TableCell class="text-sm text-muted-foreground">{{ wf.ownerName || 'Unknown' }}</TableCell>
-              <TableCell class="text-sm text-muted-foreground">
-                {{ wf.lastExecutionAt ? new Date(wf.lastExecutionAt).toLocaleString() : 'Never' }}
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
-
-    <p v-if="filteredWorkflows.length === 0 && workflows.length > 0" class="text-muted-foreground text-center py-8">
-      No workflows match the selected labels.
-    </p>
-    <p v-if="workflows.length === 0" class="text-muted-foreground text-center py-8">
-      No workflows created yet. Click "Create Workflow" to get started.
-    </p>
-
-    <!-- Pagination -->
-    <div v-if="totalPages > 1" class="flex items-center justify-between mt-4">
-      <span class="text-xs text-muted-foreground">Page {{ page }} of {{ totalPages }} ({{ total }} workflows)</span>
-      <div class="flex gap-2">
-        <Button variant="outline" size="sm" :disabled="page <= 1" @click="page--">Previous</Button>
-        <Button variant="outline" size="sm" :disabled="page >= totalPages" @click="page++">Next</Button>
-      </div>
-    </div>
+    <DataTable :value="workflows" paginator :rows="limit" :totalRecords="total" lazy @page="onPage($event)"
+      stripedRows :loading="pending" dataKey="id" :rowsPerPageOptions="[10, 20, 50, 100]"
+      @update:rows="onRowsChange">
+      <template #empty><div class="text-center py-8 text-surface-400">No workflows yet. Click "Create Workflow" to get started.</div></template>
+      <Column field="name" header="Name" style="min-width: 200px">
+        <template #body="{ data }">
+          <NuxtLink :to="`/${ws}/workflows/${data.id}`" class="text-primary font-medium hover:underline">{{ data.name }}</NuxtLink>
+          <p v-if="data.description" class="text-xs text-surface-400 mt-0.5 truncate max-w-[300px]">{{ data.description }}</p>
+        </template>
+      </Column>
+      <Column header="Status" style="width: 100px">
+        <template #body="{ data }"><Tag :value="data.isActive ? 'Active' : 'Inactive'" :severity="data.isActive ? 'success' : 'secondary'" /></template>
+      </Column>
+      <Column header="Scope" style="width: 110px">
+        <template #body="{ data }"><Tag :value="data.scope === 'workspace' ? 'Workspace' : 'Personal'" severity="info" /></template>
+      </Column>
+      <Column header="Labels" style="min-width: 150px">
+        <template #body="{ data }">
+          <div class="flex gap-1 flex-wrap">
+            <Tag v-for="l in (data.labels || [])" :key="l" :value="l" severity="secondary" class="text-xs" />
+          </div>
+        </template>
+      </Column>
+      <Column header="Version" style="width: 80px">
+        <template #body="{ data }"><span class="font-mono text-sm">v{{ data.version || 1 }}</span></template>
+      </Column>
+      <Column header="Last Run" style="width: 140px">
+        <template #body="{ data }">
+          <span class="text-sm text-surface-500">{{ data.lastExecutionAt ? new Date(data.lastExecutionAt).toLocaleDateString() : 'Never' }}</span>
+        </template>
+      </Column>
+      <Column header="" style="width: 60px">
+        <template #body="{ data }">
+          <NuxtLink :to="`/${ws}/workflows/${data.id}`"><Button icon="pi pi-arrow-right" text rounded size="small" /></NuxtLink>
+        </template>
+      </Column>
+    </DataTable>
   </div>
 </template>
 
@@ -126,35 +63,16 @@ const headers = authHeaders();
 const route = useRoute();
 const ws = computed(() => (route.params.workspace as string) || 'default');
 
-const viewMode = ref<'card' | 'table'>('card');
 const page = ref(1);
-const limit = 20;
+const limit = ref(20);
 
-const { data } = await useFetch(
-  computed(() => `/api/workflows?page=${page.value}&limit=${limit}`),
-  { headers, watch: [page] },
+const { data, pending } = await useFetch(
+  computed(() => `/api/workflows?page=${page.value}&limit=${limit.value}`),
+  { headers, watch: [page, limit] },
 );
-const workflows = computed(() => data.value?.workflows ?? []);
+const workflows = computed(() => (data.value as any)?.workflows ?? []);
 const total = computed(() => (data.value as any)?.total ?? 0);
-const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit)));
 
-const { data: labelsData } = await useFetch('/api/workflows/labels', { headers });
-const allLabels = computed(() => (labelsData.value as any)?.labels ?? []);
-
-const selectedLabels = ref<string[]>([]);
-
-function toggleLabel(label: string) {
-  if (selectedLabels.value.includes(label)) {
-    selectedLabels.value = selectedLabels.value.filter(l => l !== label);
-  } else {
-    selectedLabels.value = [...selectedLabels.value, label];
-  }
-}
-
-const filteredWorkflows = computed(() => {
-  if (selectedLabels.value.length === 0) return workflows.value;
-  return workflows.value.filter((wf: any) =>
-    selectedLabels.value.every(label => (wf.labels || []).includes(label)),
-  );
-});
+function onPage(event: any) { page.value = event.page + 1; }
+function onRowsChange(newRows: number) { limit.value = newRows; page.value = 1; }
 </script>

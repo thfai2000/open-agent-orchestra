@@ -5,6 +5,7 @@ import { db } from '../database/index.js';
 import { workflowExecutions, stepExecutions, workflows, triggers } from '../database/schema.js';
 import { authMiddleware, paginationSchema, uuidSchema } from '@oao/shared';
 import { retryWorkflowExecution } from '../services/workflow-engine.js';
+import { onRealtimeEvent, type RealtimeEvent } from '../services/realtime-bus.js';
 
 const executionsRouter = new Hono();
 executionsRouter.use('/*', authMiddleware);
@@ -120,6 +121,49 @@ executionsRouter.get('/active', async (c) => {
   return c.json({ executions: active });
 });
 
+// GET /stream/all — SSE stream for all execution updates (listing page)
+executionsRouter.get('/stream/all', async (c) => {
+  const user = c.get('user');
+  if (!user.workspaceId) return c.json({ error: 'No workspace' }, 400);
+
+  const workspaceId = user.workspaceId;
+
+  const stream = new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder();
+
+      const send = (event: string, data: unknown) => {
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          // Stream closed
+        }
+      };
+
+      send('connected', { workspaceId });
+
+      const unsubscribe = onRealtimeEvent((event: RealtimeEvent) => {
+        if (event.workspaceId !== workspaceId) return;
+        send(event.type, event);
+      });
+
+      c.req.raw.signal.addEventListener('abort', () => {
+        unsubscribe();
+        try { controller.close(); } catch { /* already closed */ }
+      });
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  });
+});
+
 // GET /:id — full execution detail with step executions (workspace-scoped)
 executionsRouter.get('/:id', async (c) => {
   const user = c.get('user');
@@ -209,6 +253,53 @@ executionsRouter.get('/:id/steps/:stepId/live', async (c) => {
     status: stepExec.status,
     liveOutput: stepExec.liveOutput ?? [],
     output: stepExec.output,
+  });
+});
+
+// GET /:id/stream — SSE stream for real-time execution updates
+executionsRouter.get('/:id/stream', async (c) => {
+  const user = c.get('user');
+  const executionId = uuidSchema.parse(c.req.param('id'));
+
+  const result = await verifyExecutionAccess(executionId, user.workspaceId, user.userId);
+  if (!result) return c.json({ error: 'Execution not found' }, 404);
+
+  const stream = new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder();
+
+      const send = (event: string, data: unknown) => {
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          // Stream closed
+        }
+      };
+
+      // Send initial state
+      send('connected', { executionId });
+
+      // Listen for realtime events filtered to this execution
+      const unsubscribe = onRealtimeEvent((event: RealtimeEvent) => {
+        if (event.executionId !== executionId) return;
+        send(event.type, event);
+      });
+
+      // Clean up when client disconnects
+      c.req.raw.signal.addEventListener('abort', () => {
+        unsubscribe();
+        try { controller.close(); } catch { /* already closed */ }
+      });
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
   });
 });
 

@@ -1,123 +1,55 @@
 <template>
   <div>
-    <Breadcrumb>
-      <BreadcrumbList>
-        <BreadcrumbItem><BreadcrumbLink href="/">Home</BreadcrumbLink></BreadcrumbItem>
-        <BreadcrumbSeparator />
-        <BreadcrumbItem><BreadcrumbPage>Instances</BreadcrumbPage></BreadcrumbItem>
-      </BreadcrumbList>
+    <Breadcrumb :model="[{ label: 'Home', route: `/${ws}` }, { label: 'Agent Instances' }]" class="mb-4">
+      <template #item="{ item }">
+        <NuxtLink v-if="item.route" :to="item.route" class="text-primary hover:underline">{{ item.label }}</NuxtLink>
+        <span v-else>{{ item.label }}</span>
+      </template>
     </Breadcrumb>
 
-    <div class="flex items-center justify-between mt-4 mb-6">
-      <h1 class="text-3xl font-bold">Agent Instances</h1>
-      <div class="flex gap-2">
-        <select v-model="typeFilter" class="text-sm border rounded px-2 py-1 bg-background">
-          <option value="">All Types</option>
-          <option value="static">Static</option>
-          <option value="ephemeral">Ephemeral</option>
-        </select>
-        <select v-model="statusFilter" class="text-sm border rounded px-2 py-1 bg-background">
-          <option value="">All Statuses</option>
-          <option value="idle">Idle</option>
-          <option value="busy">Busy</option>
-          <option value="offline">Offline</option>
-          <option value="terminated">Terminated</option>
-        </select>
-        <Button variant="outline" size="sm" @click="refresh()">Refresh</Button>
-        <Button variant="destructive" size="sm" @click="cleanup()">Cleanup Old</Button>
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-2xl font-semibold">Agent Instances</h1>
+        <p class="text-surface-500 text-sm mt-1">Running and recent Copilot agent sessions</p>
       </div>
+      <Button label="Cleanup Stale" icon="pi pi-broom" severity="secondary" :loading="cleaning" @click="handleCleanup" />
     </div>
 
-    <!-- Summary Cards -->
-    <div class="grid grid-cols-4 gap-4 mb-6">
-      <Card>
-        <CardContent class="pt-4 pb-4 text-center">
-          <p class="text-2xl font-bold">{{ summary.total }}</p>
-          <p class="text-xs text-muted-foreground">Total Instances</p>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardContent class="pt-4 pb-4 text-center">
-          <p class="text-2xl font-bold text-green-600">{{ summary.idle }}</p>
-          <p class="text-xs text-muted-foreground">Idle</p>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardContent class="pt-4 pb-4 text-center">
-          <p class="text-2xl font-bold text-blue-600">{{ summary.busy }}</p>
-          <p class="text-xs text-muted-foreground">Busy</p>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardContent class="pt-4 pb-4 text-center">
-          <p class="text-2xl font-bold text-red-600">{{ summary.offline }}</p>
-          <p class="text-xs text-muted-foreground">Offline</p>
-        </CardContent>
-      </Card>
-    </div>
-
-    <Card>
-      <CardContent class="pt-6">
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="border-b border-border">
-                <th class="text-left py-3 px-4 font-medium">Name</th>
-                <th class="text-center py-3 px-4 font-medium">Type</th>
-                <th class="text-center py-3 px-4 font-medium">Status</th>
-                <th class="text-left py-3 px-4 font-medium">Hostname</th>
-                <th class="text-left py-3 px-4 font-medium">Current Step</th>
-                <th class="text-left py-3 px-4 font-medium">Last Heartbeat</th>
-                <th class="text-left py-3 px-4 font-medium">Created</th>
-                <th class="text-left py-3 px-4 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="inst in filteredInstances" :key="inst.id" class="border-b border-border hover:bg-muted/50">
-                <td class="py-3 px-4 font-mono text-xs">{{ inst.name }}</td>
-                <td class="py-3 px-4 text-center">
-                  <Badge :variant="inst.instanceType === 'static' ? 'default' : 'secondary'">
-                    {{ inst.instanceType }}
-                  </Badge>
-                </td>
-                <td class="py-3 px-4 text-center">
-                  <Badge :variant="statusVariant(inst.status)">
-                    {{ inst.status }}
-                  </Badge>
-                </td>
-                <td class="py-3 px-4 text-xs text-muted-foreground">{{ inst.hostname || '—' }}</td>
-                <td class="py-3 px-4 font-mono text-xs">
-                  <NuxtLink v-if="inst.currentStepExecutionId" :to="`/${ws}/executions`" class="text-primary hover:underline">
-                    {{ inst.currentStepExecutionId.substring(0, 8) }}…
-                  </NuxtLink>
-                  <span v-else class="text-muted-foreground">—</span>
-                </td>
-                <td class="py-3 px-4 text-muted-foreground text-xs">
-                  {{ inst.lastHeartbeatAt ? timeAgo(inst.lastHeartbeatAt) : '—' }}
-                </td>
-                <td class="py-3 px-4 text-muted-foreground text-xs">
-                  {{ new Date(inst.createdAt).toLocaleString() }}
-                </td>
-                <td class="py-3 px-4">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    class="text-xs h-7 text-destructive"
-                    @click="removeInstance(inst.id)"
-                    :disabled="inst.status === 'busy'"
-                  >
-                    Remove
-                  </Button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <p v-if="filteredInstances.length === 0" class="text-center text-muted-foreground py-8">
-            No agent instances found.
-          </p>
-        </div>
-      </CardContent>
-    </Card>
+    <DataTable :value="instances" stripedRows dataKey="id" :loading="pending"
+      paginator :rows="20" :rowsPerPageOptions="[10, 20, 50, 100]">
+      <template #empty><div class="text-center py-8 text-surface-400">No active agent instances.</div></template>
+      <Column header="Name" style="min-width: 160px">
+        <template #body="{ data }">
+          <span class="font-medium text-sm">{{ data.name }}</span>
+        </template>
+      </Column>
+      <Column header="Type" style="width: 120px">
+        <template #body="{ data }"><Tag :value="data.instanceType" :severity="data.instanceType === 'static' ? 'info' : 'warn'" /></template>
+      </Column>
+      <Column header="Status" style="width: 110px">
+        <template #body="{ data }"><Tag :value="data.status" :severity="getStatusSeverity(data.status)" /></template>
+      </Column>
+      <Column header="Hostname" style="min-width: 140px">
+        <template #body="{ data }"><span class="text-sm font-mono text-surface-500">{{ data.hostname || '—' }}</span></template>
+      </Column>
+      <Column header="Current Step" style="width: 140px">
+        <template #body="{ data }">
+          <span v-if="data.currentStepExecutionId" class="text-xs font-mono text-surface-400">{{ data.currentStepExecutionId.substring(0, 12) }}…</span>
+          <span v-else class="text-sm text-surface-400">—</span>
+        </template>
+      </Column>
+      <Column header="Last Heartbeat" style="width: 170px">
+        <template #body="{ data }"><span class="text-sm text-surface-500">{{ data.lastHeartbeatAt ? new Date(data.lastHeartbeatAt).toLocaleString() : '—' }}</span></template>
+      </Column>
+      <Column header="Created" style="width: 170px">
+        <template #body="{ data }"><span class="text-sm text-surface-500">{{ new Date(data.createdAt).toLocaleString() }}</span></template>
+      </Column>
+      <Column header="" style="width: 60px">
+        <template #body="{ data }">
+          <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click="handleTerminate(data.id)" />
+        </template>
+      </Column>
+    </DataTable>
   </div>
 </template>
 
@@ -125,58 +57,36 @@
 const { authHeaders } = useAuth();
 const headers = authHeaders();
 const route = useRoute();
+const toast = useToast();
+const confirm = useConfirm();
 const ws = computed(() => (route.params.workspace as string) || 'default');
 
-const typeFilter = ref('');
-const statusFilter = ref('');
+const cleaning = ref(false);
 
-const { data, refresh } = await useFetch('/api/agent-instances', { headers });
-const instances = computed(() => (data.value as any)?.instances ?? []);
+const { data: instData, pending, refresh } = await useFetch('/api/agent-instances', { headers });
+const instances = computed(() => (instData.value as any)?.instances ?? []);
 
-const filteredInstances = computed(() => {
-  let result = instances.value;
-  if (typeFilter.value) result = result.filter((i: any) => i.instanceType === typeFilter.value);
-  if (statusFilter.value) result = result.filter((i: any) => i.status === statusFilter.value);
-  return result;
-});
+function getStatusSeverity(s: string) { return { idle: 'success', busy: 'warn', offline: 'secondary', terminated: 'danger' }[s] || 'secondary'; }
 
-const summary = computed(() => {
-  const all = instances.value;
-  return {
-    total: all.length,
-    idle: all.filter((i: any) => i.status === 'idle').length,
-    busy: all.filter((i: any) => i.status === 'busy').length,
-    offline: all.filter((i: any) => i.status === 'offline').length,
-  };
-});
-
-function statusVariant(status: string) {
-  if (status === 'idle') return 'default';
-  if (status === 'busy') return 'secondary';
-  if (status === 'offline') return 'destructive';
-  return 'outline';
+async function handleCleanup() {
+  cleaning.value = true;
+  try {
+    await $fetch('/api/agent-instances/cleanup', { method: 'POST', headers });
+    toast.add({ severity: 'success', summary: 'Cleaned up', life: 3000 });
+    await refresh();
+  } catch { toast.add({ severity: 'error', summary: 'Failed', life: 5000 }); }
+  finally { cleaning.value = false; }
 }
 
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const secs = Math.floor(diff / 1000);
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
-
-async function removeInstance(id: string) {
-  if (!confirm('Remove this instance record?')) return;
-  await $fetch(`/api/agent-instances/${id}`, { method: 'DELETE', headers });
-  refresh();
-}
-
-async function cleanup() {
-  const res = await $fetch<{ removed: number }>('/api/agent-instances/cleanup', { method: 'POST', headers });
-  alert(`Cleaned up ${res.removed} old instances`);
-  refresh();
+function handleTerminate(id: string) {
+  confirm.require({
+    message: 'Terminate this instance?', header: 'Confirm', icon: 'pi pi-exclamation-triangle',
+    rejectProps: { label: 'Cancel', severity: 'secondary' }, acceptProps: { label: 'Terminate', severity: 'danger' },
+    accept: async () => {
+      await $fetch(`/api/agent-instances/${id}`, { method: 'DELETE', headers });
+      toast.add({ severity: 'success', summary: 'Terminated', life: 3000 });
+      await refresh();
+    },
+  });
 }
 </script>

@@ -33,11 +33,19 @@ export function registerPatValidator(validator: PatValidator): void {
 
 export async function authMiddleware(c: Context, next: Next): Promise<Response | void> {
   const authHeader = c.req.header('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return c.json({ error: 'Missing or invalid Authorization header' }, 401);
+  // Support token via query param for SSE (EventSource doesn't support custom headers)
+  const queryToken = c.req.query('token');
+
+  let token: string | undefined;
+  if (authHeader?.startsWith('Bearer ')) {
+    token = authHeader.slice(7);
+  } else if (queryToken) {
+    token = queryToken;
   }
 
-  const token = authHeader.slice(7);
+  if (!token) {
+    return c.json({ error: 'Missing or invalid Authorization header' }, 401);
+  }
 
   // ── PAT path: tokens starting with "oao_" ──
   if (token.startsWith('oao_')) {

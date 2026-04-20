@@ -33,6 +33,7 @@ import {
 } from '../database/schema.js';
 import { executeCopilotSession, type LiveOutputEvent } from '../services/workflow-engine.js';
 import { getRedisConnectionOpts } from '../services/redis.js';
+import { publishRealtimeEvent } from '../services/realtime-bus.js';
 import {
   registerStaticInstance,
   startHeartbeat,
@@ -163,7 +164,19 @@ async function executeStep(stepExecutionId: string, executionId: string): Promis
     return;
   }
 
+  publishRealtimeEvent({
+    type: 'step.started',
+    executionId,
+    workflowId: workflow.id,
+    workspaceId: workflow.workspaceId ?? undefined,
+    stepExecutionId,
+    stepOrder: stepExec.stepOrder,
+    data: { status: 'running', stepName: step.name },
+    timestamp: new Date().toISOString(),
+  });
+
   // 9. Execute the Copilot session with live progress streaming
+  let lastPublishedLength = 0;
   const onProgress = async (events: LiveOutputEvent[]) => {
     try {
       await db
@@ -172,6 +185,21 @@ async function executeStep(stepExecutionId: string, executionId: string): Promis
         .where(eq(stepExecutions.id, stepExecutionId));
     } catch (err) {
       logger.warn({ stepExecutionId, error: err }, 'Failed to flush live output to DB');
+    }
+    // Publish only the new events since last publish
+    if (events.length > lastPublishedLength) {
+      const newEvents = events.slice(lastPublishedLength);
+      lastPublishedLength = events.length;
+      publishRealtimeEvent({
+        type: 'step.progress',
+        executionId,
+        workflowId: workflow.id,
+        workspaceId: workflow.workspaceId ?? undefined,
+        stepExecutionId,
+        stepOrder: stepExec.stepOrder,
+        data: { events: newEvents, totalEvents: events.length },
+        timestamp: new Date().toISOString(),
+      });
     }
   };
 
@@ -226,6 +254,17 @@ async function executeStep(stepExecutionId: string, executionId: string): Promis
       completedAt: new Date(),
     })
     .where(eq(stepExecutions.id, stepExecutionId));
+
+  publishRealtimeEvent({
+    type: 'step.completed',
+    executionId,
+    workflowId: workflow.id,
+    workspaceId: workflow.workspaceId ?? undefined,
+    stepExecutionId,
+    stepOrder: stepExec.stepOrder,
+    data: { status: 'completed', output: result.output?.substring(0, 200) },
+    timestamp: new Date().toISOString(),
+  });
 }
 
 // ─── Worker Lifecycle ─────────────────────────────────────────────────
@@ -268,6 +307,14 @@ export async function startAgentWorker(): Promise<Worker> {
             .update(stepExecutions)
             .set({ status: 'failed', error: errorMsg, completedAt: new Date() })
             .where(eq(stepExecutions.id, stepExecutionId));
+
+          publishRealtimeEvent({
+            type: 'step.failed',
+            executionId,
+            stepExecutionId,
+            data: { status: 'failed', error: errorMsg },
+            timestamp: new Date().toISOString(),
+          });
         } catch (dbError) {
           logger.error({ dbError }, 'Failed to write error to database');
         }
