@@ -56,6 +56,7 @@ AI agent definitions.
 | builtinToolsEnabled | jsonb | Array of enabled built-in tool names |
 | mcpJsonTemplate | text | Jinja2 template for mcp.json (rendered with variables before session) |
 | scope | resource_scope | Default: `user`. Immutable |
+| version | integer | Auto-incremented on every update. Default: 1 |
 | status | agent_status | |
 | lastSessionAt | timestamp | |
 | createdAt, updatedAt | timestamp | |
@@ -72,6 +73,20 @@ Database-stored agent files (for `sourceType: database`).
 | content | text | Markdown content |
 | createdAt, updatedAt | timestamp | |
 | | | UNIQUE(agentId, filePath) |
+
+### agent_versions
+
+Immutable snapshots of agent config at each version, for audit trail.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| agentId | UUID FK → agents | Cascade delete |
+| version | integer | Matches agents.version at time of change |
+| snapshot | jsonb | Full agent config + files snapshot |
+| changedBy | UUID | User who made the change |
+| createdAt | timestamp | |
+| | | UNIQUE(agentId, version) |
 
 ### mcp_server_configs (deprecated)
 
@@ -136,6 +151,20 @@ Ordered steps in a workflow.
 | createdAt, updatedAt | timestamp | |
 | | | UNIQUE(workflowId, stepOrder) |
 
+### workflow_versions
+
+Immutable snapshots of workflow config + steps at each version, for audit trail.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| workflowId | UUID FK → workflows | Cascade delete |
+| version | integer | Matches workflows.version at time of change |
+| snapshot | jsonb | Full workflow config + steps snapshot |
+| changedBy | UUID | User who made the change |
+| createdAt | timestamp | |
+| | | UNIQUE(workflowId, version) |
+
 ### triggers
 
 Trigger configurations for workflows.
@@ -185,6 +214,8 @@ Trigger configurations for workflows.
 | workflowExecutionId | UUID FK → workflow_executions | |
 | workflowStepId | UUID FK → workflow_steps | |
 | stepOrder | integer | |
+| agentVersion | integer | Snapshot of agent.version when step executes |
+| agentSnapshot | jsonb | Full agent config snapshot at execution time (immutable) |
 | resolvedPrompt | text | Prompt with variables replaced |
 | output | text | Copilot session response |
 | reasoningTrace | jsonb | Tool calls, intermediate thoughts |

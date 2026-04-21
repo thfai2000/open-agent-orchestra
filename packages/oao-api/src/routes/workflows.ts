@@ -1,13 +1,82 @@
-import { Hono } from 'hono';
-import { z } from 'zod';
+import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { eq, desc, and, or, sql, arrayContains } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { workflows, workflowSteps, triggers, workflowExecutions, users, agents } from '../database/schema.js';
 import { authMiddleware, uuidSchema } from '@oao/shared';
 import { emitEvent, EVENT_NAMES } from '../services/system-events.js';
+import {
+  captureWorkflowHistoricalVersion,
+  getWorkflowVersionView,
+  listWorkflowVersionViews,
+} from '../services/versioning.js';
 
-const workflowsRouter = new Hono();
+const workflowsRouter = new OpenAPIHono();
 workflowsRouter.use('/*', authMiddleware);
+
+const WorkflowIdParam = z.object({
+  id: z.string().uuid().openapi({ description: 'Workflow UUID' }),
+});
+
+const WorkflowVersionParam = WorkflowIdParam.extend({
+  version: z.string().openapi({ description: 'Workflow version number' }),
+});
+
+const PaginationQuery = z.object({
+  page: z.string().optional().openapi({ description: 'Page number (default: 1)' }),
+  limit: z.string().optional().openapi({ description: 'Items per page (default: 50, max: 100)' }),
+});
+
+const ErrorResponse = z.object({ error: z.string() });
+
+const listWorkflowVersionsRoute = createRoute({
+  method: 'get',
+  path: '/{id}/versions',
+  tags: ['Workflows'],
+  summary: 'List workflow version history',
+  request: {
+    params: WorkflowIdParam,
+    query: PaginationQuery,
+  },
+  responses: {
+    200: {
+      description: 'Workflow version history',
+      content: {
+        'application/json': {
+          schema: z.object({
+            versions: z.array(z.any()),
+            total: z.number(),
+            page: z.number(),
+            limit: z.number(),
+          }),
+        },
+      },
+    },
+    404: { description: 'Workflow not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
+
+const getWorkflowVersionRoute = createRoute({
+  method: 'get',
+  path: '/{id}/versions/{version}',
+  tags: ['Workflows'],
+  summary: 'Get workflow version snapshot',
+  request: {
+    params: WorkflowVersionParam,
+  },
+  responses: {
+    200: {
+      description: 'Workflow version snapshot',
+      content: {
+        'application/json': {
+          schema: z.object({
+            version: z.any(),
+          }),
+        },
+      },
+    },
+    404: { description: 'Workflow version not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
 
 // GET / — list workflows visible to user: user-scoped (own) + workspace-scoped
 // Query params: ?labels=label1,label2 — filter by ALL specified labels (AND logic)
@@ -299,6 +368,8 @@ workflowsRouter.put('/:id', async (c) => {
     return c.json({ error: 'Forbidden' }, 403);
   }
 
+  await captureWorkflowHistoricalVersion(existing, user.userId);
+
   const [updated] = await db
     .update(workflows)
     .set({
@@ -341,6 +412,8 @@ workflowsRouter.put('/:id/steps', async (c) => {
     return c.json({ error: 'Forbidden' }, 403);
   }
 
+  await captureWorkflowHistoricalVersion(existing, user.userId);
+
   const result = await db.transaction(async (tx) => {
     await tx.delete(workflowSteps).where(eq(workflowSteps.workflowId, id));
     const newSteps = await tx
@@ -360,7 +433,6 @@ workflowsRouter.put('/:id/steps', async (c) => {
       )
       .returning();
 
-    // Bump workflow version
     await tx
       .update(workflows)
       .set({ version: sql`${workflows.version} + 1`, updatedAt: new Date() })
@@ -370,6 +442,55 @@ workflowsRouter.put('/:id/steps', async (c) => {
   });
 
   return c.json({ steps: result });
+});
+
+// GET /:id/versions — list workflow version history
+workflowsRouter.openapi(listWorkflowVersionsRoute, async (c) => {
+  const user = c.get('user');
+  const { id } = c.req.valid('param');
+
+  const workflow = await db.query.workflows.findFirst({ where: eq(workflows.id, id) });
+  if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+  if (workflow.workspaceId !== user.workspaceId) return c.json({ error: 'Workflow not found' }, 404);
+  if (workflow.scope === 'user' && workflow.userId !== user.userId && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Workflow not found' }, 404);
+  }
+
+  const { page: pageStr, limit: limitStr } = c.req.valid('query');
+  const page = Math.max(1, Number(pageStr || 1));
+  const limit = Math.min(100, Math.max(1, Number(limitStr || 50)));
+  const versions = await listWorkflowVersionViews(workflow);
+  const offset = (page - 1) * limit;
+
+  return c.json({
+    versions: versions.slice(offset, offset + limit),
+    total: versions.length,
+    page,
+    limit,
+  }, 200);
+});
+
+// GET /:id/versions/:version — get specific workflow version snapshot
+workflowsRouter.openapi(getWorkflowVersionRoute, async (c) => {
+  const user = c.get('user');
+  const { id, version: versionStr } = c.req.valid('param');
+  const version = Number(versionStr);
+
+  if (!Number.isInteger(version) || version < 1) {
+    return c.json({ error: 'Version not found' }, 404);
+  }
+
+  const workflow = await db.query.workflows.findFirst({ where: eq(workflows.id, id) });
+  if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
+  if (workflow.workspaceId !== user.workspaceId) return c.json({ error: 'Workflow not found' }, 404);
+  if (workflow.scope === 'user' && workflow.userId !== user.userId && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Workflow not found' }, 404);
+  }
+
+  const versionRecord = await getWorkflowVersionView(workflow, version);
+  if (!versionRecord) return c.json({ error: 'Version not found' }, 404);
+
+  return c.json({ version: versionRecord }, 200);
 });
 
 // DELETE /:id

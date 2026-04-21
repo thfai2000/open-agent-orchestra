@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { agentVariables, userVariables, workspaceVariables, agents } from '../database/schema.js';
 import { authMiddleware, encrypt, uuidSchema } from '@oao/shared';
+import { captureAgentHistoricalVersion } from '../services/versioning.js';
 
 const variablesRouter = new Hono();
 variablesRouter.use('/*', authMiddleware);
@@ -273,6 +274,8 @@ variablesRouter.post('/', async (c) => {
       return c.json({ error: 'Agent not found' }, 404);
     }
 
+    await captureAgentHistoricalVersion(agent, user.userId);
+
     const [variable] = await db
       .insert(agentVariables)
       .values({
@@ -305,6 +308,11 @@ variablesRouter.post('/', async (c) => {
         description: agentVariables.description,
         createdAt: agentVariables.createdAt,
       });
+
+    await db
+      .update(agents)
+      .set({ version: sql`${agents.version} + 1`, updatedAt: new Date() })
+      .where(eq(agents.id, agent.id));
 
     return c.json({ variable, scope: 'agent' }, 201);
   } else {
@@ -417,6 +425,8 @@ variablesRouter.put('/:id', async (c) => {
   const agentForVar = await db.query.agents.findFirst({ where: eq(agents.id, existingAgentVar.agentId) });
   if (!agentForVar || agentForVar.workspaceId !== user.workspaceId) return c.json({ error: 'Variable not found' }, 404);
 
+  await captureAgentHistoricalVersion(agentForVar, user.userId);
+
   const [updated] = await db
     .update(agentVariables)
     .set(updateData)
@@ -431,6 +441,12 @@ variablesRouter.put('/:id', async (c) => {
     });
 
   if (!updated) return c.json({ error: 'Variable not found' }, 404);
+
+  await db
+    .update(agents)
+    .set({ version: sql`${agents.version} + 1`, updatedAt: new Date() })
+    .where(eq(agents.id, agentForVar.id));
+
   return c.json({ variable: updated });
 });
 
@@ -460,7 +476,13 @@ variablesRouter.delete('/:id', async (c) => {
     if (!existing) return c.json({ error: 'Variable not found' }, 404);
     const agent = await db.query.agents.findFirst({ where: eq(agents.id, existing.agentId) });
     if (!agent || agent.workspaceId !== user.workspaceId) return c.json({ error: 'Variable not found' }, 404);
+
+    await captureAgentHistoricalVersion(agent, user.userId);
     await db.delete(agentVariables).where(eq(agentVariables.id, id));
+    await db
+      .update(agents)
+      .set({ version: sql`${agents.version} + 1`, updatedAt: new Date() })
+      .where(eq(agents.id, agent.id));
   }
   return c.json({ success: true });
 });

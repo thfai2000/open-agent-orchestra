@@ -1,6 +1,6 @@
 <template>
   <div>
-    <Breadcrumb :model="breadcrumbs" class="mb-4">
+    <Breadcrumb :model="breadcrumbs" class="mb-4 -ml-1">
       <template #item="{ item }">
         <NuxtLink v-if="item.route" :to="item.route" class="text-primary hover:underline">{{ item.label }}</NuxtLink>
         <span v-else>{{ item.label }}</span>
@@ -11,7 +11,15 @@
       <!-- Header -->
       <div class="flex items-start justify-between mb-6">
         <div>
-          <h1 class="text-3xl font-bold">Execution {{ execution.id.substring(0, 8) }}…</h1>
+          <div class="flex items-center gap-3">
+            <h1 class="text-3xl font-bold">Execution {{ execution.id.substring(0, 8) }}…</h1>
+            <!-- Visual status indicator ball -->
+            <span v-if="execution.status === 'running'" class="w-3 h-3 rounded-full bg-green-500 animate-pulse" title="Running"></span>
+            <span v-else-if="execution.status === 'pending'" class="w-3 h-3 rounded-full bg-yellow-400 animate-pulse" title="Pending"></span>
+            <span v-else-if="execution.status === 'failed'" class="w-3 h-3 rounded-full bg-red-500" title="Failed"></span>
+            <span v-else-if="execution.status === 'completed'" class="w-3 h-3 rounded-full bg-green-500" title="Completed"></span>
+            <span v-else-if="execution.status === 'cancelled'" class="w-3 h-3 rounded-full bg-surface-400" title="Cancelled"></span>
+          </div>
           <div class="flex flex-wrap items-center gap-1.5 mt-1">
             <Tag :value="execution.status" :severity="statusSeverity(execution.status)" />
             <Tag :value="'v' + (execution.workflowVersion || '?')" severity="secondary" />
@@ -34,17 +42,18 @@
         <NuxtLink :to="`/${ws}/executions/${retryResult.id}`" class="text-primary hover:underline ml-2">View →</NuxtLink>
       </Message>
 
-      <!-- Info Cards -->
-      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-        <Card><template #content><p class="text-surface-500 text-xs mb-1">Triggered By</p><p class="font-medium text-sm">{{ formatTriggerType(execution.triggerMetadata?.type) }}</p></template></Card>
-        <Card><template #content><p class="text-surface-500 text-xs mb-1">Workflow</p>
-          <NuxtLink v-if="execution.workflowId" :to="`/${ws}/workflows/${execution.workflowId}`" class="text-primary text-sm hover:underline">{{ workflowName || execution.workflowId.substring(0, 8) + '…' }}</NuxtLink>
-          <span v-else class="text-sm">—</span>
-        </template></Card>
-        <Card><template #content><p class="text-surface-500 text-xs mb-1">Runtime</p><p class="font-medium text-sm">{{ snapshotConfig?.workerRuntime || 'static' }}</p></template></Card>
-        <Card><template #content><p class="text-surface-500 text-xs mb-1">Started</p><p class="font-medium text-sm">{{ execution.startedAt ? new Date(execution.startedAt).toLocaleString() : '—' }}</p></template></Card>
-        <Card><template #content><p class="text-surface-500 text-xs mb-1">Duration</p><p class="font-medium text-sm">{{ duration }}</p></template></Card>
-        <Card><template #content><p class="text-surface-500 text-xs mb-1">Steps</p><p class="font-medium text-sm">{{ execution.currentStep || 0 }} / {{ execution.totalSteps || steps.length }}</p></template></Card>
+      <!-- Compact metadata (inline, no Cards) -->
+      <div class="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-surface-600 mb-6">
+        <span><span class="text-surface-400">Triggered:</span> {{ formatTriggerType(execution.triggerMetadata?.type) }}</span>
+        <span class="flex items-center gap-1">
+          <span class="text-surface-400">Workflow:</span>
+          <NuxtLink v-if="workflowVersionPath" :to="workflowVersionPath" class="text-primary hover:underline">{{ workflowName || execution.workflowId.substring(0, 8) + '…' }}</NuxtLink>
+          <span v-else>—</span>
+        </span>
+        <span><span class="text-surface-400">Runtime:</span> {{ snapshotConfig?.workerRuntime || 'static' }}</span>
+        <span><span class="text-surface-400">Started:</span> {{ execution.startedAt ? new Date(execution.startedAt).toLocaleString() : '—' }}</span>
+        <span><span class="text-surface-400">Duration:</span> {{ duration }}</span>
+        <span><span class="text-surface-400">Steps:</span> {{ execution.currentStep || 0 }} / {{ execution.totalSteps || steps.length }}</span>
       </div>
 
       <!-- Retry info -->
@@ -85,9 +94,18 @@
               </span>
             </div>
 
-            <!-- Step name -->
+            <!-- Step name + agent version badge -->
             <div class="flex-1 min-w-0">
-              <p class="font-medium text-sm truncate">{{ getStepName(step, idx) }}</p>
+              <p class="font-medium text-sm truncate">
+                {{ getStepName(step, idx) }}
+                <NuxtLink
+                  v-if="getAgentVersionPath(step)"
+                  :to="getAgentVersionPath(step)!"
+                  class="ml-1 text-xs text-primary hover:underline"
+                  @click.stop
+                >(Agent v{{ step.agentVersion }})</NuxtLink>
+                <span v-else-if="step.agentVersion" class="ml-1 text-xs text-surface-400">(Agent v{{ step.agentVersion }})</span>
+              </p>
             </div>
 
             <!-- Duration + status -->
@@ -100,7 +118,13 @@
           </div>
 
           <!-- Expanded Step Content -->
-          <div v-if="selectedStepId === step.id" class="border-t border-surface-200 bg-surface-900 text-surface-100">
+          <div v-if="selectedStepId === step.id" class="border-t border-surface-200 bg-surface-900">
+            <!-- Agent snapshot info bar -->
+            <div v-if="step.agentSnapshot" class="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 border-b border-surface-700 text-xs text-surface-400">
+              <span>Agent: <strong class="text-surface-200">{{ step.agentSnapshot.name }}</strong></span>
+              <span>Version: <strong class="text-surface-200">v{{ step.agentSnapshot.version || step.agentVersion || '?' }}</strong></span>
+              <span v-if="step.agentSnapshot.sourceType">Source: <strong class="text-surface-200">{{ step.agentSnapshot.sourceType }}</strong></span>
+            </div>
             <!-- Step detail tabs -->
             <div class="flex border-b border-surface-700">
               <button
@@ -111,8 +135,18 @@
                 @click="activeTab = tab.id"
               >
                 {{ tab.label }}
-                <span v-if="tab.id === 'logs' && getStepLogs(step).length > 0" class="ml-1 bg-surface-700 text-surface-300 px-1.5 py-0.5 rounded-full text-[10px]">{{ getStepLogs(step).length }}</span>
+                <span v-if="tab.id === 'logs' && getStepLogs(step).length > 0" class="ml-1 inline-flex items-center justify-center w-5 h-5 rounded-full bg-surface-700 text-surface-300 text-[10px] leading-none align-middle">{{ getStepLogs(step).length }}</span>
               </button>
+            </div>
+
+            <!-- Tab: Output -->
+            <div v-if="activeTab === 'output'" class="max-h-[500px] overflow-y-auto p-4">
+              <div v-if="!step.output" class="text-surface-500 text-xs">
+                {{ step.status === 'running' ? 'Step in progress…' : step.status === 'pending' ? 'Waiting…' : 'No output.' }}
+              </div>
+              <div v-else class="markdown-dark">
+                <MarkdownRenderer :content="step.output" />
+              </div>
             </div>
 
             <!-- Tab: Process Logs (tool calls, events) -->
@@ -124,7 +158,7 @@
                 <div
                   v-for="(log, li) in getStepLogs(step)"
                   :key="li"
-                  class="flex gap-2 px-4 py-1 hover:bg-surface-800 border-b border-surface-800"
+                  class="flex gap-2 px-4 py-1 hover:bg-surface-800 border-b border-surface-800 text-surface-100"
                 >
                   <span class="text-surface-500 flex-shrink-0 w-20">{{ formatLogTime(log.timestamp) }}</span>
                   <span v-if="log.type === 'tool_call_start'" class="text-blue-400">
@@ -156,16 +190,6 @@
               </div>
               <div v-else class="markdown-dark">
                 <MarkdownRenderer :content="getReasoningText(step)" />
-              </div>
-            </div>
-
-            <!-- Tab: Output -->
-            <div v-if="activeTab === 'output'" class="max-h-[500px] overflow-y-auto p-4">
-              <div v-if="!step.output" class="text-surface-500 text-xs">
-                {{ step.status === 'running' ? 'Step in progress…' : step.status === 'pending' ? 'Waiting…' : 'No output.' }}
-              </div>
-              <div v-else class="markdown-dark">
-                <MarkdownRenderer :content="step.output" />
               </div>
             </div>
 
@@ -211,22 +235,26 @@
 </template>
 
 <script setup lang="ts">
+import { useToast } from 'primevue/usetoast';
+import { useExecutionStream } from '~/composables/useExecutionStream';
+
 const { authHeaders } = useAuth();
 const headers = authHeaders();
 const route = useRoute();
 const ws = computed(() => (route.params.workspace as string) || 'default');
 const execId = computed(() => route.params.id as string);
+const toast = useToast();
 
 const selectedStepId = ref<string | null>(null);
-const activeTab = ref('logs');
+const activeTab = ref('output');
 const retrying = ref(false);
 const cancelling = ref(false);
 const retryResult = ref<any>(null);
 
 const stepTabs = [
+  { id: 'output', label: 'Output' },
   { id: 'logs', label: 'Process Logs' },
   { id: 'reasoning', label: 'Reasoning' },
-  { id: 'output', label: 'Output' },
   { id: 'prompt', label: 'Prompt' },
   { id: 'trace', label: 'Trace' },
 ];
@@ -241,6 +269,11 @@ const snapshotConfig = computed(() => {
   return snap?.workflow ?? null;
 });
 const workflowName = computed(() => snapshotConfig.value?.name || execData.value?.workflow?.name || null);
+const workflowVersionPath = computed(() => {
+  if (!execution.value?.workflowId) return null;
+  if (!execution.value?.workflowVersion) return `/${ws.value}/workflows/${execution.value.workflowId}`;
+  return `/${ws.value}/workflows/${execution.value.workflowId}/v/${execution.value.workflowVersion}`;
+});
 
 const breadcrumbs = computed(() => [
   { label: 'Home', route: `/${ws.value}` },
@@ -309,10 +342,18 @@ const snapshotSteps = computed(() => {
   return snap?.steps ?? [];
 });
 
-function getStepName(step: any, idx: number): string {
+function getStepName(step: any, idx: number | string): string {
   const snapStep = snapshotSteps.value.find((s: any) => s.id === step.workflowStepId);
   if (snapStep?.name) return snapStep.name;
-  return `Step ${step.stepOrder || idx + 1}`;
+  const numericIdx = typeof idx === 'string' ? Number(idx) : idx;
+  return `Step ${step.stepOrder || numericIdx + 1}`;
+}
+
+function getAgentVersionPath(step: any): string | null {
+  const agentId = step?.agentSnapshot?.id;
+  const version = step?.agentVersion || step?.agentSnapshot?.version;
+  if (!agentId || !version) return null;
+  return `/${ws.value}/agents/${agentId}/v/${version}`;
 }
 
 // ─── Step logs (from liveOutput + streamed events) ─────────────────────
@@ -357,7 +398,7 @@ function toggleStep(id: string) {
     selectedStepId.value = null;
   } else {
     selectedStepId.value = id;
-    activeTab.value = 'logs';
+    activeTab.value = 'output';
   }
 }
 
@@ -426,7 +467,7 @@ async function handleRetry() {
     const res = await $fetch<any>(`/api/executions/${execId.value}/retry`, { method: 'POST', headers });
     retryResult.value = res;
   } catch (e: any) {
-    useToast().add({ severity: 'error', summary: 'Error', detail: e?.data?.error || 'Retry failed', life: 5000 });
+    toast.add({ severity: 'error', summary: 'Error', detail: e?.data?.error || 'Retry failed', life: 5000 });
   } finally {
     retrying.value = false;
   }
@@ -438,7 +479,7 @@ async function handleCancel() {
     await $fetch<any>(`/api/executions/${execId.value}/cancel`, { method: 'POST', headers });
     refreshExec();
   } catch (e: any) {
-    useToast().add({ severity: 'error', summary: 'Error', detail: e?.data?.error || 'Cancel failed', life: 5000 });
+    toast.add({ severity: 'error', summary: 'Error', detail: e?.data?.error || 'Cancel failed', life: 5000 });
   } finally {
     cancelling.value = false;
   }

@@ -29,6 +29,16 @@ Each workflow has:
 - **Scope** — `user` (private) or `workspace` (shared, admin-only creation)
 - **Version** — auto-incremented on every edit
 
+## Version History
+
+Workflows keep immutable version history for the workflow definition, ordered steps, and triggers.
+
+- The latest editable page lives at `/{workspace}/workflows/:id`
+- Historical snapshots live at `/{workspace}/workflows/:id/v/:version`
+- Historical pages are read-only and are the target for execution detail links, so users can inspect the exact workflow version that produced an execution
+
+Workflow history captures the state before each edit so older versions remain navigable even after later changes.
+
 ## Steps
 
 Each step defines:

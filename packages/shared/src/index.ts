@@ -12,5 +12,5 @@ export {
 } from './utils/validation.js';
 export { rateLimiter } from './middleware/rate-limiter.js';
 export { agentEventBus } from './sse/event-bus.js';
-export { registerOpenAPI, agentApiSpec } from './openapi.js';
 export { createApp } from './app/factory.js';
+export { OpenAPIHono, createRoute, z as zOpenApi } from '@hono/zod-openapi';

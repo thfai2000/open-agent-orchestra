@@ -1,6 +1,6 @@
 <template>
   <div>
-    <Breadcrumb :model="[{ label: 'Home', route: `/${ws}` }, { label: 'Agents', route: `/${ws}/agents` }, { label: 'Create Agent' }]" class="mb-4">
+    <Breadcrumb :model="[{ label: 'Home', route: `/${ws}` }, { label: 'Agents', route: `/${ws}/agents` }, { label: 'Create Agent' }]" class="mb-4 -ml-1">
       <template #item="{ item }">
         <NuxtLink v-if="item.route" :to="item.route" class="text-primary hover:underline">{{ item.label }}</NuxtLink>
         <span v-else>{{ item.label }}</span>

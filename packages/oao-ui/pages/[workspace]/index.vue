@@ -1,6 +1,6 @@
 <template>
   <div>
-    <Breadcrumb :model="[{ label: 'Home' }]" class="mb-4">
+    <Breadcrumb :model="[{ label: 'Home' }]" class="mb-4 -ml-1">
       <template #item="{ item }"><span class="text-surface-500">{{ item.label }}</span></template>
     </Breadcrumb>
 

@@ -1,46 +1,30 @@
-import { Hono } from 'hono';
-import { z } from 'zod';
+import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { eq, and, or, desc, sql } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { agents, agentFiles } from '../database/schema.js';
-import { authMiddleware, encrypt, uuidSchema } from '@oao/shared';
+import { authMiddleware, encrypt } from '@oao/shared';
 import { emitEvent, EVENT_NAMES } from '../services/system-events.js';
+import {
+  captureAgentHistoricalVersion,
+  getAgentVersionView,
+  listAgentVersionViews,
+} from '../services/versioning.js';
 
-const agentsRouter = new Hono();
-agentsRouter.use('/*', authMiddleware);
+/* ────────────────── shared schemas ────────────────── */
 
-// GET / — list agents visible to user: user-scoped (own) + workspace-scoped
-agentsRouter.get('/', async (c) => {
-  const user = c.get('user');
-  if (!user.workspaceId) return c.json({ agents: [], total: 0 });
+const ErrorResponse = z.object({ error: z.string() });
 
-  const page = Math.max(1, Number(c.req.query('page') || 1));
-  const limit = Math.min(100, Math.max(1, Number(c.req.query('limit') || 50)));
-  const offset = (page - 1) * limit;
-
-  const whereClause = and(
-    eq(agents.workspaceId, user.workspaceId),
-    or(
-      eq(agents.scope, 'workspace'),
-      eq(agents.userId, user.userId),
-    ),
-  );
-
-  const [agentList, countResult] = await Promise.all([
-    db.query.agents.findMany({
-      where: whereClause,
-      columns: { githubTokenEncrypted: false },
-      orderBy: desc(agents.createdAt),
-      limit,
-      offset,
-    }),
-    db.select({ count: sql<number>`count(*)::int` }).from(agents).where(whereClause),
-  ]);
-
-  return c.json({ agents: agentList, total: countResult[0]?.count ?? 0, page, limit });
+const IdParam = z.object({
+  id: z.string().uuid().openapi({ description: 'Agent UUID' }),
 });
 
-// POST / — create agent
+const PaginationQuery = z.object({
+  page: z.string().optional().openapi({ description: 'Page number (default: 1)' }),
+  limit: z.string().optional().openapi({ description: 'Items per page (default: 50, max: 100)' }),
+});
+
+/* ────────────────── agent-specific schemas ────────────────── */
+
 const BUILTIN_TOOL_NAMES = [
   'schedule_next_workflow_execution', 'manage_webhook_trigger', 'record_decision',
   'memory_store', 'memory_retrieve',
@@ -53,7 +37,7 @@ const agentFileSchema = z.object({
   content: z.string(),
 });
 
-const createAgentSchema = z.object({
+const CreateAgentBody = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(1000).optional(),
   sourceType: z.enum(['github_repo', 'database']).default('github_repo'),
@@ -82,13 +66,190 @@ const createAgentSchema = z.object({
   { message: 'Duplicate agent file paths are not allowed' },
 );
 
-agentsRouter.post('/', async (c) => {
-  const user = c.get('user');
+const UpdateAgentBody = z.object({
+  name: z.string().min(1).max(100).optional(),
+  description: z.string().max(1000).optional(),
+  sourceType: z.enum(['github_repo', 'database']).optional(),
+  gitRepoUrl: z.string().url().max(500).optional(),
+  gitBranch: z.string().max(100).optional(),
+  agentFilePath: z.string().min(1).max(300).optional(),
+  skillsPaths: z.array(z.string().max(300)).max(20).optional(),
+  skillsDirectory: z.string().max(300).nullable().optional(),
+  githubToken: z.string().max(500).optional(),
+  githubTokenCredentialId: z.string().uuid().nullable().optional(),
+  copilotTokenCredentialId: z.string().uuid().nullable().optional(),
+  status: z.enum(['active', 'paused']).optional(),
+  builtinToolsEnabled: z.array(z.enum(BUILTIN_TOOL_NAMES)).optional(),
+  mcpJsonTemplate: z.string().max(50000).nullable().optional(),
+});
+
+/* ────────────────── route definitions (single source of truth) ────────────────── */
+
+const listAgentsRoute = createRoute({
+  method: 'get',
+  path: '/',
+  tags: ['Agents'],
+  summary: 'List agents',
+  description: 'Agents visible to the current user: own user-scoped + workspace-scoped.',
+  request: { query: PaginationQuery },
+  responses: {
+    200: {
+      description: 'Paginated agent list',
+      content: { 'application/json': { schema: z.object({
+        agents: z.array(z.any()),
+        total: z.number(),
+        page: z.number(),
+        limit: z.number(),
+      }) } },
+    },
+  },
+});
+
+const createAgentRoute = createRoute({
+  method: 'post',
+  path: '/',
+  tags: ['Agents'],
+  summary: 'Create agent',
+  request: { body: { content: { 'application/json': { schema: CreateAgentBody } } } },
+  responses: {
+    201: { description: 'Agent created', content: { 'application/json': { schema: z.object({ agent: z.any() }) } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
+
+const getAgentRoute = createRoute({
+  method: 'get',
+  path: '/{id}',
+  tags: ['Agents'],
+  summary: 'Get agent detail',
+  request: { params: IdParam },
+  responses: {
+    200: { description: 'Agent detail', content: { 'application/json': { schema: z.object({ agent: z.any() }) } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
+
+const updateAgentRoute = createRoute({
+  method: 'put',
+  path: '/{id}',
+  tags: ['Agents'],
+  summary: 'Update agent',
+  description: 'Auto-increments version and creates a snapshot for audit trail.',
+  request: {
+    params: IdParam,
+    body: { content: { 'application/json': { schema: UpdateAgentBody } } },
+  },
+  responses: {
+    200: { description: 'Agent updated', content: { 'application/json': { schema: z.object({ agent: z.any() }) } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
+
+const deleteAgentRoute = createRoute({
+  method: 'delete',
+  path: '/{id}',
+  tags: ['Agents'],
+  summary: 'Delete agent',
+  request: { params: IdParam },
+  responses: {
+    200: { description: 'Deleted', content: { 'application/json': { schema: z.object({ success: z.boolean() }) } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
+
+const listVersionsRoute = createRoute({
+  method: 'get',
+  path: '/{id}/versions',
+  tags: ['Agent Versions'],
+  summary: 'List agent version history',
+  request: { params: IdParam, query: PaginationQuery },
+  responses: {
+    200: {
+      description: 'Paginated version list',
+      content: { 'application/json': { schema: z.object({
+        versions: z.array(z.any()),
+        total: z.number(),
+        page: z.number(),
+        limit: z.number(),
+      }) } },
+    },
+    404: { description: 'Agent not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
+
+const getVersionRoute = createRoute({
+  method: 'get',
+  path: '/{id}/versions/{version}',
+  tags: ['Agent Versions'],
+  summary: 'Get agent version snapshot',
+  request: {
+    params: z.object({
+      id: z.string().uuid().openapi({ description: 'Agent UUID' }),
+      version: z.string().openapi({ description: 'Version number' }),
+    }),
+  },
+  responses: {
+    200: { description: 'Version snapshot', content: { 'application/json': { schema: z.object({ version: z.any() }) } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
+
+/* ────────────────── router + handlers ────────────────── */
+
+const agentsRouter = new OpenAPIHono({
+  defaultHook: (result, c) => {
+    if (!result.success) {
+      return c.json({ error: 'Validation failed', details: result.error.issues }, 400);
+    }
+  },
+});
+agentsRouter.use('/*', authMiddleware);
+
+// GET / — list agents visible to user: user-scoped (own) + workspace-scoped
+agentsRouter.openapi(listAgentsRoute, async (c) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const user = (c as any).get('user');
+  if (!user.workspaceId) return c.json({ agents: [], total: 0, page: 1, limit: 50 }, 200);
+
+  const { page: pageStr, limit: limitStr } = c.req.valid('query');
+  const page = Math.max(1, Number(pageStr || 1));
+  const limit = Math.min(100, Math.max(1, Number(limitStr || 50)));
+  const offset = (page - 1) * limit;
+
+  const whereClause = and(
+    eq(agents.workspaceId, user.workspaceId),
+    or(
+      eq(agents.scope, 'workspace'),
+      eq(agents.userId, user.userId),
+    ),
+  );
+
+  const [agentList, countResult] = await Promise.all([
+    db.query.agents.findMany({
+      where: whereClause,
+      columns: { githubTokenEncrypted: false },
+      orderBy: desc(agents.createdAt),
+      limit,
+      offset,
+    }),
+    db.select({ count: sql<number>`count(*)::int` }).from(agents).where(whereClause),
+  ]);
+
+  return c.json({ agents: agentList, total: countResult[0]?.count ?? 0, page, limit });
+});
+
+// POST / — create agent
+agentsRouter.openapi(createAgentRoute, async (c) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const user = (c as any).get('user');
   if (!user.workspaceId) return c.json({ error: 'No workspace context' }, 403);
   const workspaceId = user.workspaceId;
   if (user.role === 'view_user') return c.json({ error: 'View-only users cannot create agents' }, 403);
 
-  const body = createAgentSchema.parse(await c.req.json());
+  const body = c.req.valid('json');
 
   // Only workspace_admin/super_admin can create workspace-scoped agents
   if (body.scope === 'workspace' && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
@@ -152,9 +313,10 @@ agentsRouter.post('/', async (c) => {
 });
 
 // GET /:id — agent detail
-agentsRouter.get('/:id', async (c) => {
-  const user = c.get('user');
-  const id = uuidSchema.parse(c.req.param('id'));
+agentsRouter.openapi(getAgentRoute, async (c) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const user = (c as any).get('user');
+  const { id } = c.req.valid('param');
 
   const agent = await db.query.agents.findFirst({
     where: eq(agents.id, id),
@@ -169,31 +331,15 @@ agentsRouter.get('/:id', async (c) => {
       githubTokenEncrypted: undefined,
       hasInlineGitToken: Boolean(agent.githubTokenEncrypted),
     },
-  });
+  }, 200);
 });
 
 // PUT /:id — update agent
-const updateAgentSchema = z.object({
-  name: z.string().min(1).max(100).optional(),
-  description: z.string().max(1000).optional(),
-  sourceType: z.enum(['github_repo', 'database']).optional(),
-  gitRepoUrl: z.string().url().max(500).optional(),
-  gitBranch: z.string().max(100).optional(),
-  agentFilePath: z.string().min(1).max(300).optional(),
-  skillsPaths: z.array(z.string().max(300)).max(20).optional(),
-  skillsDirectory: z.string().max(300).nullable().optional(),
-  githubToken: z.string().max(500).optional(),
-  githubTokenCredentialId: z.string().uuid().nullable().optional(),
-  copilotTokenCredentialId: z.string().uuid().nullable().optional(),
-  status: z.enum(['active', 'paused']).optional(),
-  builtinToolsEnabled: z.array(z.enum(BUILTIN_TOOL_NAMES)).optional(),
-  mcpJsonTemplate: z.string().max(50000).nullable().optional(),
-});
-
-agentsRouter.put('/:id', async (c) => {
-  const user = c.get('user');
-  const id = uuidSchema.parse(c.req.param('id'));
-  const body = updateAgentSchema.parse(await c.req.json());
+agentsRouter.openapi(updateAgentRoute, async (c) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const user = (c as any).get('user');
+  const { id } = c.req.valid('param');
+  const body = c.req.valid('json');
 
   const existing = await db.query.agents.findFirst({ where: eq(agents.id, id) });
   if (!existing) return c.json({ error: 'Agent not found' }, 404);
@@ -235,6 +381,11 @@ agentsRouter.put('/:id', async (c) => {
   if (body.builtinToolsEnabled) updateData.builtinToolsEnabled = body.builtinToolsEnabled;
   if (body.mcpJsonTemplate !== undefined) updateData.mcpJsonTemplate = body.mcpJsonTemplate;
 
+  // Auto-increment version on any update
+  updateData.version = sql`${agents.version} + 1`;
+
+  await captureAgentHistoricalVersion(existing, user.userId);
+
   const [updated] = await db.update(agents).set(updateData).where(eq(agents.id, id)).returning();
 
   emitEvent({
@@ -251,13 +402,14 @@ agentsRouter.put('/:id', async (c) => {
       githubTokenEncrypted: undefined,
       hasInlineGitToken: Boolean(updated.githubTokenEncrypted),
     },
-  });
+  }, 200);
 });
 
 // DELETE /:id — delete agent
-agentsRouter.delete('/:id', async (c) => {
-  const user = c.get('user');
-  const id = uuidSchema.parse(c.req.param('id'));
+agentsRouter.openapi(deleteAgentRoute, async (c) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const user = (c as any).get('user');
+  const { id } = c.req.valid('param');
 
   const existing = await db.query.agents.findFirst({ where: eq(agents.id, id) });
   if (!existing) return c.json({ error: 'Agent not found' }, 404);
@@ -283,7 +435,53 @@ agentsRouter.delete('/:id', async (c) => {
     actorId: user.userId,
   });
 
-  return c.json({ success: true });
+  return c.json({ success: true }, 200);
+});
+
+// GET /:id/versions — list agent version history
+agentsRouter.openapi(listVersionsRoute, async (c) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const user = (c as any).get('user');
+  const { id } = c.req.valid('param');
+  const { page: pageStr, limit: limitStr } = c.req.valid('query');
+
+  const agent = await db.query.agents.findFirst({ where: eq(agents.id, id) });
+  if (!agent) return c.json({ error: 'Agent not found' }, 404);
+  if (agent.workspaceId !== user.workspaceId) return c.json({ error: 'Forbidden' }, 404);
+
+  const page = Math.max(1, Number(pageStr || 1));
+  const limit = Math.min(100, Math.max(1, Number(limitStr || 50)));
+  const versions = await listAgentVersionViews(agent);
+  const offset = (page - 1) * limit;
+
+  return c.json({
+    versions: versions.slice(offset, offset + limit),
+    total: versions.length,
+    page,
+    limit,
+  }, 200);
+});
+
+// GET /:id/versions/:version — get specific agent version snapshot
+agentsRouter.openapi(getVersionRoute, async (c) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const user = (c as any).get('user');
+  const { id, version: versionStr } = c.req.valid('param');
+  const versionNum = Number(versionStr);
+
+  if (!Number.isInteger(versionNum) || versionNum < 1) {
+    return c.json({ error: 'Invalid version number' }, 404);
+  }
+
+  const agent = await db.query.agents.findFirst({ where: eq(agents.id, id) });
+  if (!agent) return c.json({ error: 'Agent not found' }, 404);
+  if (agent.workspaceId !== user.workspaceId) return c.json({ error: 'Forbidden' }, 404);
+
+  const versionRecord = await getAgentVersionView(agent, versionNum);
+
+  if (!versionRecord) return c.json({ error: 'Version not found' }, 404);
+
+  return c.json({ version: versionRecord }, 200);
 });
 
 export default agentsRouter;

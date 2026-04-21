@@ -111,6 +111,7 @@ export const agents = pgTable('agents', {
     'edit_workflow', 'read_variables', 'edit_variables',
     'simple_http_request',
   ]), // array of enabled built-in tool names
+  version: integer('version').notNull().default(1),
   status: agentStatusEnum('status').notNull().default('active'),
   lastSessionAt: timestamp('last_session_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -136,6 +137,21 @@ export const agentFiles = pgTable(
   }),
 );
 
+// ─── Agent Versions (audit trail of agent config snapshots) ──────────
+
+export const agentVersions = pgTable('agent_versions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  agentId: uuid('agent_id')
+    .notNull()
+    .references(() => agents.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  snapshot: jsonb('snapshot').notNull(), // full agent config + files at this version
+  changedBy: uuid('changed_by'), // userId who made the change
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  agentVersionIdx: uniqueIndex('agent_versions_agent_version_idx').on(table.agentId, table.version),
+}));
+
 // ─── Workflows ───────────────────────────────────────────────────────
 
 export const workflows = pgTable('workflows', {
@@ -159,6 +175,21 @@ export const workflows = pgTable('workflows', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ─── Workflow Versions (audit trail of workflow config snapshots) ─────
+
+export const workflowVersions = pgTable('workflow_versions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  workflowId: uuid('workflow_id')
+    .notNull()
+    .references(() => workflows.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  snapshot: jsonb('snapshot').notNull(), // full workflow config + steps at this version
+  changedBy: uuid('changed_by'), // userId who made the change
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  workflowVersionIdx: uniqueIndex('workflow_versions_wf_version_idx').on(table.workflowId, table.version),
+}));
 
 // ─── Workflow Steps ──────────────────────────────────────────────────
 
@@ -234,6 +265,8 @@ export const stepExecutions = pgTable('step_executions', {
     .notNull()
     .references(() => workflowSteps.id),
   stepOrder: integer('step_order').notNull(),
+  agentVersion: integer('agent_version'), // snapshot of agent.version at execution time
+  agentSnapshot: jsonb('agent_snapshot'), // full snapshot of agent config used for this step
   resolvedPrompt: text('resolved_prompt'),
   output: text('output'),
   reasoningTrace: jsonb('reasoning_trace'),

@@ -3,7 +3,6 @@ import {
   createApp,
   createLogger,
   agentEventBus,
-  agentApiSpec,
   registerPatValidator,
 } from '@oao/shared';
 import agentsRouter from './routes/agents.js';
@@ -34,7 +33,6 @@ const app = createApp({
   serviceName: 'oao-api',
   port,
   eventBus: agentEventBus,
-  apiSpec: agentApiSpec,
   extraRateLimits: [
     { path: '/api/auth/*', windowMs: 60_000, max: 10 },
   ],

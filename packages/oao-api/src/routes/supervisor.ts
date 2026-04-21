@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { ne } from 'drizzle-orm';
+import { ne, and, eq } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { agents } from '../database/schema.js';
 import { authMiddleware, createLogger, agentEventBus } from '@oao/shared';
@@ -16,10 +16,15 @@ supervisorRouter.post('/emergency-stop', async (c) => {
   }
   logger.warn({ userId: user.userId }, 'EMERGENCY STOP triggered');
 
+  // workspace_admin can only manage agents in their workspace; super_admin manages all
+  const scopeFilter = user.role === 'super_admin'
+    ? ne(agents.status, 'paused')
+    : and(eq(agents.workspaceId, user.workspaceId!), ne(agents.status, 'paused'));
+
   const result = await db
     .update(agents)
     .set({ status: 'paused', updatedAt: new Date() })
-    .where(ne(agents.status, 'paused'))
+    .where(scopeFilter)
     .returning({ id: agents.id, name: agents.name });
 
   agentEventBus.broadcast('supervisor:emergency-stop', {
@@ -43,10 +48,14 @@ supervisorRouter.post('/resume-all', async (c) => {
   }
   logger.info({ userId: user.userId }, 'Resume all agents triggered');
 
+  const scopeFilter = user.role === 'super_admin'
+    ? ne(agents.status, 'active')
+    : and(eq(agents.workspaceId, user.workspaceId!), ne(agents.status, 'active'));
+
   const result = await db
     .update(agents)
     .set({ status: 'active', updatedAt: new Date() })
-    .where(ne(agents.status, 'active'))
+    .where(scopeFilter)
     .returning({ id: agents.id, name: agents.name });
 
   agentEventBus.broadcast('supervisor:resume-all', {
@@ -70,6 +79,9 @@ supervisorRouter.get('/status', async (c) => {
   }
   const allAgents = await db.query.agents.findMany({
     columns: { id: true, name: true, status: true, updatedAt: true },
+    ...(user.role !== 'super_admin' && user.workspaceId
+      ? { where: eq(agents.workspaceId, user.workspaceId) }
+      : {}),
   });
 
   const counts = { active: 0, paused: 0, error: 0 };

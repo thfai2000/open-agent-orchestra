@@ -114,6 +114,11 @@ build-and-deploy-doc.sh  # Build & deploy VitePress docs to GitHub Pages
 - **Date display** — Use `toLocaleDateString()` for dates, `toLocaleString()` for timestamps.
 - **Empty states** — Centered muted text with guidance (e.g. "No agents yet. Click Create Agent to get started.").
 - **Auth headers** — Call `authHeaders()` once at setup: `const headers = authHeaders()`, reuse the variable.
+- **Breadcrumb alignment** — Add `class="mb-4 -ml-1"` to every `<Breadcrumb>` component to align the first breadcrumb letter with page titles.
+- **Number badge (circle-ball)** — Tab count badges use a consistent circle-ball style: `class="ml-1 inline-flex items-center justify-center w-5 h-5 rounded-full bg-surface-700 text-surface-300 text-[10px] leading-none align-middle"`. Never use pill-shaped or rectangular badges for counts.
+- **Compact metadata** — Avoid using Card components for simple metadata display. Use inline `flex-wrap` layout with `text-surface-400` labels instead (e.g. "Started: ...", "Duration: ...").
+- **Status indicator balls** — Use colored circles to indicate entity status: blinking green (`animate-pulse bg-green-500`) for running, blinking yellow for pending, solid red for failed, solid green for completed, solid gray for cancelled.
+- **Version control** — Both agents and workflows have auto-incrementing `version` columns. Show version as `Tag` badge (e.g. "v3"). Executions snapshot both workflow (on trigger) and agent (on step execution) for immutable audit trail.
 
 ## Copilot SDK (`@github/copilot-sdk`)
 - **Package**: `npm install @github/copilot-sdk`
@@ -132,12 +137,14 @@ build-and-deploy-doc.sh  # Build & deploy VitePress docs to GitHub Pages
 |-------|---------|
 | `users` | Independent auth (email/password/bcrypt) |
 | `workspaces` | Multi-tenant workspace isolation |
-| `agents` | Git repo config, status, MCP JSON template |
+| `agents` | Git repo config, status, version, MCP JSON template |
 | `agent_files` | DB-stored agent instruction/skill files |
-| `workflows` | Template definitions (name, steps, agent, labels) |
+| `agent_versions` | Agent version history snapshots (audit trail) |
+| `workflows` | Template definitions (name, steps, agent, labels, version) |
 | `workflow_steps` | Ordered prompt templates per workflow |
-| `workflow_executions` | Execution history with status/output |
-| `step_executions` | Per-step output, reasoning trace (JSONB) |
+| `workflow_versions` | Workflow version history snapshots (audit trail) |
+| `workflow_executions` | Execution history with status/output, workflow snapshot |
+| `step_executions` | Per-step output, reasoning trace, agent snapshot (JSONB) |
 | `triggers` | time_schedule/webhook/event/manual |
 | `agent_variables` | 3-tier scoped variables (agent level, AES-256-GCM for credentials) |
 | `user_variables` | 3-tier scoped variables (user level) |

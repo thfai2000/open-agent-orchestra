@@ -608,6 +608,27 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
       return;
     }
 
+    // Snapshot agent config for this step execution (immutable audit trail)
+    const agentSnapshot = {
+      id: stepAgent.id,
+      name: stepAgent.name,
+      description: stepAgent.description,
+      sourceType: stepAgent.sourceType,
+      gitRepoUrl: stepAgent.gitRepoUrl,
+      gitBranch: stepAgent.gitBranch,
+      agentFilePath: stepAgent.agentFilePath,
+      skillsPaths: stepAgent.skillsPaths,
+      skillsDirectory: stepAgent.skillsDirectory,
+      builtinToolsEnabled: stepAgent.builtinToolsEnabled,
+      mcpJsonTemplate: stepAgent.mcpJsonTemplate,
+      status: stepAgent.status,
+      version: stepAgent.version,
+    };
+    await db
+      .update(stepExecutions)
+      .set({ agentVersion: stepAgent.version, agentSnapshot })
+      .where(eq(stepExecutions.id, stepExec.id));
+
     try {
       const stepWorkerRuntime = resolveStepWorkerRuntime(execution, workflow, step);
 

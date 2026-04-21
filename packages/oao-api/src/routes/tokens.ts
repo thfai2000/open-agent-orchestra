@@ -4,7 +4,9 @@ import { randomBytes, createHash } from 'crypto';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { personalAccessTokens, users, workspaces } from '../database/schema.js';
-import { authMiddleware } from '@oao/shared';
+import { authMiddleware, createLogger } from '@oao/shared';
+
+const logger = createLogger('tokens');
 
 const tokens = new Hono();
 
@@ -199,7 +201,7 @@ export async function validatePat(rawToken: string) {
     .set({ lastUsedAt: new Date() })
     .where(eq(personalAccessTokens.id, pat.id))
     .then(() => {})
-    .catch(() => {});
+    .catch((err) => logger.warn({ error: err, patId: pat.id }, 'Failed to update PAT lastUsedAt'));
 
   // Fetch user & workspace info
   const user = await db.query.users.findFirst({

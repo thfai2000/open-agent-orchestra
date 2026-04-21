@@ -1,8 +1,8 @@
-import { Hono } from 'hono';
+import { OpenAPIHono } from '@hono/zod-openapi';
 import { cors } from 'hono/cors';
 import { bodyLimit } from 'hono/body-limit';
+import { swaggerUI } from '@hono/swagger-ui';
 import { rateLimiter } from '../middleware/rate-limiter.js';
-import { registerOpenAPI } from '../openapi.js';
 import { createLogger } from '../utils/logger.js';
 import client from 'prom-client';
 
@@ -34,19 +34,20 @@ interface AppConfig {
   serviceName: string;
   port: number;
   eventBus: EventBus;
-  apiSpec: object;
-  routes: Array<[string, Hono]>;
+  apiSpec?: object; // deprecated — auto-generated from routes now
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  routes: Array<[string, any]>;
   extraRateLimits?: Array<{ path: string; windowMs: number; max: number }>;
 }
 
 /**
- * Create a configured Hono app with shared middleware, health check,
- * SSE event stream, OpenAPI docs, and error handling.
+ * Create a configured OpenAPIHono app with shared middleware, health check,
+ * SSE event stream, auto-generated OpenAPI docs, and error handling.
  */
-export function createApp(config: AppConfig): Hono {
-  const { serviceName, eventBus, apiSpec, routes, extraRateLimits } = config;
+export function createApp(config: AppConfig): OpenAPIHono {
+  const { serviceName, eventBus, routes, extraRateLimits } = config;
   const logger = createLogger(serviceName);
-  const app = new Hono();
+  const app = new OpenAPIHono();
 
   // Common middleware — restrict CORS to known origins
   const allowedOrigins = process.env.CORS_ORIGINS
@@ -91,8 +92,42 @@ export function createApp(config: AppConfig): Hono {
   app.get('/api/events', (c) => eventBus.connect(c));
   app.get('/api/events/status', (c) => c.json({ connections: eventBus.connectionCount }));
 
-  // OpenAPI documentation
-  registerOpenAPI(app, apiSpec);
+  // OpenAPI documentation — auto-generated from @hono/zod-openapi route definitions
+  app.doc('/api/openapi.json', {
+    openapi: '3.0.3',
+    info: {
+      title: 'OAO — Open Agent Orchestra API',
+      version: '6.0.0',
+      description:
+        'Autonomous AI workflow engine powered by the GitHub Copilot SDK.\n\n' +
+        '## Authentication\n\n' +
+        'All endpoints (except auth) require a Bearer token:\n' +
+        '`Authorization: Bearer <jwt_or_pat>`\n\n' +
+        '## Pagination\n\n' +
+        'List endpoints accept `?page=1&limit=50` (max 200).\n\n' +
+        '## Variable Scoping (3-Tier)\n\n' +
+        'Variables resolved with priority: **Agent > User > Workspace**.',
+    },
+    servers: [
+      { url: 'http://localhost:4002', description: 'Local development' },
+      { url: 'http://oao.local', description: 'Local Kubernetes (via Ingress)' },
+    ],
+    tags: [
+      { name: 'Auth', description: 'User registration and login' },
+      { name: 'Agents', description: 'AI agent configuration and lifecycle' },
+      { name: 'Agent Files', description: 'Agent instruction/skill file management' },
+      { name: 'Agent Versions', description: 'Agent version history and snapshots' },
+      { name: 'Workflows', description: 'Multi-step workflow templates' },
+      { name: 'Workflow Versions', description: 'Workflow version history and snapshots' },
+      { name: 'Executions', description: 'Workflow execution history and control' },
+      { name: 'Variables', description: '3-tier scoped variables (agent / user / workspace)' },
+      { name: 'Triggers', description: 'Workflow trigger configuration' },
+      { name: 'Tokens', description: 'Personal Access Token management' },
+      { name: 'Admin', description: 'Workspace administration' },
+      { name: 'Supervisor', description: 'Agent supervisor controls' },
+    ],
+  });
+  app.get('/api/docs', swaggerUI({ url: '/api/openapi.json' }));
 
   // Error handler
   app.onError((err, c) => {

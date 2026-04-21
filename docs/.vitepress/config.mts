@@ -53,12 +53,20 @@ export default withMermaid(
             text: 'Getting Started',
             items: [
               { text: 'What is OAO?', link: '/guide/what-is-oao' },
+              { text: 'Why OAO?', link: '/guide/why-oao' },
+              { text: 'Use Cases', link: '/guide/use-cases' },
+              { text: 'Platform Comparison', link: '/guide/comparison' },
+            ],
+          },
+          {
+            text: 'Deployment',
+            items: [
               { text: 'Host on Docker', link: '/guide/docker' },
               { text: 'Host on Kubernetes', link: '/guide/kubernetes' },
             ],
           },
           {
-            text: 'Start Development',
+            text: 'Development',
             items: [
               { text: 'Build & Deploy', link: '/guide/build-and-deploy' },
               { text: 'File Structure', link: '/guide/file-structure' },

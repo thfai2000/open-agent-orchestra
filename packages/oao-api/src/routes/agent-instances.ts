@@ -2,11 +2,20 @@ import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { agentInstances } from '../database/schema.js';
-import { authMiddleware } from '@oao/shared';
+import { authMiddleware, uuidSchema } from '@oao/shared';
 import { listInstances, cleanupOldInstances } from '../services/agent-instance-registry.js';
 
 const agentInstancesRouter = new Hono();
 agentInstancesRouter.use('/*', authMiddleware);
+
+// Agent instances are infrastructure-level — restrict to admins
+agentInstancesRouter.use('/*', async (c, next) => {
+  const user = c.get('user');
+  if (user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Admin access required' }, 403);
+  }
+  await next();
+});
 
 // GET / — list all agent instances, optionally filtered
 agentInstancesRouter.get('/', async (c) => {
@@ -23,7 +32,7 @@ agentInstancesRouter.get('/', async (c) => {
 
 // GET /:id — get a specific instance
 agentInstancesRouter.get('/:id', async (c) => {
-  const id = c.req.param('id');
+  const id = uuidSchema.parse(c.req.param('id'));
   const instance = await db.query.agentInstances.findFirst({
     where: eq(agentInstances.id, id),
   });
@@ -33,7 +42,7 @@ agentInstancesRouter.get('/:id', async (c) => {
 
 // DELETE /:id — remove an instance record
 agentInstancesRouter.delete('/:id', async (c) => {
-  const id = c.req.param('id');
+  const id = uuidSchema.parse(c.req.param('id'));
   const instance = await db.query.agentInstances.findFirst({
     where: eq(agentInstances.id, id),
   });

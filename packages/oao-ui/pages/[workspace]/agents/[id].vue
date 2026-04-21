@@ -1,6 +1,6 @@
 <template>
   <div>
-    <Breadcrumb :model="[{ label: 'Home', route: `/${ws}` }, { label: 'Agents', route: `/${ws}/agents` }, { label: agent?.name || 'Loading...' }]" class="mb-4">
+    <Breadcrumb :model="[{ label: 'Home', route: `/${ws}` }, { label: 'Agents', route: `/${ws}/agents` }, { label: agent?.name || 'Loading...' }]" class="mb-4 -ml-1">
       <template #item="{ item }">
         <NuxtLink v-if="item.route" :to="item.route" class="text-primary hover:underline">{{ item.label }}</NuxtLink>
         <span v-else>{{ item.label }}</span>
@@ -16,6 +16,15 @@
             <Tag :value="agent.status" :severity="agent.status === 'active' ? 'success' : agent.status === 'paused' ? 'warn' : 'danger'" />
             <Tag :value="agent.scope === 'workspace' ? 'Workspace' : 'Personal'" severity="info" />
             <Tag :value="agent.sourceType === 'database' ? 'Database' : 'Git'" severity="secondary" />
+            <Tag :value="'v' + (agent.version || 1)" severity="secondary" />
+          </div>
+          <div class="flex items-center gap-2 mt-3">
+            <span class="text-xs font-medium text-surface-500 uppercase tracking-wide">History</span>
+            <NuxtLink v-if="olderAgentVersion" :to="agentVersionPath(olderAgentVersion.version)">
+              <Button icon="pi pi-chevron-left" severity="secondary" outlined size="small" aria-label="Previous version" />
+            </NuxtLink>
+            <Button v-else icon="pi pi-chevron-left" severity="secondary" outlined size="small" disabled aria-label="Previous version" />
+            <Button icon="pi pi-chevron-right" severity="secondary" outlined size="small" disabled aria-label="Next version" />
           </div>
           <p v-if="agent.description" class="text-surface-500 mt-2">{{ agent.description }}</p>
         </div>
@@ -225,6 +234,19 @@ const savingEdit = ref(false);
 // Load agent
 const { data: agentData, refresh: refreshAgent } = await useFetch(computed(() => `/api/agents/${agentId.value}`), { headers });
 const agent = computed(() => (agentData.value as any)?.agent ?? null);
+const { data: agentVersionsData } = await useFetch(computed(() => `/api/agents/${agentId.value}/versions?limit=100`), { headers });
+const agentVersions = computed(() => (agentVersionsData.value as any)?.versions ?? []);
+const olderAgentVersion = computed(() => {
+  const currentVersion = agent.value?.version;
+  if (!currentVersion) return null;
+  const currentIndex = agentVersions.value.findIndex((entry: any) => entry.version === currentVersion);
+  if (currentIndex === -1) return null;
+  return agentVersions.value[currentIndex + 1] ?? null;
+});
+
+function agentVersionPath(version: number | string) {
+  return `/${ws.value}/agents/${agentId.value}/v/${version}`;
+}
 
 // Load files
 const { data: filesData, refresh: refreshFiles } = await useFetch(computed(() => `/api/agent-files/${agentId.value}`), { headers });

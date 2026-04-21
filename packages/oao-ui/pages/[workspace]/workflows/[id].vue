@@ -1,6 +1,6 @@
 <template>
   <div>
-    <Breadcrumb :model="[{ label: 'Home', route: `/${ws}` }, { label: 'Workflows', route: `/${ws}/workflows` }, { label: workflow?.name || 'Loading...' }]" class="mb-4">
+    <Breadcrumb :model="[{ label: 'Home', route: `/${ws}` }, { label: 'Workflows', route: `/${ws}/workflows` }, { label: workflow?.name || 'Loading...' }]" class="mb-4 -ml-1">
       <template #item="{ item }">
         <NuxtLink v-if="item.route" :to="item.route" class="text-primary hover:underline">{{ item.label }}</NuxtLink>
         <span v-else>{{ item.label }}</span>
@@ -16,6 +16,14 @@
             <Tag :value="workflow.isActive ? 'Active' : 'Inactive'" :severity="workflow.isActive ? 'success' : 'secondary'" />
             <Tag :value="workflow.scope === 'workspace' ? 'Workspace' : 'Personal'" severity="info" />
             <Tag :value="'v' + (workflow.version || 1)" severity="secondary" />
+          </div>
+          <div class="flex items-center gap-2 mt-3">
+            <span class="text-xs font-medium text-surface-500 uppercase tracking-wide">History</span>
+            <NuxtLink v-if="olderWorkflowVersion" :to="workflowVersionPath(olderWorkflowVersion.version)">
+              <Button icon="pi pi-chevron-left" severity="secondary" outlined size="small" aria-label="Previous version" />
+            </NuxtLink>
+            <Button v-else icon="pi pi-chevron-left" severity="secondary" outlined size="small" disabled aria-label="Previous version" />
+            <Button icon="pi pi-chevron-right" severity="secondary" outlined size="small" disabled aria-label="Next version" />
           </div>
           <p v-if="workflow.description" class="text-surface-500 mt-2">{{ workflow.description }}</p>
           <div class="flex flex-wrap items-center gap-x-3 mt-2 text-xs text-surface-400">
@@ -331,6 +339,19 @@ const reasoningOptions = [
 // Load data
 const { data: wfData, refresh: refreshWf } = await useFetch(computed(() => `/api/workflows/${wfId.value}`), { headers });
 const workflow = computed(() => (wfData.value as any)?.workflow ?? null);
+const { data: workflowVersionsData } = await useFetch(computed(() => `/api/workflows/${wfId.value}/versions?limit=100`), { headers });
+const workflowVersions = computed(() => (workflowVersionsData.value as any)?.versions ?? []);
+const olderWorkflowVersion = computed(() => {
+  const currentVersion = workflow.value?.version;
+  if (!currentVersion) return null;
+  const currentIndex = workflowVersions.value.findIndex((entry: any) => entry.version === currentVersion);
+  if (currentIndex === -1) return null;
+  return workflowVersions.value[currentIndex + 1] ?? null;
+});
+
+function workflowVersionPath(version: number | string) {
+  return `/${ws.value}/workflows/${wfId.value}/v/${version}`;
+}
 const steps = computed(() => (wfData.value as any)?.steps ?? []);
 
 const { data: triggersData, refresh: refreshTriggers } = await useFetch(computed(() => `/api/triggers?workflowId=${wfId.value}`), { headers });

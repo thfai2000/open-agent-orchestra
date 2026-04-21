@@ -27,7 +27,9 @@ agentFilesRouter.get('/:agentId', async (c) => {
 
 // POST /:agentId — create a file
 const createFileSchema = z.object({
-  filePath: z.string().min(1).max(500),
+  filePath: z.string().min(1).max(500)
+    .refine((p) => !p.includes('..'), 'Path traversal not allowed')
+    .refine((p) => !p.startsWith('/'), 'Absolute paths not allowed'),
   content: z.string(),
 });
 
@@ -63,7 +65,10 @@ agentFilesRouter.post('/:agentId', async (c) => {
 
 // PUT /:agentId/:fileId — update a file
 const updateFileSchema = z.object({
-  filePath: z.string().min(1).max(500).optional(),
+  filePath: z.string().min(1).max(500)
+    .refine((p) => !p.includes('..'), 'Path traversal not allowed')
+    .refine((p) => !p.startsWith('/'), 'Absolute paths not allowed')
+    .optional(),
   content: z.string().optional(),
 });
 

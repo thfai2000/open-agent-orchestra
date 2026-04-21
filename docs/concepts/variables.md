@@ -57,6 +57,14 @@ graph TB
 
 **Resolution order**: Agent → User → Workspace
 
+## Versioning
+
+Variable history is currently tied to agent history for **agent-scoped variables**.
+
+- Creating, updating, or deleting an agent variable increments the owning agent version
+- The historical agent page shows the agent-scoped variable snapshot stored with that version
+- User-scoped and workspace-scoped variables remain independently managed and are not folded into agent version URLs
+
 ### Example
 
 If `API_KEY` is defined at all three levels:
