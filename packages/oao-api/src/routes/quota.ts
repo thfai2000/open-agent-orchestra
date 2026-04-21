@@ -7,6 +7,7 @@ import {
   userQuotaSettings,
   workspaceQuotaSettings,
   models,
+  users,
 } from '../database/schema.js';
 import { authMiddleware } from '@oao/shared';
 
@@ -23,6 +24,8 @@ function emptyRateLimitSettings() {
   };
 }
 
+const usageScopeSchema = z.enum(['user', 'workspace', 'platform']);
+
 function toDateOnly(value: Date): string {
   return value.toISOString().split('T')[0];
 }
@@ -33,6 +36,58 @@ function getWeekStart(date: Date): Date {
   const diff = day === 0 ? -6 : 1 - day;
   weekStart.setDate(weekStart.getDate() + diff);
   return weekStart;
+}
+
+function getAvailableUsageScopes(user: { role: string; workspaceId?: string | null }) {
+  const scopes: Array<'user' | 'workspace' | 'platform'> = ['user'];
+
+  if (user.workspaceId && (user.role === 'workspace_admin' || user.role === 'super_admin')) {
+    scopes.push('workspace');
+  }
+
+  if (user.role === 'super_admin') {
+    scopes.push('platform');
+  }
+
+  return scopes;
+}
+
+function getScopeDateFilter(
+  scope: 'user' | 'workspace' | 'platform',
+  user: { userId: string; workspaceId?: string | null },
+  startDate: string,
+) {
+  if (scope === 'user') {
+    return and(eq(creditUsage.userId, user.userId), gte(creditUsage.date, startDate));
+  }
+
+  if (scope === 'workspace') {
+    return and(eq(creditUsage.workspaceId, user.workspaceId!), gte(creditUsage.date, startDate));
+  }
+
+  return gte(creditUsage.date, startDate);
+}
+
+function fillMissingDays(
+  rows: Array<{ date: string; totalCredits: string; totalSessions: number }>,
+  days: number,
+) {
+  const byDate = new Map(rows.map((row) => [row.date, row]));
+  const today = new Date();
+  const start = new Date(today);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (days - 1));
+
+  return Array.from({ length: days }, (_, index) => {
+    const current = new Date(start);
+    current.setDate(start.getDate() + index);
+    const date = toDateOnly(current);
+    return byDate.get(date) ?? {
+      date,
+      totalCredits: '0',
+      totalSessions: 0,
+    };
+  });
 }
 
 // GET /settings — get current user's rate limit settings + workspace defaults
@@ -101,21 +156,32 @@ quotaRouter.put('/settings', async (c) => {
 quotaRouter.get('/usage', async (c) => {
   const user = c.get('user');
   const days = z.coerce.number().min(1).max(90).default(30).parse(c.req.query('days'));
+  const requestedScope = usageScopeSchema.default('user').parse(c.req.query('scope'));
+  const availableScopes = getAvailableUsageScopes(user);
+
+  if (!availableScopes.includes(requestedScope)) {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+
+  const scope = requestedScope;
   const startDate = new Date();
-  startDate.setDate(startDate.getDate() - days);
+  startDate.setDate(startDate.getDate() - (days - 1));
   const startDateStr = toDateOnly(startDate);
+  const rangeFilter = getScopeDateFilter(scope, user, startDateStr);
 
   // Daily totals
-  const dailyUsage = await db
+  const rawDailyUsage = await db
     .select({
       date: creditUsage.date,
       totalCredits: sql<string>`sum(${creditUsage.creditsConsumed})`,
       totalSessions: sql<number>`sum(${creditUsage.sessionCount})::int`,
     })
     .from(creditUsage)
-    .where(and(eq(creditUsage.userId, user.userId), gte(creditUsage.date, startDateStr)))
+    .where(rangeFilter)
     .groupBy(creditUsage.date)
     .orderBy(creditUsage.date);
+
+  const dailyUsage = fillMissingDays(rawDailyUsage, days);
 
   // Per-model breakdown
   const modelUsage = await db
@@ -125,45 +191,64 @@ quotaRouter.get('/usage', async (c) => {
       totalSessions: sql<number>`sum(${creditUsage.sessionCount})::int`,
     })
     .from(creditUsage)
-    .where(and(eq(creditUsage.userId, user.userId), gte(creditUsage.date, startDateStr)))
+    .where(rangeFilter)
     .groupBy(creditUsage.modelName);
+
+  const userUsage = await db
+    .select({
+      userId: creditUsage.userId,
+      userName: users.name,
+      userEmail: users.email,
+      totalCredits: sql<string>`sum(${creditUsage.creditsConsumed})`,
+      totalSessions: sql<number>`sum(${creditUsage.sessionCount})::int`,
+    })
+    .from(creditUsage)
+    .innerJoin(users, eq(creditUsage.userId, users.id))
+    .where(rangeFilter)
+    .groupBy(creditUsage.userId, users.name, users.email);
 
   // Today's usage
   const todayDate = new Date();
   const today = toDateOnly(todayDate);
+  const todayFilter = getScopeDateFilter(scope, user, today);
   const todayUsageResult = await db
     .select({
       totalCredits: sql<string>`coalesce(sum(${creditUsage.creditsConsumed}), '0')`,
       totalSessions: sql<number>`coalesce(sum(${creditUsage.sessionCount}), 0)::int`,
     })
     .from(creditUsage)
-    .where(and(eq(creditUsage.userId, user.userId), eq(creditUsage.date, today)));
+    .where(todayFilter);
 
   // This week's usage
   const weekStartStr = toDateOnly(getWeekStart(todayDate));
+  const weekFilter = getScopeDateFilter(scope, user, weekStartStr);
   const weekUsageResult = await db
     .select({
       totalCredits: sql<string>`coalesce(sum(${creditUsage.creditsConsumed}), '0')`,
       totalSessions: sql<number>`coalesce(sum(${creditUsage.sessionCount}), 0)::int`,
     })
     .from(creditUsage)
-    .where(and(eq(creditUsage.userId, user.userId), gte(creditUsage.date, weekStartStr)));
+    .where(weekFilter);
 
   // This month's usage
   const monthStart = new Date();
   monthStart.setDate(1);
   const monthStartStr = toDateOnly(monthStart);
+  const monthFilter = getScopeDateFilter(scope, user, monthStartStr);
   const monthUsageResult = await db
     .select({
       totalCredits: sql<string>`coalesce(sum(${creditUsage.creditsConsumed}), '0')`,
       totalSessions: sql<number>`coalesce(sum(${creditUsage.sessionCount}), 0)::int`,
     })
     .from(creditUsage)
-    .where(and(eq(creditUsage.userId, user.userId), gte(creditUsage.date, monthStartStr)));
+    .where(monthFilter);
 
   return c.json({
+    scope,
+    availableScopes,
     dailyUsage,
     modelUsage,
+    userUsage: userUsage.sort((left, right) => Number(right.totalCredits) - Number(left.totalCredits)),
     todayUsage: todayUsageResult[0],
     weekUsage: weekUsageResult[0],
     monthUsage: monthUsageResult[0],

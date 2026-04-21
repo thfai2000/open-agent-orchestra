@@ -12,6 +12,7 @@ import workflowsRouter from './routes/workflows.js';
 import executionsRouter from './routes/executions.js';
 import variablesRouter from './routes/variables.js';
 import triggersRouter from './routes/triggers.js';
+import jiraWebhooksRouter from './routes/jira-webhooks.js';
 import webhooks from './routes/webhooks.js';
 import supervisorRouter from './routes/supervisor.js';
 import adminRouter from './routes/admin.js';
@@ -44,6 +45,7 @@ const app = createApp({
     ['/api/executions', executionsRouter],
     ['/api/variables', variablesRouter],
     ['/api/triggers', triggersRouter],
+    ['/api/jira-webhooks', jiraWebhooksRouter],
     ['/api/webhooks', webhooks],
     ['/api/supervisor', supervisorRouter],
     ['/api/admin', adminRouter],

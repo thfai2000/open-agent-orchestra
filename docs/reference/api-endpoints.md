@@ -362,7 +362,7 @@ curl -X POST http://localhost:4002/api/workflows \
       }
     ],
     "triggers": [
-      { "triggerType": "time_schedule", "configuration": { "cronExpression": "0 8 * * 1-5" } }
+      { "triggerType": "time_schedule", "configuration": { "cron": "0 8 * * 1-5" } }
     ]
   }'
 ```
@@ -516,6 +516,8 @@ Retry from the last failed step — does not restart the entire workflow. **Auth
 
 Variables use a 3-tier scoping system with priority: **Agent > User > Workspace**. All values are encrypted at rest with AES-256-GCM. Credential values are never returned in API responses.
 
+All variable responses include the current `version`. Updates increment the variable version, and agent-scoped variable mutations also increment the owning agent version.
+
 ### `GET /api/variables`
 
 **Auth**: JWT/PAT
@@ -576,13 +578,27 @@ curl -X POST http://localhost:4002/api/variables \
 
 Get variable detail (value redacted for credentials). **Auth**: JWT/PAT
 
+### `GET /api/variables/:id/versions`
+
+List variable version history for a specific scope. **Auth**: JWT/PAT
+
+| Query | Type | Description |
+|-------|------|-------------|
+| `scope` | `"agent"` \| `"user"` \| `"workspace"` | Required variable scope |
+| `page` | integer | Page number (default: 1) |
+| `limit` | integer | Items per page (default: 50, max: 100) |
+
+### `GET /api/variables/:id/versions/:version`
+
+Get a specific variable version snapshot for a specific scope. **Auth**: JWT/PAT
+
 ### `PUT /api/variables/:id`
 
-Update variable. **Auth**: JWT/PAT · **Role**: `creator_user`+
+Update variable. Increments variable version. **Auth**: JWT/PAT · **Role**: `creator_user`+
 
 ### `DELETE /api/variables/:id`
 
-Delete variable. **Auth**: JWT/PAT · **Role**: `creator_user`+
+Delete variable. Preserves a final deleted historical snapshot. **Auth**: JWT/PAT · **Role**: `creator_user`+
 
 ---
 
@@ -590,7 +606,13 @@ Delete variable. **Auth**: JWT/PAT · **Role**: `creator_user`+
 
 ### `GET /api/triggers`
 
-**Auth**: JWT/PAT · **Required query**: `workflowId`
+List visible triggers. Pass `workflowId` to scope the response to one workflow; omit it to list triggers across workflows visible to the current user. **Auth**: JWT/PAT
+
+Trigger responses include sanitized labels and runtime status fields such as `typeLabel`, `shortTypeLabel`, and `runtimeSummary`.
+
+### `GET /api/triggers/types`
+
+Return the shared trigger catalog used by the UI. **Auth**: JWT/PAT
 
 ### `POST /api/triggers`
 
@@ -604,7 +626,7 @@ curl -X POST http://localhost:4002/api/triggers \
   -d '{
     "workflowId": "wf-uuid",
     "triggerType": "time_schedule",
-    "configuration": { "cronExpression": "0 8 * * 1-5" }
+    "configuration": { "cron": "0 8 * * 1-5" }
   }'
 
 # Webhook trigger with parameters
@@ -615,8 +637,11 @@ curl -X POST http://localhost:4002/api/triggers \
     "workflowId": "wf-uuid",
     "triggerType": "webhook",
     "configuration": {
-      "webhookPath": "jira-task-created",
-      "parameters": ["issue_key", "assignee", "summary"]
+      "path": "/jira-task-created",
+      "parameters": [
+        { "name": "issue_key", "required": true, "description": "Jira issue key" },
+        { "name": "summary", "required": false, "description": "Issue summary" }
+      ]
     }
   }'
 
@@ -629,7 +654,53 @@ curl -X POST http://localhost:4002/api/triggers \
     "triggerType": "event",
     "configuration": {
       "eventName": "agent.created",
+      "eventScope": "workspace",
       "conditions": { "scope": "workspace" }
+    }
+  }'
+
+# Jira changes notification trigger (dynamic Jira webhook)
+curl -X POST http://localhost:4002/api/triggers \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workflowId": "wf-uuid",
+    "triggerType": "jira_changes_notification",
+    "configuration": {
+      "jiraSiteUrl": "https://example.atlassian.net",
+      "authMode": "oauth2",
+      "credentials": {
+        "accessTokenVariableKey": "JIRA_ACCESS_TOKEN",
+        "refreshTokenVariableKey": "JIRA_REFRESH_TOKEN",
+        "clientIdVariableKey": "JIRA_CLIENT_ID",
+        "clientSecretVariableKey": "JIRA_CLIENT_SECRET"
+      },
+      "jql": "project = OAO AND statusCategory != Done",
+      "events": ["jira:issue_created", "jira:issue_updated"],
+      "fieldIdsFilter": ["summary", "status"]
+    }
+  }'
+
+# Jira polling trigger
+curl -X POST http://localhost:4002/api/triggers \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workflowId": "wf-uuid",
+    "triggerType": "jira_polling",
+    "configuration": {
+      "jiraSiteUrl": "https://example.atlassian.net",
+      "authMode": "api_token",
+      "credentials": {
+        "email": "jira-bot@example.com",
+        "apiTokenVariableKey": "JIRA_API_TOKEN"
+      },
+      "jql": "project = OAO ORDER BY updated DESC",
+      "intervalMinutes": 15,
+      "maxResults": 50,
+      "fields": ["summary", "status", "assignee", "updated"],
+      "initialLoadMode": "from_now",
+      "overlapMinutes": 5
     }
   }'
 ```
@@ -638,10 +709,12 @@ curl -X POST http://localhost:4002/api/triggers \
 
 | Type | Configuration | Description |
 |------|---------------|-------------|
-| `time_schedule` | `{ cronExpression: "0 8 * * *" }` | Cron-based schedule |
+| `time_schedule` | `{ cron: "0 8 * * *" }` | Cron-based schedule |
 | `exact_datetime` | `{ datetime: "2026-06-01T10:00:00Z" }` | One-time execution |
-| `webhook` | `{ webhookPath: "...", parameters: [...] }` | HTTP webhook (HMAC or PAT auth) |
-| `event` | `{ eventName: "...", conditions: {...} }` | System event with data matching |
+| `webhook` | `{ path: "/...", parameters: [{ name, required, description }] }` | Parameterized webhook/manual-run input definition |
+| `event` | `{ eventName: "...", eventScope: "workspace", conditions: {...} }` | System event with data matching |
+| `jira_changes_notification` | `{ jiraSiteUrl, authMode: "oauth2", credentials, jql, events, fieldIdsFilter }` | Jira dynamic webhook registration filtered by JQL |
+| `jira_polling` | `{ jiraSiteUrl, authMode, credentials, jql, intervalMinutes, maxResults, fields, initialLoadMode, overlapMinutes }` | Jira search polling with overlap-window dedupe |
 
 ### `PUT /api/triggers/:id`
 
@@ -688,6 +761,16 @@ curl -X POST http://localhost:4002/api/webhooks/$REGISTRATION_ID \
 ```
 
 **Response**: `202 Accepted`
+
+### `POST /api/jira-webhooks/:triggerId?token=...`
+
+Receive a Jira dynamic webhook callback for a `jira_changes_notification` trigger. This endpoint is intended for Jira to call after OAO registers a dynamic webhook.
+
+- Requires the OAO-generated `token` query parameter
+- Dedupes repeated `X-Atlassian-Webhook-Identifier` deliveries
+- Emits a `webhook.received` system event with `triggerType: "jira_changes_notification"` and `source: "jira"`
+
+**Response**: `202 Accepted` on first delivery, `200` with `{"status":"already_processed"}` for duplicate deliveries
 
 ---
 
@@ -855,8 +938,14 @@ curl -X POST http://localhost:4002/api/workspaces \
 |--------|------|-------------|
 | `GET` | `/api/quota/settings` | Get rate limit settings (user + workspace defaults) |
 | `PUT` | `/api/quota/settings` | Update own credit limits |
-| `GET` | `/api/quota/usage` | Credit usage stats (daily/weekly/monthly + model breakdown) |
+| `GET` | `/api/quota/usage` | Credit usage stats for `user`, `workspace`, or `platform` scope, depending on role |
 | `GET` | `/api/quota/models` | Active models for dropdowns |
+
+`GET /api/quota/usage` supports `?days=30` and `?scope=user|workspace|platform`.
+
+- `scope=user` is available to any authenticated user.
+- `scope=workspace` requires `workspace_admin` or `super_admin`.
+- `scope=platform` requires `super_admin`.
 
 ---
 

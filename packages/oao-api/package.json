@@ -10,6 +10,7 @@
     "start:worker": "tsx src/workers/workflow-worker.ts",
     "start:controller": "tsx src/workers/controller.ts",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage --coverage.reporter=text-summary --coverage.reporter=html",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
@@ -38,6 +39,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^2.1.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/nunjucks": "^3.2.6",
     "drizzle-kit": "^0.31.10",

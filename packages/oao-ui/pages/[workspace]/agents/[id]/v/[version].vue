@@ -15,8 +15,13 @@
             <Tag :value="snapshotAgent.status" :severity="snapshotAgent.status === 'active' ? 'success' : snapshotAgent.status === 'paused' ? 'warn' : 'danger'" />
             <Tag :value="snapshotAgent.scope === 'workspace' ? 'Workspace' : 'Personal'" severity="info" />
             <Tag :value="snapshotAgent.sourceType === 'database' ? 'Database' : 'Git'" severity="secondary" />
-            <Tag :value="`v${versionRecord.version}`" severity="secondary" />
             <Tag value="Read-only" severity="warn" />
+          </div>
+          <div class="flex items-center gap-2 mt-3 text-sm">
+            <span class="text-surface-500">Version:</span>
+            <Button icon="pi pi-chevron-left" severity="secondary" outlined size="small" :disabled="!olderVersion" aria-label="Previous version" @click="navigateToVersion(olderVersion?.version)" />
+            <span class="font-medium text-surface-700">v{{ versionRecord.version }}<span v-if="isLatestVersion" class="text-surface-500"> (latest)</span></span>
+            <Button icon="pi pi-chevron-right" severity="secondary" outlined size="small" :disabled="!newerVersion" aria-label="Next version" @click="navigateToVersion(newerVersion?.version)" />
           </div>
           <p v-if="snapshotAgent.description" class="text-surface-500 mt-2">{{ snapshotAgent.description }}</p>
           <p class="text-xs text-surface-400 mt-3">
@@ -25,8 +30,6 @@
           </p>
         </div>
         <div class="flex gap-2">
-          <Button icon="pi pi-chevron-left" severity="secondary" outlined size="small" :disabled="!olderVersion" aria-label="Previous version" @click="navigateToVersion(olderVersion?.version)" />
-          <Button icon="pi pi-chevron-right" severity="secondary" outlined size="small" :disabled="!newerVersion" aria-label="Next version" @click="navigateToVersion(newerVersion?.version)" />
           <NuxtLink :to="latestPath">
             <Button label="Latest" severity="secondary" size="small" />
           </NuxtLink>
@@ -138,6 +141,7 @@ const latestPath = computed(() => `/${ws.value}/agents/${agentId.value}`);
 const currentVersionIndex = computed(() => versions.value.findIndex((entry: any) => entry.version === versionNumber.value));
 const newerVersion = computed(() => currentVersionIndex.value > 0 ? versions.value[currentVersionIndex.value - 1] : null);
 const olderVersion = computed(() => currentVersionIndex.value >= 0 ? versions.value[currentVersionIndex.value + 1] ?? null : null);
+const isLatestVersion = computed(() => versions.value.some((entry: any) => entry.version === versionNumber.value && entry.isLatest));
 
 const breadcrumbs = computed(() => [
   { label: 'Home', route: `/${ws.value}` },

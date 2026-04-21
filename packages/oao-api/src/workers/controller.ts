@@ -4,6 +4,10 @@ import { db } from '../database/index.js';
 import { triggers, workflows, systemEvents } from '../database/schema.js';
 import { enqueueWorkflowExecution } from '../services/workflow-engine.js';
 import { getRedisConnection } from '../services/redis.js';
+import {
+  maintainJiraChangesNotificationTriggers,
+  pollJiraPollingTriggers,
+} from '../services/jira-integration.js';
 import { startWorker, stopWorker } from './workflow-worker.js';
 
 const logger = createLogger('controller');
@@ -336,7 +340,8 @@ async function processWebhookEvent(event: { id: string; eventData: unknown }) {
 
     // Enqueue workflow execution
     await enqueueWorkflowExecution(workflowId, triggerId, {
-      type: 'webhook',
+      type: typeof data.triggerType === 'string' ? data.triggerType : 'webhook',
+      source: data.source,
       authMethod: data.authMethod,
       eventId: data.eventId,
       payload: data.payload,
@@ -375,6 +380,8 @@ async function run() {
       pollTriggers(),
       pollExactDatetimeTriggers(),
       pollEventTriggers(),
+      pollJiraPollingTriggers(),
+      maintainJiraChangesNotificationTriggers(),
     ]);
   };
 

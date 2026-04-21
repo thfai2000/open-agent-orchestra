@@ -26,6 +26,8 @@ export const triggerTypeEnum = pgEnum('trigger_type', [
   'exact_datetime',
   'webhook',
   'event',
+  'jira_changes_notification',
+  'jira_polling',
   'manual',
 ]);
 export const agentSourceTypeEnum = pgEnum('agent_source_type', ['github_repo', 'database']);
@@ -46,6 +48,7 @@ export const stepStatusEnum = pgEnum('step_status', [
 export const reasoningEffortEnum = pgEnum('reasoning_effort', ['high', 'medium', 'low']);
 export const workerRuntimeEnum = pgEnum('worker_runtime', ['static', 'ephemeral']);
 export const variableTypeEnum = pgEnum('variable_type', ['property', 'credential']);
+export const variableScopeEnum = pgEnum('variable_scope', ['agent', 'user', 'workspace']);
 export const credentialSubTypeEnum = pgEnum('credential_sub_type', [
   'secret_text',
   'github_token',
@@ -229,9 +232,11 @@ export const triggers = pgTable('triggers', {
     .references(() => workflows.id, { onDelete: 'cascade' }),
   triggerType: triggerTypeEnum('trigger_type').notNull(),
   configuration: jsonb('configuration').notNull().default({}),
+  runtimeState: jsonb('runtime_state').notNull().default({}),
   isActive: boolean('is_active').notNull().default(true),
   lastFiredAt: timestamp('last_fired_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 // ─── Workflow Executions ─────────────────────────────────────────────
@@ -292,6 +297,7 @@ export const agentVariables = pgTable(
     credentialSubType: credentialSubTypeEnum('credential_sub_type').notNull().default('secret_text'),
     injectAsEnvVariable: boolean('inject_as_env_variable').notNull().default(false),
     description: varchar('description', { length: 300 }),
+    version: integer('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -315,6 +321,7 @@ export const userVariables = pgTable(
     credentialSubType: credentialSubTypeEnum('credential_sub_type').notNull().default('secret_text'),
     injectAsEnvVariable: boolean('inject_as_env_variable').notNull().default(false),
     description: varchar('description', { length: 300 }),
+    version: integer('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -398,11 +405,33 @@ export const workspaceVariables = pgTable(
     credentialSubType: credentialSubTypeEnum('credential_sub_type').notNull().default('secret_text'),
     injectAsEnvVariable: boolean('inject_as_env_variable').notNull().default(false),
     description: varchar('description', { length: 300 }),
+    version: integer('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     workspaceKeyIdx: uniqueIndex('workspace_variables_ws_key_idx').on(table.workspaceId, table.key),
+  }),
+);
+
+// ─── Variable Versions (audit trail of variable metadata snapshots) ─
+
+export const variableVersions = pgTable(
+  'variable_versions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    variableId: uuid('variable_id').notNull(),
+    scope: variableScopeEnum('scope').notNull(),
+    scopeId: uuid('scope_id').notNull(),
+    workspaceId: uuid('workspace_id'),
+    version: integer('version').notNull(),
+    snapshot: jsonb('snapshot').notNull(),
+    changedBy: uuid('changed_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    variableVersionIdx: uniqueIndex('variable_versions_scope_var_version_idx').on(table.scope, table.variableId, table.version),
+    variableScopeOwnerIdx: index('variable_versions_scope_owner_idx').on(table.scope, table.scopeId),
   }),
 );
 

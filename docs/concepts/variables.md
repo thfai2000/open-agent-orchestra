@@ -2,11 +2,11 @@
 
 The platform provides a three-tier encrypted variable system for managing credentials and configuration.
 
-The UI manages variables with in-page breadcrumb workflows:
+The UI manages variables with breadcrumb-based pages:
 
 - `/{workspace}/variables` — list all workspace, user, and agent-scoped variables
-- `/{workspace}/variables/new` — create a new credential or property
-- `/{workspace}/variables/:id` — edit metadata or rotate the stored secret value
+- `/{workspace}/variables/{scope}/{id}` — latest editable variable page
+- `/{workspace}/variables/{scope}/{id}/v/{version}` — read-only historical variable page
 
 ## Variable Types
 
@@ -59,11 +59,15 @@ graph TB
 
 ## Versioning
 
-Variable history is currently tied to agent history for **agent-scoped variables**.
+Variables are first-class versioned resources across **all three scopes**.
 
-- Creating, updating, or deleting an agent variable increments the owning agent version
-- The historical agent page shows the agent-scoped variable snapshot stored with that version
-- User-scoped and workspace-scoped variables remain independently managed and are not folded into agent version URLs
+- The latest editable page lives at `/{workspace}/variables/{scope}/{id}`
+- Historical snapshots live at `/{workspace}/variables/{scope}/{id}/v/{version}`
+- Updating a variable increments that variable's version and stores the previous snapshot
+- Deleting a variable preserves a final read-only historical snapshot marked as deleted
+- Agent-scoped variable changes also increment the owning agent version so agent history remains aligned with its files and variables
+
+Credential values remain masked in both live and historical views. Version history tracks metadata, scope, env-injection settings, and lifecycle state without exposing the stored secret.
 
 ### Example
 

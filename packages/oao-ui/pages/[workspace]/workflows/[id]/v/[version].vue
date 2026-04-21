@@ -14,8 +14,13 @@
           <div class="flex flex-wrap items-center gap-2 mt-2">
             <Tag :value="snapshotWorkflow.isActive ? 'Active' : 'Inactive'" :severity="snapshotWorkflow.isActive ? 'success' : 'secondary'" />
             <Tag :value="snapshotWorkflow.scope === 'workspace' ? 'Workspace' : 'Personal'" severity="info" />
-            <Tag :value="`v${versionRecord.version}`" severity="secondary" />
             <Tag value="Read-only" severity="warn" />
+          </div>
+          <div class="flex items-center gap-2 mt-3 text-sm">
+            <span class="text-surface-500">Version:</span>
+            <Button icon="pi pi-chevron-left" severity="secondary" outlined size="small" :disabled="!olderVersion" aria-label="Previous version" @click="navigateToVersion(olderVersion?.version)" />
+            <span class="font-medium text-surface-700">v{{ versionRecord.version }}<span v-if="isLatestVersion" class="text-surface-500"> (latest)</span></span>
+            <Button icon="pi pi-chevron-right" severity="secondary" outlined size="small" :disabled="!newerVersion" aria-label="Next version" @click="navigateToVersion(newerVersion?.version)" />
           </div>
           <p v-if="snapshotWorkflow.description" class="text-surface-500 mt-2">{{ snapshotWorkflow.description }}</p>
           <div class="flex flex-wrap items-center gap-x-3 mt-3 text-xs text-surface-400">
@@ -25,8 +30,6 @@
           </div>
         </div>
         <div class="flex gap-2">
-          <Button icon="pi pi-chevron-left" severity="secondary" outlined size="small" :disabled="!olderVersion" aria-label="Previous version" @click="navigateToVersion(olderVersion?.version)" />
-          <Button icon="pi pi-chevron-right" severity="secondary" outlined size="small" :disabled="!newerVersion" aria-label="Next version" @click="navigateToVersion(newerVersion?.version)" />
           <NuxtLink :to="latestPath">
             <Button label="Latest" severity="secondary" size="small" />
           </NuxtLink>
@@ -77,7 +80,7 @@
                   <template #body="{ data }"><Tag :value="data.isActive ? 'Yes' : 'No'" :severity="data.isActive ? 'success' : 'secondary'" /></template>
                 </Column>
                 <Column header="Configuration">
-                  <template #body="{ data }"><span class="text-sm font-mono break-all">{{ formatTriggerConfig(data) }}</span></template>
+                  <template #body="{ data }"><span class="text-sm font-mono break-all">{{ formatTriggerConfiguration(data) }}</span></template>
                 </Column>
                 <Column header="Created" style="width: 180px">
                   <template #body="{ data }"><span class="text-sm text-surface-500">{{ data.createdAt ? new Date(data.createdAt).toLocaleDateString() : '—' }}</span></template>
@@ -116,6 +119,8 @@
 </template>
 
 <script setup lang="ts">
+import { formatTriggerConfiguration, formatTriggerType } from '~/utils/triggers';
+
 const { authHeaders } = useAuth();
 const headers = authHeaders();
 const route = useRoute();
@@ -139,6 +144,7 @@ const latestPath = computed(() => `/${ws.value}/workflows/${workflowId.value}`);
 const currentVersionIndex = computed(() => versions.value.findIndex((entry: any) => entry.version === versionNumber.value));
 const newerVersion = computed(() => currentVersionIndex.value > 0 ? versions.value[currentVersionIndex.value - 1] : null);
 const olderVersion = computed(() => currentVersionIndex.value >= 0 ? versions.value[currentVersionIndex.value + 1] ?? null : null);
+const isLatestVersion = computed(() => versions.value.some((entry: any) => entry.version === versionNumber.value && entry.isLatest));
 
 const breadcrumbs = computed(() => [
   { label: 'Home', route: `/${ws.value}` },
@@ -155,19 +161,5 @@ function navigateToVersion(version?: number) {
 function formatDateTime(value?: string | Date | null) {
   if (!value) return 'unknown time';
   return new Date(value).toLocaleString();
-}
-
-function formatTriggerType(type?: string) {
-  return { time_schedule: 'Schedule', webhook: 'Webhook', event: 'Event', exact_datetime: 'DateTime' }[type || ''] || type || 'Unknown';
-}
-
-function formatTriggerConfig(trigger: any) {
-  if (!trigger?.configuration) return '—';
-  const config = trigger.configuration;
-  if (trigger.triggerType === 'time_schedule') return config.cron || '—';
-  if (trigger.triggerType === 'webhook') return config.path || '—';
-  if (trigger.triggerType === 'event') return config.eventName || '—';
-  if (trigger.triggerType === 'exact_datetime') return config.datetime || '—';
-  return JSON.stringify(config);
 }
 </script>

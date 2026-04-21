@@ -24,12 +24,25 @@
     <!-- Charts Row -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
       <Card>
-        <template #title>Daily Credit Usage (Last 30 Days)</template>
-        <template #content>
-          <div v-if="dailyUsage.length > 0" class="h-48">
-            <canvas ref="dailyChartCanvas" class="w-full h-full" />
+        <template #title>
+          <div class="flex items-center justify-between gap-3">
+            <span>Daily Credit Usage (Last 30 Days)</span>
+            <div class="flex flex-wrap gap-2">
+              <Button
+                v-for="option in usageScopeOptions"
+                :key="option.value"
+                :label="option.label"
+                :severity="selectedUsageScope === option.value ? 'contrast' : 'secondary'"
+                :outlined="selectedUsageScope !== option.value"
+                size="small"
+                @click="selectedUsageScope = option.value"
+              />
+            </div>
           </div>
-          <p v-else class="text-surface-400 py-8 text-center">No usage data yet.</p>
+        </template>
+        <template #content>
+          <p class="mb-3 text-sm text-surface-500">Viewing {{ currentScopeLabel.toLowerCase() }} credit usage.</p>
+          <CreditUsageChart :data="dailyUsage" :empty-message="`No usage data yet for ${currentScopeLabel.toLowerCase()}.`" />
         </template>
       </Card>
       <Card>
@@ -89,15 +102,16 @@
 </template>
 
 <script setup lang="ts">
-const { authHeaders } = useAuth();
+const { authHeaders, user } = useAuth();
 const headers = authHeaders();
 const route = useRoute();
 const ws = computed(() => (route.params.workspace as string) || 'default');
+const selectedUsageScope = ref<'user' | 'workspace' | 'platform'>('user');
 
 const { data: agentsData } = await useFetch('/api/agents', { headers });
 const { data: workflowsData } = await useFetch('/api/workflows', { headers });
 const { data: execData } = await useFetch('/api/executions?limit=10', { headers });
-const { data: usageData } = await useFetch('/api/quota/usage?days=30', { headers });
+const { data: usageData } = await useFetch(computed(() => `/api/quota/usage?days=30&scope=${selectedUsageScope.value}`), { headers });
 
 const agents = computed(() => (agentsData.value as any)?.agents ?? []);
 const workflows = computed(() => (workflowsData.value as any)?.workflows ?? []);
@@ -106,6 +120,17 @@ const todayCredits = computed(() => (usageData.value as any)?.todayUsage?.totalC
 const monthCredits = computed(() => (usageData.value as any)?.monthUsage?.totalCredits ?? '0');
 const dailyUsage = computed(() => (usageData.value as any)?.dailyUsage ?? []);
 const modelUsage = computed(() => (usageData.value as any)?.modelUsage ?? []);
+const usageScopeOptions = computed(() => {
+  const options = [{ label: 'You', value: 'user' as const }];
+  if (user.value?.role === 'workspace_admin' || user.value?.role === 'super_admin') {
+    options.push({ label: 'Workspace', value: 'workspace' as const });
+  }
+  if (user.value?.role === 'super_admin') {
+    options.push({ label: 'Platform', value: 'platform' as const });
+  }
+  return options;
+});
+const currentScopeLabel = computed(() => usageScopeOptions.value.find((option) => option.value === selectedUsageScope.value)?.label || 'You');
 
 const summaryStats = computed(() => [
   { label: 'Total Agents', value: agents.value.length, icon: 'pi pi-microchip-ai' },
@@ -126,58 +151,4 @@ function getModelPercent(credits: string): number {
   const max = Math.max(...modelUsage.value.map((m: any) => Number(m.totalCredits)), 1);
   return (Number(credits) / max) * 100;
 }
-
-// Chart
-const dailyChartCanvas = ref<HTMLCanvasElement | null>(null);
-
-function drawChart() {
-  const canvas = dailyChartCanvas.value;
-  if (!canvas || dailyUsage.value.length === 0) return;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
-  ctx.scale(dpr, dpr);
-  const w = rect.width, h = rect.height;
-  const pad = { top: 10, right: 10, bottom: 30, left: 50 };
-  const cW = w - pad.left - pad.right, cH = h - pad.top - pad.bottom;
-  const data = dailyUsage.value;
-  const vals = data.map((d: any) => Number(d.totalCredits));
-  const maxV = Math.max(...vals, 1);
-  ctx.clearRect(0, 0, w, h);
-  const barW = Math.max(cW / data.length - 2, 2);
-  ctx.fillStyle = '#8b5cf6';
-  data.forEach((d: any, i: number) => {
-    const x = pad.left + (i / data.length) * cW + 1;
-    const bH = (Number(d.totalCredits) / maxV) * cH;
-    ctx.fillRect(x, pad.top + cH - bH, barW, bH);
-  });
-  ctx.strokeStyle = '#94a3b8';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(pad.left, pad.top);
-  ctx.lineTo(pad.left, pad.top + cH);
-  ctx.lineTo(pad.left + cW, pad.top + cH);
-  ctx.stroke();
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = '10px sans-serif';
-  ctx.textAlign = 'right';
-  for (let i = 0; i <= 4; i++) {
-    const y = pad.top + cH - (i / 4) * cH;
-    ctx.fillText(((maxV * i) / 4).toFixed(0), pad.left - 5, y + 3);
-  }
-  ctx.textAlign = 'center';
-  const step = Math.max(Math.floor(data.length / 5), 1);
-  data.forEach((d: any, i: number) => {
-    if (i % step === 0 || i === data.length - 1) {
-      const x = pad.left + (i / data.length) * cW + barW / 2;
-      ctx.fillText(d.date.substring(5), x, pad.top + cH + 15);
-    }
-  });
-}
-
-onMounted(() => nextTick(() => drawChart()));
-watch(dailyUsage, () => nextTick(() => drawChart()));
 </script>

@@ -10,7 +10,7 @@
     <div class="flex items-center justify-between mb-6">
       <div>
         <h1 class="text-2xl font-semibold">Variables</h1>
-        <p class="text-surface-500 text-sm mt-1">Manage scoped variables for agents and workflows</p>
+        <p class="text-surface-500 text-sm mt-1">Manage workspace, user, and agent-scoped variables with version history</p>
       </div>
       <Button label="Create Variable" icon="pi pi-plus" @click="showCreate = true" />
     </div>
@@ -24,7 +24,18 @@
       paginator :rows="20" :rowsPerPageOptions="[10, 20, 50, 100]">
       <template #empty><div class="text-center py-8 text-surface-400">No variables found. Select a scope or create one.</div></template>
       <Column header="Key" sortable field="key" style="min-width: 160px">
-        <template #body="{ data }"><span class="font-medium font-mono">{{ data.key }}</span></template>
+        <template #body="{ data }">
+          <NuxtLink :to="variableDetailPath(data._scope, data.id)" class="font-medium font-mono text-primary hover:underline">
+            {{ data.key }}
+          </NuxtLink>
+        </template>
+      </Column>
+      <Column header="Version" style="width: 110px">
+        <template #body="{ data }">
+          <NuxtLink :to="variableDetailPath(data._scope, data.id)" class="hover:opacity-90">
+            <Tag :value="`v${data.version || 1}`" severity="secondary" />
+          </NuxtLink>
+        </template>
       </Column>
       <Column header="Scope" style="width: 120px">
         <template #body="{ data }"><Tag :value="data._scope" :severity="scopeSeverity(data._scope)" /></template>
@@ -44,6 +55,9 @@
       <Column header="" style="width: 100px">
         <template #body="{ data }">
           <div class="flex gap-1">
+            <NuxtLink :to="variableDetailPath(data._scope, data.id)">
+              <Button icon="pi pi-arrow-right" text rounded size="small" />
+            </NuxtLink>
             <Button icon="pi pi-pencil" text rounded size="small" @click="startEdit(data)" />
             <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click="handleDelete(data)" />
           </div>
@@ -167,6 +181,10 @@ const filteredVars = computed(() => {
 });
 
 function scopeSeverity(s: string) { return { user: 'info', workspace: 'success', agent: 'warn' }[s] || 'secondary'; }
+
+function variableDetailPath(scopeValue: string, id: string) {
+  return `/${ws.value}/variables/${scopeValue}/${id}`;
+}
 
 async function refreshAll() {
   await Promise.all([refreshWs(), refreshUser(), loadAgentVars()]);

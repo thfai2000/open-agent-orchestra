@@ -1,9 +1,10 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import {
   agentFiles,
   agentVariables,
   agentVersions,
+  variableVersions,
   workflowSteps,
   workflowVersions,
   triggers,
@@ -18,6 +19,48 @@ interface VersionView<TSnapshot> {
   changedBy: string | null;
   isLatest: boolean;
   snapshot: TSnapshot;
+}
+
+export type VariableScope = 'agent' | 'user' | 'workspace';
+
+export interface VariableVersionSnapshot {
+  id: string;
+  scope: VariableScope;
+  scopeId: string;
+  workspaceId: string | null;
+  key: string;
+  variableType: string;
+  credentialSubType: string;
+  injectAsEnvVariable: boolean;
+  description: string | null;
+  version: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+  isDeleted: boolean;
+  deletedAt: string | null;
+}
+
+interface VariableVersionCaptureInput {
+  id: string;
+  scope: VariableScope;
+  scopeId: string;
+  workspaceId: string | null;
+  key: string;
+  variableType: string;
+  credentialSubType: string;
+  injectAsEnvVariable: boolean;
+  description: string | null | undefined;
+  version: number;
+  createdAt: Date | string | null;
+  updatedAt: Date | string | null;
+}
+
+interface VariableVersionSummary {
+  version: number;
+  createdAt: Date | null;
+  changedBy: string | null;
+  isLatest: boolean;
+  isDeleted: boolean;
 }
 
 function sanitizeAgent(agent: AgentRecord) {
@@ -95,6 +138,174 @@ function normalizeWorkflowSnapshot(snapshot: unknown) {
     steps: Array.isArray(parsed.steps) ? parsed.steps : [],
     triggers: Array.isArray(parsed.triggers) ? parsed.triggers : [],
   };
+}
+
+function toIsoString(value: Date | string | null | undefined) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+export function buildVariableVersionSnapshot(
+  input: VariableVersionCaptureInput,
+  options?: { deleted?: boolean; deletedAt?: Date | string | null },
+): VariableVersionSnapshot {
+  const deleted = options?.deleted === true;
+
+  return {
+    id: input.id,
+    scope: input.scope,
+    scopeId: input.scopeId,
+    workspaceId: input.workspaceId,
+    key: input.key,
+    variableType: input.variableType,
+    credentialSubType: input.credentialSubType,
+    injectAsEnvVariable: input.injectAsEnvVariable,
+    description: input.description ?? null,
+    version: input.version,
+    createdAt: toIsoString(input.createdAt),
+    updatedAt: toIsoString(input.updatedAt),
+    isDeleted: deleted,
+    deletedAt: deleted ? toIsoString(options?.deletedAt ?? new Date()) : null,
+  };
+}
+
+function normalizeVariableSnapshot(snapshot: unknown): VariableVersionSnapshot | null {
+  const parsed = (snapshot ?? {}) as Partial<VariableVersionSnapshot>;
+
+  if (
+    typeof parsed.id !== 'string'
+    || (parsed.scope !== 'agent' && parsed.scope !== 'user' && parsed.scope !== 'workspace')
+    || typeof parsed.scopeId !== 'string'
+    || typeof parsed.key !== 'string'
+    || typeof parsed.version !== 'number'
+  ) {
+    return null;
+  }
+
+  return {
+    id: parsed.id,
+    scope: parsed.scope,
+    scopeId: parsed.scopeId,
+    workspaceId: typeof parsed.workspaceId === 'string' ? parsed.workspaceId : null,
+    key: parsed.key,
+    variableType: typeof parsed.variableType === 'string' ? parsed.variableType : 'credential',
+    credentialSubType: typeof parsed.credentialSubType === 'string' ? parsed.credentialSubType : 'secret_text',
+    injectAsEnvVariable: parsed.injectAsEnvVariable === true,
+    description: typeof parsed.description === 'string' ? parsed.description : null,
+    version: parsed.version,
+    createdAt: typeof parsed.createdAt === 'string' ? parsed.createdAt : null,
+    updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : null,
+    isDeleted: parsed.isDeleted === true,
+    deletedAt: typeof parsed.deletedAt === 'string' ? parsed.deletedAt : null,
+  };
+}
+
+export async function captureVariableHistoricalVersion(
+  input: VariableVersionCaptureInput,
+  changedBy: string | null,
+  options?: { deleted?: boolean; deletedAt?: Date | string | null },
+) {
+  const snapshot = buildVariableVersionSnapshot(input, options);
+
+  await db.insert(variableVersions).values({
+    variableId: input.id,
+    scope: input.scope,
+    scopeId: input.scopeId,
+    workspaceId: input.workspaceId,
+    version: input.version,
+    snapshot,
+    changedBy,
+  }).onConflictDoNothing();
+
+  return snapshot;
+}
+
+export async function getVariableVersionView(
+  scope: VariableScope,
+  variableId: string,
+  version: number,
+  currentSnapshot?: VariableVersionSnapshot | null,
+): Promise<VersionView<VariableVersionSnapshot> | null> {
+  if (currentSnapshot && !currentSnapshot.isDeleted && currentSnapshot.version === version) {
+    return {
+      version,
+      createdAt: currentSnapshot.updatedAt ? new Date(currentSnapshot.updatedAt) : currentSnapshot.createdAt ? new Date(currentSnapshot.createdAt) : null,
+      changedBy: null,
+      isLatest: true,
+      snapshot: currentSnapshot,
+    };
+  }
+
+  const matched = await db.query.variableVersions.findMany({
+    where: and(eq(variableVersions.scope, scope), eq(variableVersions.variableId, variableId)),
+    orderBy: variableVersions.version,
+  });
+  const record = matched.find((item) => item.version === version);
+
+  if (!record) return null;
+
+  const snapshot = normalizeVariableSnapshot(record.snapshot);
+  if (!snapshot) return null;
+
+  return {
+    version: record.version,
+    createdAt: record.createdAt,
+    changedBy: record.changedBy,
+    isLatest: !currentSnapshot && record.version === Math.max(...matched.map((item) => item.version)),
+    snapshot,
+  };
+}
+
+export async function listVariableVersionViews(
+  scope: VariableScope,
+  variableId: string,
+  currentSnapshot?: VariableVersionSnapshot | null,
+): Promise<VariableVersionSummary[]> {
+  const historical = await db.query.variableVersions.findMany({
+    where: and(eq(variableVersions.scope, scope), eq(variableVersions.variableId, variableId)),
+  });
+
+  const summaries = [
+    ...(currentSnapshot && !currentSnapshot.isDeleted
+      ? [{
+          version: currentSnapshot.version,
+          createdAt: currentSnapshot.updatedAt ? new Date(currentSnapshot.updatedAt) : currentSnapshot.createdAt ? new Date(currentSnapshot.createdAt) : null,
+          changedBy: null,
+          isLatest: true,
+          isDeleted: false,
+        } satisfies VariableVersionSummary]
+      : []),
+    ...historical.flatMap((record) => {
+      const snapshot = normalizeVariableSnapshot(record.snapshot);
+      if (!snapshot) return [];
+      return [{
+        version: record.version,
+        createdAt: record.createdAt,
+        changedBy: record.changedBy,
+        isLatest: false,
+        isDeleted: snapshot.isDeleted,
+      } satisfies VariableVersionSummary];
+    }),
+  ];
+
+  const deduped = new Map<number, VariableVersionSummary>();
+  for (const summary of summaries) {
+    if (!deduped.has(summary.version) || summary.isLatest) {
+      deduped.set(summary.version, summary);
+    }
+  }
+
+  const ordered = Array.from(deduped.values()).sort((left, right) => right.version - left.version);
+  if (!currentSnapshot && ordered.length > 0) {
+    const latestVersion = ordered[0].version;
+    return ordered.map((entry) => ({
+      ...entry,
+      isLatest: entry.version === latestVersion,
+    }));
+  }
+
+  return ordered;
 }
 
 export async function buildAgentVersionSnapshot(agent: AgentRecord) {

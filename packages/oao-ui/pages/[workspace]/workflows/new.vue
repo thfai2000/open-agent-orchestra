@@ -93,41 +93,51 @@
       <Card>
         <template #title>Triggers</template>
         <template #content>
-          <div class="flex flex-col gap-4">
-            <div v-for="(trigger, idx) in form.triggers" :key="idx" class="border border-surface-200 rounded-lg p-4">
-              <div class="flex items-center justify-between mb-3">
-                <Tag :value="trigger.triggerType" />
-                <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click="form.triggers.splice(idx, 1)" />
-              </div>
-              <div class="flex flex-col gap-3">
-                <template v-if="trigger.triggerType === 'time_schedule'">
-                  <div class="flex flex-col gap-2"><label class="text-sm font-medium">Cron Expression</label><InputText v-model="trigger.configuration.cron" placeholder="0 9 * * 1-5" /></div>
-                </template>
-                <template v-if="trigger.triggerType === 'webhook'">
-                  <div class="flex flex-col gap-2"><label class="text-sm font-medium">Webhook Path</label><InputText v-model="trigger.configuration.path" placeholder="/my-webhook" /></div>
-                  <div class="flex flex-col gap-2">
-                    <label class="text-sm font-medium">Parameters</label>
-                    <div v-for="(p, pi) in (trigger.configuration.parameters || [])" :key="pi" class="flex gap-2 items-center">
-                      <InputText v-model="p.name" placeholder="param_name" class="flex-1" />
-                      <Checkbox v-model="p.required" :binary="true" /><label class="text-sm">Required</label>
-                      <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click="trigger.configuration.parameters!.splice(pi, 1)" />
-                    </div>
-                    <Button label="Add Parameter" icon="pi pi-plus" text size="small" @click="trigger.configuration.parameters = [...(trigger.configuration.parameters || []), { name: '', required: false, description: '' }]" />
+          <div class="flex flex-col gap-5">
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+              <button
+                v-for="triggerType in triggerTypes"
+                :key="triggerType.type"
+                type="button"
+                class="rounded-xl border border-surface-200 bg-white p-4 text-left transition-colors hover:border-primary/40 hover:bg-surface-50"
+                @click="addTrigger(triggerType)"
+              >
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <p class="text-sm font-semibold text-surface-900">{{ triggerType.label }}</p>
+                    <p class="mt-1 text-xs text-surface-500">{{ triggerType.description }}</p>
                   </div>
-                </template>
-                <template v-if="trigger.triggerType === 'event'">
-                  <div class="flex flex-col gap-2"><label class="text-sm font-medium">Event Name</label><InputText v-model="trigger.configuration.eventName" /></div>
-                </template>
-                <template v-if="trigger.triggerType === 'exact_datetime'">
-                  <div class="flex flex-col gap-2"><label class="text-sm font-medium">Date &amp; Time</label><InputText v-model="trigger.configuration.datetime" type="datetime-local" /></div>
-                </template>
-              </div>
+                  <Tag :value="triggerType.category" severity="secondary" class="text-[11px]" />
+                </div>
+                <p v-if="triggerType.notes" class="mt-3 text-xs text-surface-400">{{ triggerType.notes }}</p>
+              </button>
             </div>
-            <div class="flex gap-2">
-              <Button label="Schedule" icon="pi pi-clock" severity="secondary" size="small" @click="addTrigger('time_schedule')" />
-              <Button label="Webhook" icon="pi pi-link" severity="secondary" size="small" @click="addTrigger('webhook')" />
-              <Button label="Event" icon="pi pi-bell" severity="secondary" size="small" @click="addTrigger('event')" />
-              <Button label="Exact Time" icon="pi pi-calendar" severity="secondary" size="small" @click="addTrigger('exact_datetime')" />
+
+            <div v-if="form.triggers.length === 0" class="rounded-xl border border-dashed border-surface-300 px-4 py-6 text-center text-sm text-surface-400">
+              No triggers added yet. Choose one of the trigger types above to start wiring workflow execution.
+            </div>
+
+            <div v-for="(trigger, idx) in form.triggers" :key="`${trigger.triggerType}-${idx}`" class="rounded-xl border border-surface-200 bg-white p-5">
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <Tag :value="formatTriggerType(trigger.triggerType)" severity="info" />
+                    <Tag :value="trigger.isActive === false ? 'Inactive' : 'Active'" :severity="trigger.isActive === false ? 'secondary' : 'success'" />
+                  </div>
+                  <p class="mt-2 text-sm text-surface-500">{{ formatTriggerConfiguration(trigger) }}</p>
+                </div>
+                <div class="flex items-center gap-3">
+                  <label class="flex items-center gap-2 text-sm text-surface-600">
+                    <Checkbox v-model="trigger.isActive" :binary="true" />
+                    Active
+                  </label>
+                  <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click="form.triggers.splice(idx, 1)" />
+                </div>
+              </div>
+
+              <div class="mt-4">
+                <WorkflowTriggerFields :trigger="trigger" />
+              </div>
             </div>
           </div>
         </template>
@@ -142,6 +152,8 @@
 </template>
 
 <script setup lang="ts">
+import { createTriggerDraft, formatTriggerConfiguration, formatTriggerType } from '~/utils/triggers';
+
 const { authHeaders } = useAuth();
 const headers = authHeaders();
 const route = useRoute();
@@ -169,8 +181,10 @@ const form = reactive({
 
 const { data: agentsData } = await useFetch('/api/agents', { headers });
 const { data: modelsData } = await useFetch('/api/admin/models', { headers });
+const { data: triggerTypesData } = await useFetch('/api/triggers/types', { headers });
 const agentOptions = computed(() => (agentsData.value as any)?.agents ?? []);
 const modelOptions = computed(() => (modelsData.value as any)?.models ?? []);
+const triggerTypes = computed(() => (triggerTypesData.value as any)?.types ?? []);
 
 function addStep() {
   form.steps.push({ name: `Step ${form.steps.length + 1}`, promptTemplate: '', agentId: null, model: null, reasoningEffort: null, workerRuntime: null, timeoutSeconds: 300 });
@@ -181,18 +195,8 @@ function moveStep(idx: number, dir: number) {
   [form.steps[idx], form.steps[newIdx]] = [form.steps[newIdx], form.steps[idx]];
 }
 
-function randomWebhookPath() {
-  const rand = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().substring(0, 8) : Math.random().toString(36).substring(2, 10);
-  return `/wh-${rand}`;
-}
-
-function addTrigger(type: string) {
-  const config: any = {};
-  if (type === 'time_schedule') config.cron = '';
-  if (type === 'webhook') { config.path = randomWebhookPath(); config.parameters = []; }
-  if (type === 'event') config.eventName = '';
-  if (type === 'exact_datetime') config.datetime = '';
-  form.triggers.push({ triggerType: type, configuration: config });
+function addTrigger(triggerType: any) {
+  form.triggers.push(createTriggerDraft(triggerType));
 }
 
 async function handleCreate() {

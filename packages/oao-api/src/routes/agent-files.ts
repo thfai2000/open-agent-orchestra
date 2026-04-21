@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { agentFiles, agents } from '../database/schema.js';
 import { authMiddleware, uuidSchema } from '@oao/shared';
+import { captureAgentHistoricalVersion } from '../services/versioning.js';
 
 const agentFilesRouter = new Hono();
 agentFilesRouter.use('/*', authMiddleware);
@@ -51,6 +52,8 @@ agentFilesRouter.post('/:agentId', async (c) => {
   });
   if (existing) return c.json({ error: 'File already exists at this path' }, 409);
 
+  await captureAgentHistoricalVersion(agent, user.userId);
+
   const [file] = await db
     .insert(agentFiles)
     .values({
@@ -59,6 +62,11 @@ agentFilesRouter.post('/:agentId', async (c) => {
       content: body.content,
     })
     .returning();
+
+  await db
+    .update(agents)
+    .set({ version: sql`${agents.version} + 1`, updatedAt: new Date() })
+    .where(eq(agents.id, agent.id));
 
   return c.json({ file }, 201);
 });
@@ -92,11 +100,18 @@ agentFilesRouter.put('/:agentId/:fileId', async (c) => {
   if (body.filePath) updateData.filePath = body.filePath;
   if (body.content !== undefined) updateData.content = body.content;
 
+  await captureAgentHistoricalVersion(agent, user.userId);
+
   const [updated] = await db
     .update(agentFiles)
     .set(updateData)
     .where(eq(agentFiles.id, fileId))
     .returning();
+
+  await db
+    .update(agents)
+    .set({ version: sql`${agents.version} + 1`, updatedAt: new Date() })
+    .where(eq(agents.id, agent.id));
 
   return c.json({ file: updated });
 });
@@ -117,7 +132,15 @@ agentFilesRouter.delete('/:agentId/:fileId', async (c) => {
   });
   if (!file) return c.json({ error: 'File not found' }, 404);
 
+  await captureAgentHistoricalVersion(agent, user.userId);
+
   await db.delete(agentFiles).where(eq(agentFiles.id, fileId));
+
+  await db
+    .update(agents)
+    .set({ version: sql`${agents.version} + 1`, updatedAt: new Date() })
+    .where(eq(agents.id, agent.id));
+
   return c.json({ success: true });
 });
 

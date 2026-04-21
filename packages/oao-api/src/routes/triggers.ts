@@ -4,6 +4,18 @@ import { eq, and, sql, inArray } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { triggers, workflows } from '../database/schema.js';
 import { authMiddleware, uuidSchema } from '@oao/shared';
+import { captureWorkflowHistoricalVersion } from '../services/versioning.js';
+import {
+  creatableTriggerTypeSchema,
+  getTriggerCatalog,
+} from '../services/trigger-definitions.js';
+import { serializeTrigger, serializeTriggers } from '../services/trigger-serialization.js';
+import {
+  createWorkflowTrigger,
+  deleteWorkflowTrigger,
+  updateWorkflowTrigger,
+} from '../services/trigger-manager.js';
+import { TriggerServiceError } from '../services/trigger-errors.js';
 
 const triggersRouter = new Hono();
 triggersRouter.use('/*', authMiddleware);
@@ -23,6 +35,11 @@ async function verifyTriggerAccess(
   return { trigger, workflow };
 }
 
+// GET /types — shared trigger catalog for the UI
+triggersRouter.get('/types', async (c) => {
+  return c.json({ types: getTriggerCatalog() });
+});
+
 // GET / — list triggers (workspace-scoped, requires workflowId)
 triggersRouter.get('/', async (c) => {
   const user = c.get('user');
@@ -38,7 +55,7 @@ triggersRouter.get('/', async (c) => {
       return c.json({ triggers: [] });
     }
     const triggerList = await db.query.triggers.findMany({ where: eq(triggers.workflowId, workflowId) });
-    return c.json({ triggers: triggerList });
+    return c.json({ triggers: serializeTriggers(triggerList) });
   }
 
   // List triggers for all workspace-visible workflows
@@ -55,14 +72,15 @@ triggersRouter.get('/', async (c) => {
   const triggerList = await db.query.triggers.findMany({
     where: inArray(triggers.workflowId, visibleIds),
   });
-  return c.json({ triggers: triggerList });
+  return c.json({ triggers: serializeTriggers(triggerList) });
 });
 
 // POST / — create trigger (workspace-scoped)
 const createTriggerSchema = z.object({
   workflowId: z.string().uuid(),
-  triggerType: z.enum(['time_schedule', 'exact_datetime', 'webhook', 'event']),
+  triggerType: creatableTriggerTypeSchema,
   configuration: z.record(z.unknown()).default({}),
+  isActive: z.boolean().optional(),
 });
 
 triggersRouter.post('/', async (c) => {
@@ -84,34 +102,34 @@ triggersRouter.post('/', async (c) => {
     return c.json({ error: 'Forbidden' }, 403);
   }
 
-  // Validate webhook path uniqueness
-  if (body.triggerType === 'webhook' && body.configuration.path) {
-    const existingTrigger = await db.query.triggers.findFirst({
-      where: and(
-        eq(triggers.triggerType, 'webhook'),
-        sql`configuration->>'path' = ${String(body.configuration.path)}`,
-      ),
-    });
-    if (existingTrigger) {
-      return c.json({ error: `Webhook path "${body.configuration.path}" is already in use` }, 409);
-    }
-  }
+  await captureWorkflowHistoricalVersion(workflow, user.userId);
 
-  const [trigger] = await db
-    .insert(triggers)
-    .values({
-      workflowId: body.workflowId,
+  let trigger;
+  try {
+    trigger = await createWorkflowTrigger({
+      workflow,
       triggerType: body.triggerType,
       configuration: body.configuration,
-    })
-    .returning();
+      isActive: body.isActive,
+    });
+  } catch (error) {
+    if (error instanceof TriggerServiceError) {
+      return c.json({ error: error.message, issues: error.issues }, error.status);
+    }
+    throw error;
+  }
 
-  return c.json({ trigger }, 201);
+  await db
+    .update(workflows)
+    .set({ version: sql`${workflows.version} + 1`, updatedAt: new Date() })
+    .where(eq(workflows.id, workflow.id));
+
+  return c.json({ trigger: serializeTrigger(trigger) }, 201);
 });
 
 // PUT /:id — update trigger configuration, type, or enabled state
 const updateTriggerSchema = z.object({
-  triggerType: z.enum(['time_schedule', 'exact_datetime', 'webhook', 'event']).optional(),
+  triggerType: creatableTriggerTypeSchema.optional(),
   configuration: z.record(z.unknown()).optional(),
   isActive: z.boolean().optional(),
 });
@@ -129,34 +147,34 @@ triggersRouter.put('/:id', async (c) => {
 
   const body = updateTriggerSchema.parse(await c.req.json());
 
-  const nextType = body.triggerType ?? access.trigger.triggerType;
-  const nextConfig = body.configuration ?? (access.trigger.configuration as Record<string, unknown>);
-
-  // Validate webhook path uniqueness if path changed
-  if (nextType === 'webhook' && nextConfig && typeof nextConfig.path === 'string' && nextConfig.path) {
-    const currentConfig = access.trigger.configuration as Record<string, unknown> | null;
-    const pathChanged = !currentConfig || currentConfig.path !== nextConfig.path;
-    if (pathChanged) {
-      const conflicting = await db.query.triggers.findFirst({
-        where: and(
-          eq(triggers.triggerType, 'webhook'),
-          sql`configuration->>'path' = ${String(nextConfig.path)}`,
-          sql`${triggers.id} <> ${id}`,
-        ),
-      });
-      if (conflicting) {
-        return c.json({ error: `Webhook path "${nextConfig.path}" is already in use` }, 409);
-      }
-    }
+  if (body.triggerType === undefined && body.configuration === undefined && body.isActive === undefined) {
+    return c.json({ trigger: serializeTrigger(access.trigger) });
   }
 
-  const updates: Partial<typeof triggers.$inferInsert> = {};
-  if (body.triggerType !== undefined) updates.triggerType = body.triggerType;
-  if (body.configuration !== undefined) updates.configuration = body.configuration;
-  if (body.isActive !== undefined) updates.isActive = body.isActive;
+  await captureWorkflowHistoricalVersion(access.workflow, user.userId);
 
-  const [trigger] = await db.update(triggers).set(updates).where(eq(triggers.id, id)).returning();
-  return c.json({ trigger });
+  let trigger;
+  try {
+    trigger = await updateWorkflowTrigger({
+      workflow: access.workflow,
+      trigger: access.trigger,
+      triggerType: body.triggerType,
+      configuration: body.configuration,
+      isActive: body.isActive,
+    });
+  } catch (error) {
+    if (error instanceof TriggerServiceError) {
+      return c.json({ error: error.message, issues: error.issues }, error.status);
+    }
+    throw error;
+  }
+
+  await db
+    .update(workflows)
+    .set({ version: sql`${workflows.version} + 1`, updatedAt: new Date() })
+    .where(eq(workflows.id, access.workflow.id));
+
+  return c.json({ trigger: serializeTrigger(trigger) });
 });
 
 // DELETE /:id (workspace-scoped)
@@ -171,7 +189,15 @@ triggersRouter.delete('/:id', async (c) => {
     return c.json({ error: 'Only admins can delete workspace-level workflow triggers' }, 403);
   }
 
-  await db.delete(triggers).where(eq(triggers.id, id));
+  await captureWorkflowHistoricalVersion(access.workflow, user.userId);
+
+  await deleteWorkflowTrigger({ workflow: access.workflow, trigger: access.trigger });
+
+  await db
+    .update(workflows)
+    .set({ version: sql`${workflows.version} + 1`, updatedAt: new Date() })
+    .where(eq(workflows.id, access.workflow.id));
+
   return c.json({ success: true });
 });
 

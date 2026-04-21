@@ -7,12 +7,44 @@ import { createLogger, encrypt } from '@oao/shared';
 import { db } from '../database/index.js';
 import {
   triggers, webhookRegistrations, agentDecisions, agentMemories,
-  workflows, workflowSteps, agentVariables, userVariables,
+  workflows, workflowSteps, agentVariables, userVariables, agents,
 } from '../database/schema.js';
 import { generateEmbedding } from './embedding-service.js';
 import { renderTemplate } from './jinja-renderer.js';
+import { TriggerServiceError } from './trigger-errors.js';
+import { creatableTriggerTypeSchema } from './trigger-definitions.js';
+import { createWorkflowTrigger, deleteWorkflowTrigger, updateWorkflowTrigger } from './trigger-manager.js';
+import {
+  captureAgentHistoricalVersion,
+  captureWorkflowHistoricalVersion,
+  captureVariableHistoricalVersion,
+} from './versioning.js';
 
 const logger = createLogger('agent-tools');
+
+async function loadWorkflowForHistory(workflowId: string) {
+  if (!db.query?.workflows?.findFirst) return null;
+  return db.query.workflows.findFirst({ where: eq(workflows.id, workflowId) });
+}
+
+async function bumpWorkflowVersion(workflowId: string) {
+  await db
+    .update(workflows)
+    .set({ version: sql`${workflows.version} + 1`, updatedAt: new Date() })
+    .where(eq(workflows.id, workflowId));
+}
+
+async function loadAgentForHistory(agentId: string) {
+  if (!db.query?.agents?.findFirst) return null;
+  return db.query.agents.findFirst({ where: eq(agents.id, agentId) });
+}
+
+async function bumpAgentVersion(agentId: string) {
+  await db
+    .update(agents)
+    .set({ version: sql`${agents.version} + 1`, updatedAt: new Date() })
+    .where(eq(agents.id, agentId));
+}
 
 /**
  * Context for tools that interact with the agent's own resources.
@@ -84,6 +116,11 @@ export function createAgentTools(
           ),
         });
 
+        const workflow = await loadWorkflowForHistory(context.workflowId);
+        if (workflow) {
+          await captureWorkflowHistoricalVersion(workflow, context.userId ?? null);
+        }
+
         if (existing) {
           await db
             .update(triggers)
@@ -92,6 +129,7 @@ export function createAgentTools(
               isActive: true,
             })
             .where(eq(triggers.id, existing.id));
+          await bumpWorkflowVersion(context.workflowId);
           return { updated: true, triggerId: existing.id, datetime, reason };
         }
 
@@ -104,6 +142,8 @@ export function createAgentTools(
             isActive: true,
           })
           .returning({ id: triggers.id });
+
+        await bumpWorkflowVersion(context.workflowId);
 
         return { created: true, triggerId: newTrigger.id, datetime, reason };
       },
@@ -150,6 +190,11 @@ export function createAgentTools(
         // Create
         if (!endpointPath) return { error: 'endpointPath is required for create action' };
 
+        const workflow = await loadWorkflowForHistory(context.workflowId);
+        if (workflow) {
+          await captureWorkflowHistoricalVersion(workflow, context.userId ?? null);
+        }
+
         // Create trigger first
         const [trigger] = await db
           .insert(triggers)
@@ -176,6 +221,8 @@ export function createAgentTools(
             isActive: true,
           })
           .returning({ id: webhookRegistrations.id });
+
+        await bumpWorkflowVersion(context.workflowId);
 
         return {
           created: true,
@@ -408,7 +455,7 @@ export function createAgentTools(
           .describe('Action to perform'),
         triggerData: z.object({
           triggerId: z.string().optional(),
-          triggerType: z.enum(['time_schedule', 'exact_datetime', 'webhook', 'event']).optional(),
+          triggerType: creatableTriggerTypeSchema.optional(),
           configuration: z.record(z.unknown()).optional(),
           isActive: z.boolean().optional(),
         }).optional().describe('Trigger data for add/update/delete actions'),
@@ -429,28 +476,66 @@ export function createAgentTools(
         if (!context?.workflowId) return { error: 'No workflow context available' };
         logger.info({ action, workflowId: context.workflowId }, 'Tool: edit_workflow');
 
+        const workflow = await loadWorkflowForHistory(context.workflowId);
+
         if (action === 'list_triggers') {
           const trigs = await db.query.triggers.findMany({ where: eq(triggers.workflowId, context.workflowId) });
           return { triggers: trigs };
         }
         if (action === 'add_trigger' && triggerData?.triggerType) {
-          const [t] = await db.insert(triggers).values({
-            workflowId: context.workflowId,
-            triggerType: triggerData.triggerType as 'time_schedule' | 'exact_datetime' | 'webhook' | 'event',
-            configuration: triggerData.configuration ?? {},
-            isActive: triggerData.isActive ?? true,
-          }).returning();
-          return { created: true, trigger: t };
+          if (!workflow) return { error: 'Workflow not found' };
+          if (workflow) await captureWorkflowHistoricalVersion(workflow, context.userId ?? null);
+          try {
+            const t = await createWorkflowTrigger({
+              workflow,
+              triggerType: triggerData.triggerType,
+              configuration: triggerData.configuration ?? {},
+              isActive: triggerData.isActive ?? true,
+            });
+            await bumpWorkflowVersion(context.workflowId);
+            return { created: true, trigger: t };
+          } catch (error) {
+            if (error instanceof TriggerServiceError) {
+              return { error: error.message, issues: error.issues };
+            }
+            throw error;
+          }
         }
         if (action === 'update_trigger' && triggerData?.triggerId) {
-          const updateData: Record<string, unknown> = {};
-          if (triggerData.configuration) updateData.configuration = triggerData.configuration;
-          if (triggerData.isActive !== undefined) updateData.isActive = triggerData.isActive;
-          const [t] = await db.update(triggers).set(updateData).where(eq(triggers.id, triggerData.triggerId)).returning();
-          return { updated: true, trigger: t };
+          if (!workflow) return { error: 'Workflow not found' };
+          if (workflow) await captureWorkflowHistoricalVersion(workflow, context.userId ?? null);
+          const existingTrigger = await db.query.triggers.findFirst({
+            where: and(eq(triggers.id, triggerData.triggerId), eq(triggers.workflowId, context.workflowId)),
+          });
+          if (!existingTrigger) return { error: 'Trigger not found' };
+
+          try {
+            const t = await updateWorkflowTrigger({
+              workflow,
+              trigger: existingTrigger,
+              triggerType: triggerData.triggerType,
+              configuration: triggerData.configuration,
+              isActive: triggerData.isActive,
+            });
+            await bumpWorkflowVersion(context.workflowId);
+            return { updated: true, trigger: t };
+          } catch (error) {
+            if (error instanceof TriggerServiceError) {
+              return { error: error.message, issues: error.issues };
+            }
+            throw error;
+          }
         }
         if (action === 'delete_trigger' && triggerData?.triggerId) {
-          await db.delete(triggers).where(eq(triggers.id, triggerData.triggerId));
+          if (!workflow) return { error: 'Workflow not found' };
+          if (workflow) await captureWorkflowHistoricalVersion(workflow, context.userId ?? null);
+          const existingTrigger = await db.query.triggers.findFirst({
+            where: and(eq(triggers.id, triggerData.triggerId), eq(triggers.workflowId, context.workflowId)),
+          });
+          if (!existingTrigger) return { error: 'Trigger not found' };
+
+          await deleteWorkflowTrigger({ workflow, trigger: existingTrigger });
+          await bumpWorkflowVersion(context.workflowId);
           return { deleted: true };
         }
         if (action === 'list_steps') {
@@ -458,6 +543,7 @@ export function createAgentTools(
           return { steps: s };
         }
         if (action === 'update_steps' && steps) {
+          if (workflow) await captureWorkflowHistoricalVersion(workflow, context.userId ?? null);
           await db.delete(workflowSteps).where(eq(workflowSteps.workflowId, context.workflowId));
           const inserted = [];
           for (const step of steps) {
@@ -473,10 +559,7 @@ export function createAgentTools(
             inserted.push(s);
           }
           // Increment workflow version
-          await db.update(workflows).set({
-            version: sql`version + 1`,
-            updatedAt: new Date(),
-          }).where(eq(workflows.id, context.workflowId));
+          await bumpWorkflowVersion(context.workflowId);
           return { updated: true, steps: inserted };
         }
         return { error: 'Invalid action or missing data' };
@@ -543,8 +626,11 @@ export function createAgentTools(
         if (!context?.agentId) return { error: 'No agent context available' };
         logger.info({ action, key, agentId: context.agentId }, 'Tool: edit_variables');
 
+        const agent = await loadAgentForHistory(context.agentId);
+
         if (action === 'create') {
           if (!value) return { error: 'Value is required for create' };
+          if (agent) await captureAgentHistoricalVersion(agent, context.userId ?? null);
           const [v] = await db.insert(agentVariables).values({
             agentId: context.agentId,
             key,
@@ -553,19 +639,71 @@ export function createAgentTools(
             injectAsEnvVariable: injectAsEnvVariable ?? false,
             description: description ?? null,
           }).returning({ id: agentVariables.id, key: agentVariables.key });
+          await bumpAgentVersion(context.agentId);
           return { created: true, variable: v };
         }
         if (action === 'update' && variableId) {
+          const existing = db.query?.agentVariables?.findFirst
+            ? await db.query.agentVariables.findFirst({
+                where: and(eq(agentVariables.id, variableId), eq(agentVariables.agentId, context.agentId)),
+              })
+            : null;
+
+          if (agent) await captureAgentHistoricalVersion(agent, context.userId ?? null);
+          if (existing) {
+            await captureVariableHistoricalVersion({
+              id: existing.id,
+              scope: 'agent',
+              scopeId: existing.agentId,
+              workspaceId: agent?.workspaceId ?? context.workspaceId ?? null,
+              key: existing.key,
+              variableType: existing.variableType,
+              credentialSubType: existing.credentialSubType,
+              injectAsEnvVariable: existing.injectAsEnvVariable,
+              description: existing.description,
+              version: existing.version,
+              createdAt: existing.createdAt,
+              updatedAt: existing.updatedAt,
+            }, context.userId ?? null);
+          }
+
           const updateData: Record<string, unknown> = { updatedAt: new Date() };
           if (value) updateData.valueEncrypted = encrypt(value);
           if (description !== undefined) updateData.description = description;
           if (variableType) updateData.variableType = variableType;
           if (injectAsEnvVariable !== undefined) updateData.injectAsEnvVariable = injectAsEnvVariable;
+          updateData.version = sql`${agentVariables.version} + 1`;
           const [v] = await db.update(agentVariables).set(updateData).where(eq(agentVariables.id, variableId)).returning({ id: agentVariables.id, key: agentVariables.key });
+          await bumpAgentVersion(context.agentId);
           return { updated: true, variable: v };
         }
         if (action === 'delete' && variableId) {
+          const existing = db.query?.agentVariables?.findFirst
+            ? await db.query.agentVariables.findFirst({
+                where: and(eq(agentVariables.id, variableId), eq(agentVariables.agentId, context.agentId)),
+              })
+            : null;
+
+          if (agent) await captureAgentHistoricalVersion(agent, context.userId ?? null);
+          if (existing) {
+            await captureVariableHistoricalVersion({
+              id: existing.id,
+              scope: 'agent',
+              scopeId: existing.agentId,
+              workspaceId: agent?.workspaceId ?? context.workspaceId ?? null,
+              key: existing.key,
+              variableType: existing.variableType,
+              credentialSubType: existing.credentialSubType,
+              injectAsEnvVariable: existing.injectAsEnvVariable,
+              description: existing.description,
+              version: existing.version,
+              createdAt: existing.createdAt,
+              updatedAt: existing.updatedAt,
+            }, context.userId ?? null, { deleted: true });
+          }
+
           await db.delete(agentVariables).where(eq(agentVariables.id, variableId));
+          await bumpAgentVersion(context.agentId);
           return { deleted: true };
         }
         return { error: 'Invalid action or missing data' };

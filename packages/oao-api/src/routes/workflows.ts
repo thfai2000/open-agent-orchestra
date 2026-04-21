@@ -4,6 +4,10 @@ import { db } from '../database/index.js';
 import { workflows, workflowSteps, triggers, workflowExecutions, users, agents } from '../database/schema.js';
 import { authMiddleware, uuidSchema } from '@oao/shared';
 import { emitEvent, EVENT_NAMES } from '../services/system-events.js';
+import { creatableTriggerTypeSchema } from '../services/trigger-definitions.js';
+import { serializeTriggers } from '../services/trigger-serialization.js';
+import { createWorkflowTrigger, deleteWorkflowTrigger } from '../services/trigger-manager.js';
+import { TriggerServiceError } from '../services/trigger-errors.js';
 import {
   captureWorkflowHistoricalVersion,
   getWorkflowVersionView,
@@ -172,8 +176,9 @@ const stepSchema = z.object({
 });
 
 const triggerSchema = z.object({
-  triggerType: z.enum(['time_schedule', 'exact_datetime', 'webhook', 'event']),
+  triggerType: creatableTriggerTypeSchema,
   configuration: z.record(z.unknown()).default({}),
+  isActive: z.boolean().optional(),
 });
 
 const createWorkflowSchema = z.object({
@@ -207,23 +212,6 @@ workflowsRouter.post('/', async (c) => {
     const agent = await db.query.agents.findFirst({ where: eq(agents.id, body.defaultAgentId) });
     if (!agent || agent.workspaceId !== user.workspaceId) {
       return c.json({ error: 'Default agent not found in this workspace' }, 400);
-    }
-  }
-
-  // Validate webhook path uniqueness if any webhook triggers
-  if (body.triggers) {
-    for (const t of body.triggers) {
-      if (t.triggerType === 'webhook' && t.configuration.path) {
-        const existingTrigger = await db.query.triggers.findFirst({
-          where: and(
-            eq(triggers.triggerType, 'webhook'),
-            sql`configuration->>'path' = ${String(t.configuration.path)}`,
-          ),
-        });
-        if (existingTrigger) {
-          return c.json({ error: `Webhook path "${t.configuration.path}" is already in use` }, 409);
-        }
-      }
     }
   }
 
@@ -263,23 +251,35 @@ workflowsRouter.post('/', async (c) => {
       )
       .returning();
 
-    // Create triggers if provided
-    let workflowTriggers: Array<typeof triggers.$inferSelect> = [];
-    if (body.triggers && body.triggers.length > 0) {
-      workflowTriggers = await tx
-        .insert(triggers)
-        .values(
-          body.triggers.map((t) => ({
-            workflowId: workflow.id,
-            triggerType: t.triggerType,
-            configuration: t.configuration,
-          })),
-        )
-        .returning();
-    }
-
-    return { workflow, steps, triggers: workflowTriggers };
+    return { workflow, steps };
   });
+
+  const createdTriggers: Array<typeof triggers.$inferSelect> = [];
+  try {
+    for (const triggerInput of body.triggers || []) {
+      const createdTrigger = await createWorkflowTrigger({
+        workflow: result.workflow,
+        triggerType: triggerInput.triggerType,
+        configuration: triggerInput.configuration,
+        isActive: triggerInput.isActive,
+      });
+      createdTriggers.push(createdTrigger);
+    }
+  } catch (error) {
+    for (const createdTrigger of createdTriggers.reverse()) {
+      try {
+        await deleteWorkflowTrigger({ workflow: result.workflow, trigger: createdTrigger });
+      } catch {
+        // Best-effort cleanup for partial workflow creation.
+      }
+    }
+    await db.delete(workflows).where(eq(workflows.id, result.workflow.id));
+
+    if (error instanceof TriggerServiceError) {
+      return c.json({ error: error.message, issues: error.issues }, error.status);
+    }
+    throw error;
+  }
 
   emitEvent({
     eventScope: body.scope === 'workspace' ? 'workspace' : 'user',
@@ -289,7 +289,11 @@ workflowsRouter.post('/', async (c) => {
     actorId: user.userId,
   });
 
-  return c.json(result, 201);
+  return c.json({
+    workflow: result.workflow,
+    steps: result.steps,
+    triggers: serializeTriggers(createdTriggers),
+  }, 201);
 });
 
 // GET /:id — workflow detail + steps + triggers + owner (workspace-scoped)
@@ -334,7 +338,7 @@ workflowsRouter.get('/:id', async (c) => {
       lastExecutionStatus: lastExec?.status ?? null,
     },
     steps,
-    triggers: workflowTriggers,
+    triggers: serializeTriggers(workflowTriggers),
   });
 });
 

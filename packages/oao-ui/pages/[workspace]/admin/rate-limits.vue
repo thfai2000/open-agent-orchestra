@@ -22,11 +22,11 @@
           <div class="flex flex-col gap-2"><label class="text-sm font-medium">Daily Credit Limit</label>
             <InputNumber v-model="settings.dailyCreditLimit" :min="0" />
           </div>
-          <div class="flex flex-col gap-2"><label class="text-sm font-medium">Max Concurrent Executions</label>
-            <InputNumber v-model="settings.maxConcurrentExecutions" :min="1" />
+          <div class="flex flex-col gap-2"><label class="text-sm font-medium">Weekly Credit Limit</label>
+            <InputNumber v-model="settings.weeklyCreditLimit" :min="0" />
           </div>
-          <div class="flex flex-col gap-2"><label class="text-sm font-medium">Max Step Timeout (seconds)</label>
-            <InputNumber v-model="settings.maxStepTimeout" :min="10" />
+          <div class="flex flex-col gap-2"><label class="text-sm font-medium">Monthly Credit Limit</label>
+            <InputNumber v-model="settings.monthlyCreditLimit" :min="0" />
           </div>
         </div>
         <div class="flex justify-end mt-4">
@@ -37,30 +37,90 @@
 
     <!-- Usage Summary -->
     <Card>
-      <template #title>Usage (Last 30 days)</template>
+      <template #title>
+        <div class="flex items-center justify-between gap-3">
+          <span>Daily Credit Usage (Last 30 days)</span>
+          <div class="flex flex-wrap gap-2">
+            <Button
+              v-for="option in usageScopeOptions"
+              :key="option.value"
+              :label="option.label"
+              :severity="selectedUsageScope === option.value ? 'contrast' : 'secondary'"
+              :outlined="selectedUsageScope !== option.value"
+              size="small"
+              @click="selectedUsageScope = option.value"
+            />
+          </div>
+        </div>
+      </template>
       <template #content>
-        <DataTable :value="usage" stripedRows :loading="loadingUsage">
-          <template #empty><div class="text-center py-8 text-surface-400">No usage data.</div></template>
-          <Column header="Date" style="width: 140px">
-            <template #body="{ data }"><span class="text-sm font-mono">{{ data.date }}</span></template>
-          </Column>
-          <Column header="Agent">
-            <template #body="{ data }"><span class="text-sm">{{ data.agentName || data.agentId?.substring(0, 8) + '…' }}</span></template>
-          </Column>
-          <Column header="Tokens Used" style="width: 140px">
-            <template #body="{ data }"><span class="text-sm font-mono">{{ (data.tokensUsed || 0).toLocaleString() }}</span></template>
-          </Column>
-          <Column header="Credits" style="width: 120px">
-            <template #body="{ data }"><span class="text-sm font-mono">{{ Number(data.creditsUsed || 0).toFixed(2) }}</span></template>
-          </Column>
-        </DataTable>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div class="rounded-xl border border-surface-200 bg-surface-50 p-4">
+            <p class="text-sm text-surface-500">Today</p>
+            <p class="mt-1 text-2xl font-semibold">{{ usageSummary.today }}</p>
+          </div>
+          <div class="rounded-xl border border-surface-200 bg-surface-50 p-4">
+            <p class="text-sm text-surface-500">This Week</p>
+            <p class="mt-1 text-2xl font-semibold">{{ usageSummary.week }}</p>
+          </div>
+          <div class="rounded-xl border border-surface-200 bg-surface-50 p-4">
+            <p class="text-sm text-surface-500">This Month</p>
+            <p class="mt-1 text-2xl font-semibold">{{ usageSummary.month }}</p>
+          </div>
+        </div>
+
+        <div v-if="loadingUsage" class="py-8 text-center text-surface-400">Loading usage…</div>
+        <template v-else>
+          <p class="mb-3 text-sm text-surface-500">Viewing {{ currentScopeLabel.toLowerCase() }} usage.</p>
+          <CreditUsageChart :data="dailyUsage" :empty-message="`No usage data yet for ${currentScopeLabel.toLowerCase()}.`" />
+
+          <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 mt-6">
+            <div>
+              <h2 class="text-lg font-semibold mb-3">Credits by Model</h2>
+              <div v-if="modelUsage.length > 0" class="flex flex-col gap-3">
+                <div v-for="entry in modelUsage" :key="entry.modelName" class="flex items-center gap-3">
+                  <div class="flex-1">
+                    <div class="mb-1 flex justify-between text-sm">
+                      <span class="font-medium">{{ entry.modelName }}</span>
+                      <span class="text-surface-500">{{ entry.totalCredits }} credits</span>
+                    </div>
+                    <ProgressBar :value="getModelPercent(entry.totalCredits)" :showValue="false" style="height: 6px" />
+                  </div>
+                  <Tag :value="`${entry.totalSessions} sessions`" severity="secondary" />
+                </div>
+              </div>
+              <p v-else class="py-8 text-center text-surface-400">No model usage data.</p>
+            </div>
+
+            <div>
+              <h2 class="text-lg font-semibold mb-3">Credits by User</h2>
+              <DataTable :value="userUsage" stripedRows>
+                <template #empty><div class="text-center py-8 text-surface-400">No user usage data.</div></template>
+                <Column header="User">
+                  <template #body="{ data }">
+                    <div>
+                      <p class="font-medium">{{ data.userName || data.userEmail || data.userId }}</p>
+                      <p v-if="data.userEmail" class="text-xs text-surface-500">{{ data.userEmail }}</p>
+                    </div>
+                  </template>
+                </Column>
+                <Column header="Credits" style="width: 140px">
+                  <template #body="{ data }"><span class="font-mono text-sm">{{ data.totalCredits }}</span></template>
+                </Column>
+                <Column header="Sessions" style="width: 120px">
+                  <template #body="{ data }"><span class="font-mono text-sm">{{ data.totalSessions }}</span></template>
+                </Column>
+              </DataTable>
+            </div>
+          </div>
+        </template>
       </template>
     </Card>
   </div>
 </template>
 
 <script setup lang="ts">
-const { authHeaders } = useAuth();
+const { authHeaders, user } = useAuth();
 const headers = authHeaders();
 const route = useRoute();
 const toast = useToast();
@@ -68,22 +128,52 @@ const ws = computed(() => (route.params.workspace as string) || 'default');
 
 const savingSettings = ref(false);
 const loadingUsage = ref(false);
+const selectedUsageScope = ref<'user' | 'workspace' | 'platform'>('workspace');
 
-const settings = reactive({ dailyCreditLimit: 100, maxConcurrentExecutions: 5, maxStepTimeout: 600 });
+const settings = reactive({ dailyCreditLimit: null as number | null, weeklyCreditLimit: null as number | null, monthlyCreditLimit: null as number | null });
 
-const { data: settingsData } = await useFetch('/api/quota/settings', { headers });
+const { data: settingsData } = await useFetch('/api/admin/quota', { headers });
 watch(settingsData, (d) => {
-  if (d) Object.assign(settings, (d as any).settings || d);
+  if (d) Object.assign(settings, (d as any).settings || {});
 }, { immediate: true });
 
-const { data: usageData, pending: loadingUsagePending } = await useFetch('/api/quota/usage?days=30', { headers });
-const usage = computed(() => (usageData.value as any)?.usage ?? []);
+const usageScopeOptions = computed(() => {
+  const options = [{ label: 'You', value: 'user' as const }, { label: 'Workspace', value: 'workspace' as const }];
+  if (user.value?.role === 'super_admin') {
+    options.push({ label: 'Platform', value: 'platform' as const });
+  }
+  return options;
+});
+const currentScopeLabel = computed(() => usageScopeOptions.value.find((option) => option.value === selectedUsageScope.value)?.label || 'Workspace');
+
+const { data: usageData, pending: loadingUsagePending } = await useFetch(computed(() => `/api/quota/usage?days=30&scope=${selectedUsageScope.value}`), { headers });
+const dailyUsage = computed(() => (usageData.value as any)?.dailyUsage ?? []);
+const modelUsage = computed(() => (usageData.value as any)?.modelUsage ?? []);
+const userUsage = computed(() => (usageData.value as any)?.userUsage ?? []);
+const usageSummary = computed(() => ({
+  today: (usageData.value as any)?.todayUsage?.totalCredits ?? '0',
+  week: (usageData.value as any)?.weekUsage?.totalCredits ?? '0',
+  month: (usageData.value as any)?.monthUsage?.totalCredits ?? '0',
+}));
 watchEffect(() => { loadingUsage.value = loadingUsagePending.value; });
+
+function getModelPercent(credits: string): number {
+  const max = Math.max(...modelUsage.value.map((entry: any) => Number(entry.totalCredits)), 1);
+  return (Number(credits) / max) * 100;
+}
 
 async function handleSaveSettings() {
   savingSettings.value = true;
   try {
-    await $fetch('/api/quota/settings', { method: 'PUT', headers, body: settings });
+    await $fetch('/api/admin/quota', {
+      method: 'PUT',
+      headers,
+      body: {
+        dailyCreditLimit: settings.dailyCreditLimit != null ? String(settings.dailyCreditLimit) : null,
+        weeklyCreditLimit: settings.weeklyCreditLimit != null ? String(settings.weeklyCreditLimit) : null,
+        monthlyCreditLimit: settings.monthlyCreditLimit != null ? String(settings.monthlyCreditLimit) : null,
+      },
+    });
     toast.add({ severity: 'success', summary: 'Settings saved', life: 3000 });
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e?.data?.error || 'Failed', life: 5000 });

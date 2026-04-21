@@ -391,6 +391,117 @@ describe('Webhook HMAC verification', () => {
 });
 
 // ======================================================================
+// JIRA WEBHOOK CALLBACK ROUTES
+// ======================================================================
+
+describe('Jira webhook callbacks', () => {
+  it('POST /api/jira-webhooks/:triggerId rejects an invalid callback token', async () => {
+    const res = await app.request(`/api/jira-webhooks/${TEST_TRIGGER_ID}?token=wrong-token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ issue: { id: '10001' } }),
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /api/jira-webhooks/:triggerId accepts a valid callback and dedupes repeated webhook ids', async () => {
+    const callbackToken = 'jira-callback-token';
+    const payload = JSON.stringify({
+      webhookEvent: 'jira:issue_updated',
+      issue: {
+        id: '10001',
+        key: 'OAO-1',
+        fields: {
+          summary: 'Trigger workflow',
+          status: { name: 'In Progress' },
+          assignee: { displayName: 'Ada' },
+          updated: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      timestamp: 1735689600000,
+    });
+
+    mockFindFirst
+      .mockResolvedValueOnce({
+        id: TEST_TRIGGER_ID,
+        workflowId: TEST_WORKFLOW_ID,
+        triggerType: 'jira_changes_notification',
+        isActive: true,
+        runtimeState: {
+          callbackTokenEncrypted: encrypt(callbackToken),
+        },
+        configuration: {
+          jiraSiteUrl: 'https://example.atlassian.net',
+          authMode: 'oauth2',
+          credentials: { accessTokenVariableKey: 'JIRA_ACCESS_TOKEN' },
+          jql: 'project = OAO',
+          events: ['jira:issue_updated'],
+          fieldIdsFilter: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        id: TEST_WORKFLOW_ID,
+        workspaceId: TEST_WORKSPACE_ID,
+        isActive: true,
+      })
+      .mockResolvedValueOnce({
+        id: TEST_TRIGGER_ID,
+        workflowId: TEST_WORKFLOW_ID,
+        triggerType: 'jira_changes_notification',
+        isActive: true,
+        runtimeState: {
+          callbackTokenEncrypted: encrypt(callbackToken),
+        },
+        configuration: {
+          jiraSiteUrl: 'https://example.atlassian.net',
+          authMode: 'oauth2',
+          credentials: { accessTokenVariableKey: 'JIRA_ACCESS_TOKEN' },
+          jql: 'project = OAO',
+          events: ['jira:issue_updated'],
+          fieldIdsFilter: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        id: TEST_WORKFLOW_ID,
+        workspaceId: TEST_WORKSPACE_ID,
+        isActive: true,
+      });
+
+    const { emitEvent } = await import('../src/services/system-events.js');
+    vi.mocked(emitEvent).mockClear();
+
+    const firstRes = await app.request(`/api/jira-webhooks/${TEST_TRIGGER_ID}?token=${callbackToken}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Atlassian-Webhook-Identifier': 'jira-event-001',
+      },
+      body: payload,
+    });
+
+    expect(firstRes.status).toBe(202);
+    expect(emitEvent).toHaveBeenCalledTimes(1);
+
+    const secondRes = await app.request(`/api/jira-webhooks/${TEST_TRIGGER_ID}?token=${callbackToken}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Atlassian-Webhook-Identifier': 'jira-event-001',
+      },
+      body: payload,
+    });
+
+    expect(secondRes.status).toBe(200);
+    const secondJson = await secondRes.json();
+    expect(secondJson.status).toBe('already_processed');
+    expect(emitEvent).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ======================================================================
 // AUTH ROUTES — Login, Register, Change Password
 // ======================================================================
 

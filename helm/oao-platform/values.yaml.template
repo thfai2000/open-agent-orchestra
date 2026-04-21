@@ -107,6 +107,7 @@ config:
   NODE_ENV: production
   LOG_LEVEL: info
   AGENT_API_PORT: "4002"
+  PUBLIC_API_BASE_URL: "https://oao.example.local"
   MAX_CONCURRENT_AGENTS: "10"
   DEFAULT_AGENT_QUOTA: "50"
   DEFAULT_AGENT_MODEL: "gpt-4.1"

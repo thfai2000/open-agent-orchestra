@@ -605,6 +605,18 @@ describe('Trigger routes — authenticated', () => {
     expect(res.status).toBe(200);
   });
 
+  it('GET /api/triggers/types returns the shared trigger catalog including Jira triggers', async () => {
+    const token = await getToken();
+
+    const res = await app.request('/api/triggers/types', { headers: authHeaders(token) });
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(Array.isArray(json.types)).toBe(true);
+    expect(json.types.some((entry: any) => entry.type === 'jira_changes_notification')).toBe(true);
+    expect(json.types.some((entry: any) => entry.type === 'jira_polling')).toBe(true);
+  });
+
   it('POST /api/triggers creates a trigger', async () => {
     const token = await getToken();
     // Workflow lookup

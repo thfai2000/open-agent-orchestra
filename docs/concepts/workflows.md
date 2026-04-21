@@ -6,7 +6,7 @@ A **workflow** is an ordered sequence of steps, each executed as a separate Copi
 
 ```mermaid
 graph LR
-    T["Trigger<br/>(cron / webhook / event)"] --> S1[Step 1]
+    T["Trigger<br/>(schedule / webhook / event / Jira)"] --> S1[Step 1]
     S1 -->|precedent_output| S2[Step 2]
     S2 -->|precedent_output| S3["Step ..."]
     S3 -->|precedent_output| SN[Step N]
@@ -38,6 +38,14 @@ Workflows keep immutable version history for the workflow definition, ordered st
 - Historical pages are read-only and are the target for execution detail links, so users can inspect the exact workflow version that produced an execution
 
 Workflow history captures the state before each edit so older versions remain navigable even after later changes.
+
+Trigger create, update, and delete operations also increment the workflow version, whether they originate from the UI, the API, or built-in agent tools.
+
+## Execution Detail View
+
+Workflow execution detail pages summarize the run with styled metadata blocks for trigger source, workflow, runtime, start time, duration, and step progress.
+
+Expanded step panels use a dark detail surface so logs, prompt text, reasoning output, and markdown previews remain readable. The selected step tab intentionally switches to a light active state for contrast, and markdown tables/code blocks are themed consistently across Output and Reasoning tabs.
 
 ## Steps
 
@@ -168,12 +176,16 @@ Triggers define **when** a workflow executes. Workflows can also be run manually
 
 | Type | Description | Configuration |
 |------|-------------|---------------|
-| **Cron Schedule** | Recurring execution | Cron expression (e.g., `0 9 * * 1-5`) |
+| **Schedule** | Recurring execution | Cron expression (e.g., `0 9 * * 1-5`) |
 | **Exact Datetime** | One-shot at a specific time | ISO 8601 datetime (auto-deactivates after firing) |
-| **Webhook** | External HTTP call with parameter validation | URL path + HMAC-SHA256 secret + parameter definitions |
-| **Event** | React to system events | Event name + optional conditions |
+| **Webhook** | Trigger from user-provided inputs and reusable parameter definitions | Path + parameter definitions |
+| **System Event** | React to platform events | Event name + optional scope + conditions |
+| **Jira Changes Notification** | Register an Atlassian dynamic webhook filtered by JQL | Jira site URL + OAuth 2.0 credential references + JQL + Jira event list |
+| **Jira Polling** | Poll Jira search results on an interval with overlap-window dedupe | Jira site URL + API token or OAuth 2.0 credential references + JQL + interval |
 
-Triggers can be **edited in place**. Use `PUT /api/triggers/:id` (or the **Edit** button in the workflow UI) to update the trigger type, configuration, or enabled state. Webhook paths must still be unique across all webhook triggers.
+The workflow create and detail pages now use a **trigger catalog** plus an inline editor, so new trigger types can be added without changing the page layout. Existing trigger cards also surface sanitized runtime summaries such as Jira registration state, webhook expiration, last sync time, or the last successful polling time.
+
+Triggers can be **edited in place**. Use `PUT /api/triggers/:id` (or the inline editor in the workflow UI) to update the trigger type, configuration, or enabled state. Webhook paths must still be unique across all webhook triggers.
 
 ### Manual Run
 
@@ -201,6 +213,22 @@ When a webhook fires (`POST /api/webhooks/:path`), the request body is validated
 - **Personal Access Token** (PAT) with `webhook:trigger` scope
 - **5-minute replay protection**
 - **Event ID deduplication**
+
+### Jira Changes Notification
+
+Jira Changes Notification uses Atlassian dynamic webhooks instead of OAO polling the Jira REST API directly.
+
+- `PUBLIC_API_BASE_URL` must point at the public OAO API origin because Jira must call back into `/api/jira-webhooks/:triggerId?token=...`
+- Jira API tokens are **not** enough for dynamic webhook registration; this trigger requires Jira OAuth 2.0 credentials
+- OAO refreshes Jira webhook registrations before they expire and dedupes repeated Atlassian delivery identifiers
+
+### Jira Polling
+
+Jira Polling is designed for cases where webhook registration is not available or not desired.
+
+- Supports Jira API tokens or Jira OAuth 2.0 credentials
+- Queries Jira search on the configured interval
+- Uses an overlap window plus a recent-issue map so eventual consistency and controller restarts do not create obvious gaps or duplicate executions
 
 ### Cron Expression Examples
 

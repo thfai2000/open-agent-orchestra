@@ -40,7 +40,12 @@ ENCRYPTION_KEY=your-32-byte-hex-key-here
 
 # GitHub Copilot SDK
 GITHUB_TOKEN=your-github-token
+
+# Public API origin used for Jira change-notification callbacks
+PUBLIC_API_BASE_URL=http://localhost:4002
 ```
+
+For Docker Desktop Kubernetes with ingress, set `PUBLIC_API_BASE_URL=http://oao.local`. Jira change-notification triggers need this value because Atlassian must reach the OAO API callback endpoint from outside the controller loop.
 
 ## 3. Pre-Build Checks
 
@@ -56,6 +61,9 @@ npm run lint
 
 # Tests
 npm test
+
+# Coverage summary + HTML report
+npm run test:coverage
 ```
 
 ## 4. Build Docker Images
@@ -82,6 +90,9 @@ coreImage: oao-core:1.17.1
 
 ui:
   image: oao-ui:1.17.1
+
+config:
+  PUBLIC_API_BASE_URL: "http://oao.local"
 ```
 
 Run the deploy script (development convenience):
@@ -187,6 +198,7 @@ After code changes, always follow this cycle:
 npx tsc --noEmit -p packages/shared/tsconfig.json
 npx tsc --noEmit -p packages/oao-api/tsconfig.json
 npm run lint && npm test
+npm run test:coverage
 
 # 2. Bump version and rebuild
 BUILD_TAG=1.17.1 ./build.sh

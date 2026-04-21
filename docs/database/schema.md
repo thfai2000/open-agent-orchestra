@@ -10,6 +10,7 @@ erDiagram
     workspaces ||--o{ agents : "contains"
     workspaces ||--o{ workflows : "contains"
     workspaces ||--o{ workspace_variables : "has variables"
+    workspaces ||--o{ variable_versions : "scopes variable history"
     workspaces ||--o{ models : "has models"
     workspaces ||--o| workspace_security_settings : "has security settings"
     workspaces ||--o{ auth_providers : "has auth providers"
@@ -17,12 +18,14 @@ erDiagram
     users ||--o{ agents : "creates"
     users ||--o{ workflows : "creates"
     users ||--o{ user_variables : "has variables"
+    users ||--o{ variable_versions : "changes"
     users ||--o{ credit_usage : "tracks usage"
     users ||--o{ personal_access_tokens : "has PATs"
 
     agents ||--o{ agent_variables : "has variables"
     agents ||--o{ mcp_server_configs : "has MCP configs"
     agents ||--o{ agent_files : "has files"
+    agents ||--o{ variable_versions : "owns variable history"
     agents ||--o{ webhook_registrations : "has webhooks"
     agents ||--o{ agent_decisions : "has decisions"
     agents ||--o{ agent_memories : "has memories"
@@ -47,6 +50,7 @@ erDiagram
 | `trigger_type` | `time_schedule`, `exact_datetime`, `webhook`, `event`, `manual` |
 | `agent_source_type` | `github_repo`, `database` |
 | `variable_type` | `property`, `credential` |
+| `variable_scope` | `agent`, `user`, `workspace` |
 | `reasoning_effort` | `low`, `medium`, `high` |
 | `worker_runtime` | `static`, `ephemeral` |
 | `resource_scope` | `user`, `workspace` |

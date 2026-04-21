@@ -4,7 +4,7 @@ OAO emits **system events** for every significant action in the platform. These 
 
 - **Trigger workflows** via event-type triggers (match by event name + optional data conditions)
 - **Audit** platform activity
-- **Drive the webhook pipeline** — `webhook.received` events are processed by the Controller to enqueue workflow executions
+- **Drive the webhook pipeline** — `webhook.received` events from generic webhooks, Jira callbacks, and Manual Run are processed by the Controller to enqueue workflow executions
 
 ## Event List
 
@@ -24,7 +24,7 @@ OAO emits **system events** for every significant action in the platform. These 
 | **Step** | `step.completed` | A workflow step completed successfully |
 | | `step.failed` | A workflow step failed |
 | **Trigger** | `trigger.fired` | A trigger fired (cron, datetime, or event match) |
-| **Webhook** | `webhook.received` | A webhook was received (from external call or Manual Run) |
+| **Webhook** | `webhook.received` | A webhook-style trigger input was received (generic webhook, Jira callback, or Manual Run) |
 | **User** | `user.login` | A user logged in |
 | | `user.registered` | A new user registered |
 | **Variable** | `variable.created` | A variable was created |
@@ -71,8 +71,13 @@ This trigger fires only when an agent's status changes to `active`.
 
 The `webhook.received` event is special — it drives the webhook execution pipeline:
 
-1. **External webhook** → `POST /api/webhooks/:path` → inserts `webhook.received` event
-2. **Manual Run** → `POST /api/workflows/:id/run` → inserts `webhook.received` event
-3. **Controller** → polls `system_events` → processes `webhook.received` → enqueues workflow execution
+1. **External webhook** → `POST /api/webhooks/:registrationId` → inserts `webhook.received` event
+2. **Jira callback** → `POST /api/jira-webhooks/:triggerId?token=...` → inserts `webhook.received` event with `triggerType: "jira_changes_notification"`
+3. **Manual Run** → `POST /api/workflows/:id/run` → inserts `webhook.received` event
+4. **Controller** → polls `system_events` → processes `webhook.received` → enqueues workflow execution
 
-Both external webhooks and Manual Run flow through the same event pipeline, ensuring consistent processing and auditability.
+`webhook.received.eventData` commonly includes `triggerId`, `workflowId`, `triggerType`, `source`, `authMethod`, `eventId`, `payload`, `inputs`, and `receivedAt`.
+
+Jira polling is different: `jira_polling` triggers do not emit `webhook.received`; the controller polls Jira directly and enqueues executions with `triggerMetadata.type = "jira_polling"`.
+
+Generic webhooks, Jira callbacks, and Manual Run all flow through the same event pipeline, ensuring consistent processing and auditability.

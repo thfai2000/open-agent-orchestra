@@ -4,7 +4,7 @@ Variables, Admin & Rate Limit, Audit & Memory, and Auth & Token tables. For the 
 
 ## Variable Tables
 
-All variable tables share the same structure: `key` (UPPER_SNAKE_CASE), `valueEncrypted` (AES-256-GCM), `variableType` (credential/property), `injectAsEnvVariable`.
+All variable tables share the same structure: `key` (UPPER_SNAKE_CASE), `valueEncrypted` (AES-256-GCM), `variableType` (credential/property), `injectAsEnvVariable`, and a monotonically increasing `version`.
 
 ### agent_variables
 
@@ -17,6 +17,7 @@ All variable tables share the same structure: `key` (UPPER_SNAKE_CASE), `valueEn
 | description | varchar(300) | |
 | variableType | variable_type | Default: `credential` |
 | injectAsEnvVariable | boolean | |
+| version | integer | Auto-incremented on each update |
 | createdAt, updatedAt | timestamp | |
 | | | UNIQUE(agentId, key) |
 
@@ -31,6 +32,7 @@ All variable tables share the same structure: `key` (UPPER_SNAKE_CASE), `valueEn
 | description | varchar(300) | |
 | variableType | variable_type | Default: `credential` |
 | injectAsEnvVariable | boolean | |
+| version | integer | Auto-incremented on each update |
 | createdAt, updatedAt | timestamp | |
 | | | UNIQUE(userId, key) |
 
@@ -45,8 +47,26 @@ All variable tables share the same structure: `key` (UPPER_SNAKE_CASE), `valueEn
 | description | varchar(300) | |
 | variableType | variable_type | Default: `credential` |
 | injectAsEnvVariable | boolean | |
+| version | integer | Auto-incremented on each update |
 | createdAt, updatedAt | timestamp | |
 | | | UNIQUE(workspaceId, key) |
+
+### variable_versions
+
+Immutable metadata snapshots for variables across all three scopes.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| variableId | UUID | Original variable ID (no FK so history survives deletion) |
+| scope | variable_scope | `agent`, `user`, or `workspace` |
+| scopeId | UUID | Owner ID for the variable's scope |
+| workspaceId | UUID | Workspace context for access checks |
+| version | integer | Snapshot version number |
+| snapshot | jsonb | Variable metadata snapshot, including deleted state |
+| changedBy | UUID | User who made the change |
+| createdAt | timestamp | |
+| | | UNIQUE(scope, variableId, version) |
 
 ## Admin & Rate Limit Tables
 

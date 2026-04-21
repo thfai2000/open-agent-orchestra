@@ -12,6 +12,7 @@
   },
   "scripts": {
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage --coverage.reporter=text-summary --coverage.reporter=html",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
@@ -24,6 +25,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^2.1.0",
     "@types/node": "^25.5.2",
     "typescript": "^5.6.0"
   }

@@ -42,18 +42,55 @@
         <NuxtLink :to="`/${ws}/executions/${retryResult.id}`" class="text-primary hover:underline ml-2">View →</NuxtLink>
       </Message>
 
-      <!-- Compact metadata (inline, no Cards) -->
-      <div class="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-surface-600 mb-6">
-        <span><span class="text-surface-400">Triggered:</span> {{ formatTriggerType(execution.triggerMetadata?.type) }}</span>
-        <span class="flex items-center gap-1">
-          <span class="text-surface-400">Workflow:</span>
-          <NuxtLink v-if="workflowVersionPath" :to="workflowVersionPath" class="text-primary hover:underline">{{ workflowName || execution.workflowId.substring(0, 8) + '…' }}</NuxtLink>
-          <span v-else>—</span>
-        </span>
-        <span><span class="text-surface-400">Runtime:</span> {{ snapshotConfig?.workerRuntime || 'static' }}</span>
-        <span><span class="text-surface-400">Started:</span> {{ execution.startedAt ? new Date(execution.startedAt).toLocaleString() : '—' }}</span>
-        <span><span class="text-surface-400">Duration:</span> {{ duration }}</span>
-        <span><span class="text-surface-400">Steps:</span> {{ execution.currentStep || 0 }} / {{ execution.totalSteps || steps.length }}</span>
+      <!-- Styled execution metadata -->
+      <div class="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div class="rounded-xl border border-surface-200 bg-gradient-to-b from-white to-surface-50 px-4 py-3">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-surface-500">Triggered</p>
+          <p class="mt-1 text-sm font-semibold text-surface-900">{{ formatTriggerType(execution.triggerMetadata?.type) }}</p>
+        </div>
+        <div class="rounded-xl border border-surface-200 bg-gradient-to-b from-white to-surface-50 px-4 py-3">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-surface-500">Workflow</p>
+          <div class="mt-1 text-sm font-semibold text-surface-900">
+            <NuxtLink v-if="workflowVersionPath" :to="workflowVersionPath" class="text-primary hover:underline">{{ workflowName || execution.workflowId.substring(0, 8) + '…' }}</NuxtLink>
+            <span v-else>—</span>
+          </div>
+        </div>
+        <div class="rounded-xl border border-surface-200 bg-gradient-to-b from-white to-surface-50 px-4 py-3">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-surface-500">Runtime</p>
+          <p class="mt-1 text-sm font-semibold capitalize text-surface-900">{{ snapshotConfig?.workerRuntime || 'static' }}</p>
+        </div>
+        <div class="rounded-xl border border-surface-200 bg-gradient-to-b from-white to-surface-50 px-4 py-3">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-surface-500">Started</p>
+          <p class="mt-1 text-sm font-semibold text-surface-900">{{ execution.startedAt ? new Date(execution.startedAt).toLocaleString() : '—' }}</p>
+        </div>
+        <div class="rounded-xl border border-surface-200 bg-gradient-to-b from-white to-surface-50 px-4 py-3">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-surface-500">Duration</p>
+          <p class="mt-1 text-sm font-semibold text-surface-900">{{ duration }}</p>
+        </div>
+        <div class="rounded-xl border border-surface-200 bg-gradient-to-b from-white to-surface-50 px-4 py-3">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-surface-500">Steps</p>
+          <p class="mt-1 text-sm font-semibold text-surface-900">{{ execution.currentStep || 0 }} / {{ execution.totalSteps || steps.length }}</p>
+        </div>
+      </div>
+
+      <div class="mb-6">
+        <h2 class="text-lg font-semibold mb-2">Versions Used</h2>
+        <div class="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-surface-600">
+          <span class="flex items-center gap-1">
+            <span class="text-surface-400">Workflow:</span>
+            <NuxtLink v-if="workflowVersionPath" :to="workflowVersionPath" class="text-primary hover:underline">
+              {{ workflowName || execution.workflowId.substring(0, 8) + '…' }} v{{ execution.workflowVersion || '?' }}
+            </NuxtLink>
+            <span v-else>v{{ execution.workflowVersion || '?' }}</span>
+          </span>
+          <span v-for="entry in stepVersionDetails" :key="entry.stepId" class="flex items-center gap-1">
+            <span class="text-surface-400">{{ entry.stepName }}:</span>
+            <NuxtLink v-if="entry.path" :to="entry.path" class="text-primary hover:underline">
+              {{ entry.agentName }} v{{ entry.version }}
+            </NuxtLink>
+            <span v-else>{{ entry.agentName }} v{{ entry.version }}</span>
+          </span>
+        </div>
       </div>
 
       <!-- Retry info -->
@@ -103,8 +140,8 @@
                   :to="getAgentVersionPath(step)!"
                   class="ml-1 text-xs text-primary hover:underline"
                   @click.stop
-                >(Agent v{{ step.agentVersion }})</NuxtLink>
-                <span v-else-if="step.agentVersion" class="ml-1 text-xs text-surface-400">(Agent v{{ step.agentVersion }})</span>
+                >({{ step.agentSnapshot?.name || 'Agent' }} v{{ step.agentVersion }})</NuxtLink>
+                <span v-else-if="step.agentVersion" class="ml-1 text-xs text-surface-400">({{ step.agentSnapshot?.name || 'Agent' }} v{{ step.agentVersion }})</span>
               </p>
             </div>
 
@@ -118,56 +155,56 @@
           </div>
 
           <!-- Expanded Step Content -->
-          <div v-if="selectedStepId === step.id" class="border-t border-surface-200 bg-surface-900">
+          <div v-if="selectedStepId === step.id" class="border-t border-surface-200 bg-slate-950">
             <!-- Agent snapshot info bar -->
-            <div v-if="step.agentSnapshot" class="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 border-b border-surface-700 text-xs text-surface-400">
-              <span>Agent: <strong class="text-surface-200">{{ step.agentSnapshot.name }}</strong></span>
-              <span>Version: <strong class="text-surface-200">v{{ step.agentSnapshot.version || step.agentVersion || '?' }}</strong></span>
-              <span v-if="step.agentSnapshot.sourceType">Source: <strong class="text-surface-200">{{ step.agentSnapshot.sourceType }}</strong></span>
+            <div v-if="step.agentSnapshot" class="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-slate-800 px-4 py-2 text-xs text-slate-400">
+              <span>Agent: <strong class="text-slate-100">{{ step.agentSnapshot.name }}</strong></span>
+              <span>Version: <strong class="text-slate-100">v{{ step.agentSnapshot.version || step.agentVersion || '?' }}</strong></span>
+              <span v-if="step.agentSnapshot.sourceType">Source: <strong class="text-slate-100">{{ step.agentSnapshot.sourceType }}</strong></span>
             </div>
             <!-- Step detail tabs -->
-            <div class="flex border-b border-surface-700">
+            <div class="flex flex-wrap gap-2 border-b border-slate-800 bg-slate-900/80 px-3 pt-3">
               <button
                 v-for="tab in stepTabs"
                 :key="tab.id"
-                class="px-4 py-2 text-xs font-medium transition-colors"
-                :class="activeTab === tab.id ? 'text-white border-b-2 border-primary-400 bg-surface-800' : 'text-surface-400 hover:text-surface-200'"
+                class="rounded-t-lg border px-4 py-2 text-xs font-semibold transition-colors"
+                :class="activeTab === tab.id ? 'border-white bg-white text-slate-950 shadow-sm' : 'border-transparent text-slate-400 hover:bg-slate-800 hover:text-slate-100'"
                 @click="activeTab = tab.id"
               >
                 {{ tab.label }}
-                <span v-if="tab.id === 'logs' && getStepLogs(step).length > 0" class="ml-1 inline-flex items-center justify-center w-5 h-5 rounded-full bg-surface-700 text-surface-300 text-[10px] leading-none align-middle">{{ getStepLogs(step).length }}</span>
+                <span v-if="tab.id === 'logs' && getStepLogs(step).length > 0" class="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-700 text-[10px] leading-none text-slate-200 align-middle">{{ getStepLogs(step).length }}</span>
               </button>
             </div>
 
             <!-- Tab: Output -->
             <div v-if="activeTab === 'output'" class="max-h-[500px] overflow-y-auto p-4">
-              <div v-if="!step.output" class="text-surface-500 text-xs">
+              <div v-if="!step.output" class="text-xs text-slate-500">
                 {{ step.status === 'running' ? 'Step in progress…' : step.status === 'pending' ? 'Waiting…' : 'No output.' }}
               </div>
-              <div v-else class="markdown-dark">
-                <MarkdownRenderer :content="step.output" />
+              <div v-else class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                <MarkdownRenderer :content="step.output" theme="dark" />
               </div>
             </div>
 
             <!-- Tab: Process Logs (tool calls, events) -->
             <div v-if="activeTab === 'logs'" class="max-h-[500px] overflow-y-auto font-mono text-xs">
-              <div v-if="getStepLogs(step).length === 0" class="p-4 text-surface-500">
+              <div v-if="getStepLogs(step).length === 0" class="p-4 text-slate-500">
                 {{ step.status === 'pending' ? 'Waiting for step to start…' : step.status === 'running' ? 'Waiting for events…' : 'No process logs recorded.' }}
               </div>
               <div v-else>
                 <div
                   v-for="(log, li) in getStepLogs(step)"
                   :key="li"
-                  class="flex gap-2 px-4 py-1 hover:bg-surface-800 border-b border-surface-800 text-surface-100"
+                  class="flex gap-2 border-b border-slate-800 px-4 py-1 text-slate-100 hover:bg-slate-900"
                 >
-                  <span class="text-surface-500 flex-shrink-0 w-20">{{ formatLogTime(log.timestamp) }}</span>
+                  <span class="w-20 flex-shrink-0 text-slate-500">{{ formatLogTime(log.timestamp) }}</span>
                   <span v-if="log.type === 'tool_call_start'" class="text-blue-400">
                     <i class="pi pi-wrench mr-1"></i>Tool call: <span class="text-blue-300 font-semibold">{{ log.tool }}</span>
-                    <span v-if="log.args" class="text-surface-500 ml-2">{{ formatArgs(log.args) }}</span>
+                    <span v-if="log.args" class="ml-2 text-slate-500">{{ formatArgs(log.args) }}</span>
                   </span>
                   <span v-else-if="log.type === 'tool_call_end'" class="text-green-400">
                     <i class="pi pi-check-circle mr-1"></i>Tool completed: {{ log.tool }}
-                    <span v-if="log.result !== undefined" class="text-surface-400 ml-1">({{ log.result ? 'success' : 'failed' }})</span>
+                    <span v-if="log.result !== undefined" class="ml-1 text-slate-400">({{ log.result ? 'success' : 'failed' }})</span>
                   </span>
                   <span v-else-if="log.type === 'turn_start'" class="text-purple-400">
                     <i class="pi pi-play mr-1"></i>Turn started
@@ -175,54 +212,54 @@
                   <span v-else-if="log.type === 'turn_end'" class="text-purple-400">
                     <i class="pi pi-stop mr-1"></i>Turn ended
                   </span>
-                  <span v-else-if="log.type === 'info'" class="text-surface-300">
+                  <span v-else-if="log.type === 'info'" class="text-slate-300">
                     <i class="pi pi-info-circle mr-1"></i>{{ log.message }}
                   </span>
-                  <span v-else class="text-surface-400">{{ log.type }}: {{ log.message || log.content }}</span>
+                  <span v-else class="text-slate-400">{{ log.type }}: {{ log.message || log.content }}</span>
                 </div>
               </div>
             </div>
 
             <!-- Tab: Reasoning / LLM Response (streamed delta messages) -->
             <div v-if="activeTab === 'reasoning'" class="max-h-[500px] overflow-y-auto p-4">
-              <div v-if="!getReasoningText(step)" class="text-surface-500 text-xs">
+              <div v-if="!getReasoningText(step)" class="text-xs text-slate-500">
                 {{ step.status === 'running' ? 'Waiting for model response…' : 'No reasoning content available.' }}
               </div>
-              <div v-else class="markdown-dark">
-                <MarkdownRenderer :content="getReasoningText(step)" />
+              <div v-else class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                <MarkdownRenderer :content="getReasoningText(step)" theme="dark" />
               </div>
             </div>
 
             <!-- Tab: Prompt -->
             <div v-if="activeTab === 'prompt'" class="max-h-[500px] overflow-y-auto p-4">
-              <div v-if="!step.resolvedPrompt" class="text-surface-500 text-xs">
+              <div v-if="!step.resolvedPrompt" class="text-xs text-slate-500">
                 {{ step.status === 'pending' ? 'Prompt not yet resolved.' : 'No prompt data.' }}
               </div>
-              <pre v-else class="text-xs whitespace-pre-wrap text-surface-200 leading-relaxed">{{ step.resolvedPrompt }}</pre>
+              <pre v-else class="whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-xs leading-relaxed text-slate-200">{{ step.resolvedPrompt }}</pre>
             </div>
 
             <!-- Tab: Trace -->
             <div v-if="activeTab === 'trace'" class="max-h-[500px] overflow-y-auto p-4">
-              <div v-if="!step.reasoningTrace" class="text-surface-500 text-xs">No trace data.</div>
+              <div v-if="!step.reasoningTrace" class="text-xs text-slate-500">No trace data.</div>
               <div v-else>
-                <div class="flex flex-wrap items-center gap-3 text-xs text-surface-400 mb-3">
-                  <span v-if="getTraceVal(step.reasoningTrace, 'model')">Model: <strong class="text-surface-200">{{ getTraceVal(step.reasoningTrace, 'model') }}</strong></span>
-                  <span v-if="getTraceVal(step.reasoningTrace, 'reasoningEffort')">Effort: <strong class="text-surface-200">{{ getTraceVal(step.reasoningTrace, 'reasoningEffort') }}</strong></span>
-                  <span v-if="getTraceVal(step.reasoningTrace, 'workerRuntime')">Runtime: <strong class="text-surface-200">{{ getTraceVal(step.reasoningTrace, 'workerRuntime') }}</strong></span>
-                  <span v-if="getTraceVal(step.reasoningTrace, 'promptTokens')">Prompt Tokens: <strong class="text-surface-200">{{ getTraceVal(step.reasoningTrace, 'promptTokens') }}</strong></span>
-                  <span v-if="getTraceVal(step.reasoningTrace, 'completionTokens')">Completion Tokens: <strong class="text-surface-200">{{ getTraceVal(step.reasoningTrace, 'completionTokens') }}</strong></span>
+                <div class="mb-3 flex flex-wrap items-center gap-3 text-xs text-slate-400">
+                  <span v-if="getTraceVal(step.reasoningTrace, 'model')">Model: <strong class="text-slate-200">{{ getTraceVal(step.reasoningTrace, 'model') }}</strong></span>
+                  <span v-if="getTraceVal(step.reasoningTrace, 'reasoningEffort')">Effort: <strong class="text-slate-200">{{ getTraceVal(step.reasoningTrace, 'reasoningEffort') }}</strong></span>
+                  <span v-if="getTraceVal(step.reasoningTrace, 'workerRuntime')">Runtime: <strong class="text-slate-200">{{ getTraceVal(step.reasoningTrace, 'workerRuntime') }}</strong></span>
+                  <span v-if="getTraceVal(step.reasoningTrace, 'promptTokens')">Prompt Tokens: <strong class="text-slate-200">{{ getTraceVal(step.reasoningTrace, 'promptTokens') }}</strong></span>
+                  <span v-if="getTraceVal(step.reasoningTrace, 'completionTokens')">Completion Tokens: <strong class="text-slate-200">{{ getTraceVal(step.reasoningTrace, 'completionTokens') }}</strong></span>
                 </div>
                 <div v-if="getToolCalls(step.reasoningTrace).length > 0" class="flex flex-col gap-1">
-                  <div v-for="(tc, ti) in getToolCalls(step.reasoningTrace)" :key="ti" class="bg-surface-800 p-2 rounded text-xs">
+                  <div v-for="(tc, ti) in getToolCalls(step.reasoningTrace)" :key="ti" class="rounded bg-slate-900 p-2 text-xs">
                     <p class="font-medium text-blue-300"><i class="pi pi-wrench mr-1"></i>{{ tc.tool || tc.name }}</p>
-                    <pre v-if="tc.args" class="whitespace-pre-wrap mt-1 text-surface-400 max-h-24 overflow-y-auto">{{ typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args, null, 2) }}</pre>
+                    <pre v-if="tc.args" class="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap text-slate-400">{{ typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args, null, 2) }}</pre>
                   </div>
                 </div>
               </div>
             </div>
 
             <!-- Error -->
-            <div v-if="step.error" class="border-t border-surface-700 px-4 py-3 bg-red-950 text-red-300 text-xs">
+            <div v-if="step.error" class="border-t border-slate-800 bg-red-950 px-4 py-3 text-xs text-red-300">
               <i class="pi pi-exclamation-triangle mr-1"></i>{{ step.error }}
             </div>
           </div>
@@ -237,6 +274,7 @@
 <script setup lang="ts">
 import { useToast } from 'primevue/usetoast';
 import { useExecutionStream } from '~/composables/useExecutionStream';
+import { formatTriggerType } from '~/utils/triggers';
 
 const { authHeaders } = useAuth();
 const headers = authHeaders();
@@ -274,6 +312,18 @@ const workflowVersionPath = computed(() => {
   if (!execution.value?.workflowVersion) return `/${ws.value}/workflows/${execution.value.workflowId}`;
   return `/${ws.value}/workflows/${execution.value.workflowId}/v/${execution.value.workflowVersion}`;
 });
+const stepVersionDetails = computed(() => steps.value.flatMap((step: any, index: number) => {
+  const version = step?.agentVersion || step?.agentSnapshot?.version;
+  if (!version) return [];
+
+  return [{
+    stepId: step.id,
+    stepName: getStepName(step, index),
+    agentName: step?.agentSnapshot?.name || 'Agent',
+    version,
+    path: getAgentVersionPath(step),
+  }];
+}));
 
 const breadcrumbs = computed(() => [
   { label: 'Home', route: `/${ws.value}` },
@@ -406,10 +456,6 @@ function statusSeverity(s: string) {
   return { completed: 'success', running: 'warn', pending: 'secondary', failed: 'danger', skipped: 'secondary', cancelled: 'secondary' }[s] || 'secondary';
 }
 
-function formatTriggerType(t?: string) {
-  return { time_schedule: 'Schedule', webhook: 'Webhook', event: 'Event', manual: 'Manual' }[t || 'manual'] || t || 'Manual';
-}
-
 function stepDuration(step: any): string | null {
   if (!step.startedAt) return null;
   const end = step.completedAt ? new Date(step.completedAt) : new Date();
@@ -493,19 +539,3 @@ watch(steps, (newSteps) => {
   }
 }, { immediate: true });
 </script>
-
-<style>
-/* Dark-theme markdown overrides for step content panels */
-.markdown-dark .markdown-body { color: #e2e8f0; font-size: 0.8125rem; }
-.markdown-dark .markdown-body h1,
-.markdown-dark .markdown-body h2,
-.markdown-dark .markdown-body h3 { color: #f1f5f9; }
-.markdown-dark .markdown-body code { background: #334155; color: #e2e8f0; }
-.markdown-dark .markdown-body pre { background: #0f172a; }
-.markdown-dark .markdown-body blockquote { border-left-color: #475569; color: #94a3b8; }
-.markdown-dark .markdown-body th { background: #1e293b; color: #e2e8f0; }
-.markdown-dark .markdown-body td { border-color: #334155; }
-.markdown-dark .markdown-body th { border-color: #334155; }
-.markdown-dark .markdown-body a { color: #a78bfa; }
-.markdown-dark .markdown-body hr { border-top-color: #334155; }
-</style>

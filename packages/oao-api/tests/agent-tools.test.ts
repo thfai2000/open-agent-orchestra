@@ -343,6 +343,13 @@ describe('agent-tools: edit_workflow', () => {
   });
 
   it('adds a trigger to the workflow', async () => {
+    mockDb.query.workflows.findFirst.mockResolvedValueOnce({
+      id: TEST_CONTEXT.workflowId,
+      userId: TEST_CONTEXT.userId,
+      workspaceId: '550e8400-e29b-41d4-a716-446655440001',
+      scope: 'user',
+    });
+
     const { createAgentTools } = await import('../src/services/agent-tools.js');
     const tools = createAgentTools(new Map(), TEST_CONTEXT);
     const editWorkflow = tools.find((t: { name: string }) => t.name === 'edit_workflow') as { handler: Function };
@@ -357,6 +364,7 @@ describe('agent-tools: edit_workflow', () => {
     });
 
     expect(mockDb.insert).toHaveBeenCalled();
+    expect(mockDb.update).toHaveBeenCalled();
     expect(result).toBeDefined();
     expect(result.created).toBe(true);
   });

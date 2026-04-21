@@ -60,6 +60,8 @@
 </template>
 
 <script setup lang="ts">
+import { formatTriggerType } from '~/utils/triggers';
+
 const { authHeaders } = useAuth();
 const headers = authHeaders();
 const route = useRoute();
@@ -87,6 +89,5 @@ onStreamEvent('execution.cancelled', () => { refresh(); });
 
 function onPage(event: any) { page.value = event.page + 1; }
 function onRowsChange(newRows: number) { limit.value = newRows; page.value = 1; }
-function formatTriggerType(t: string) { return { time_schedule: 'Schedule', webhook: 'Webhook', event: 'Event', manual: 'Manual', exact_datetime: 'Exact Time' }[t] || t; }
 function getStatusSeverity(s: string) { return { completed: 'success', running: 'warn', pending: 'warn', failed: 'danger', cancelled: 'secondary' }[s] || 'secondary'; }
 </script>

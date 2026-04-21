@@ -16,14 +16,14 @@
             <Tag :value="agent.status" :severity="agent.status === 'active' ? 'success' : agent.status === 'paused' ? 'warn' : 'danger'" />
             <Tag :value="agent.scope === 'workspace' ? 'Workspace' : 'Personal'" severity="info" />
             <Tag :value="agent.sourceType === 'database' ? 'Database' : 'Git'" severity="secondary" />
-            <Tag :value="'v' + (agent.version || 1)" severity="secondary" />
           </div>
-          <div class="flex items-center gap-2 mt-3">
-            <span class="text-xs font-medium text-surface-500 uppercase tracking-wide">History</span>
+          <div class="flex items-center gap-2 mt-3 text-sm">
+            <span class="text-surface-500">Version:</span>
             <NuxtLink v-if="olderAgentVersion" :to="agentVersionPath(olderAgentVersion.version)">
               <Button icon="pi pi-chevron-left" severity="secondary" outlined size="small" aria-label="Previous version" />
             </NuxtLink>
             <Button v-else icon="pi pi-chevron-left" severity="secondary" outlined size="small" disabled aria-label="Previous version" />
+            <span class="font-medium text-surface-700">v{{ agent.version || 1 }} <span class="text-surface-500">(latest)</span></span>
             <Button icon="pi pi-chevron-right" severity="secondary" outlined size="small" disabled aria-label="Next version" />
           </div>
           <p v-if="agent.description" class="text-surface-500 mt-2">{{ agent.description }}</p>
@@ -234,7 +234,7 @@ const savingEdit = ref(false);
 // Load agent
 const { data: agentData, refresh: refreshAgent } = await useFetch(computed(() => `/api/agents/${agentId.value}`), { headers });
 const agent = computed(() => (agentData.value as any)?.agent ?? null);
-const { data: agentVersionsData } = await useFetch(computed(() => `/api/agents/${agentId.value}/versions?limit=100`), { headers });
+const { data: agentVersionsData, refresh: refreshAgentVersions } = await useFetch(computed(() => `/api/agents/${agentId.value}/versions?limit=100`), { headers });
 const agentVersions = computed(() => (agentVersionsData.value as any)?.versions ?? []);
 const olderAgentVersion = computed(() => {
   const currentVersion = agent.value?.version;
@@ -316,12 +316,30 @@ async function handleSaveEdit() {
   editError.value = '';
   savingEdit.value = true;
   try {
-    await $fetch(`/api/agents/${agentId.value}`, { method: 'PUT', headers, body: editForm });
+    const body: Record<string, unknown> = {
+      name: editForm.name.trim(),
+      description: editForm.description.trim(),
+      builtinToolsEnabled: [...editForm.builtinToolsEnabled],
+    };
+
+    if (agent.value?.sourceType !== 'database') {
+      const gitRepoUrl = editForm.gitRepoUrl.trim();
+      const gitBranch = editForm.gitBranch.trim();
+      const agentFilePath = editForm.agentFilePath.trim();
+      const skillsDirectory = editForm.skillsDirectory.trim();
+
+      if (gitRepoUrl) body.gitRepoUrl = gitRepoUrl;
+      if (gitBranch) body.gitBranch = gitBranch;
+      if (agentFilePath) body.agentFilePath = agentFilePath;
+      body.skillsDirectory = skillsDirectory || null;
+    }
+
+    await $fetch(`/api/agents/${agentId.value}`, { method: 'PUT', headers, body });
     toast.add({ severity: 'success', summary: 'Saved', detail: 'Agent updated', life: 3000 });
     editing.value = false;
-    await refreshAgent();
+    await Promise.all([refreshAgent(), refreshAgentVersions()]);
   } catch (e: any) {
-    editError.value = e?.data?.error || 'Failed to save.';
+    editError.value = e?.data?.details?.[0]?.message || e?.data?.error || 'Failed to save.';
   } finally {
     savingEdit.value = false;
   }
@@ -331,7 +349,7 @@ async function toggleStatus() {
   const newStatus = agent.value.status === 'active' ? 'paused' : 'active';
   await $fetch(`/api/agents/${agentId.value}`, { method: 'PUT', headers, body: { status: newStatus } });
   toast.add({ severity: 'success', summary: 'Updated', detail: `Agent ${newStatus}`, life: 3000 });
-  await refreshAgent();
+  await Promise.all([refreshAgent(), refreshAgentVersions()]);
 }
 
 function confirmDelete() {
@@ -363,7 +381,7 @@ async function handleCreateFile() {
     toast.add({ severity: 'success', summary: 'Created', detail: 'File added', life: 3000 });
     showFileForm.value = false;
     fileForm.filePath = ''; fileForm.content = '';
-    await refreshFiles();
+    await Promise.all([refreshFiles(), refreshAgent(), refreshAgentVersions()]);
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e?.data?.error || 'Failed', life: 5000 });
   } finally {
@@ -382,7 +400,7 @@ async function handleSaveFile() {
     await $fetch(`/api/agent-files/${agentId.value}/${editFileForm.id}`, { method: 'PUT', headers, body: { filePath: editFileForm.filePath, content: editFileForm.content } });
     toast.add({ severity: 'success', summary: 'Saved', detail: 'File updated', life: 3000 });
     editingFile.value = false;
-    await refreshFiles();
+    await Promise.all([refreshFiles(), refreshAgent(), refreshAgentVersions()]);
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e?.data?.error || 'Failed', life: 5000 });
   } finally {
@@ -397,7 +415,7 @@ async function handleDeleteFile(fileId: string) {
     accept: async () => {
       await $fetch(`/api/agent-files/${agentId.value}/${fileId}`, { method: 'DELETE', headers });
       toast.add({ severity: 'success', summary: 'Deleted', detail: 'File removed', life: 3000 });
-      await refreshFiles();
+      await Promise.all([refreshFiles(), refreshAgent(), refreshAgentVersions()]);
     },
   });
 }
