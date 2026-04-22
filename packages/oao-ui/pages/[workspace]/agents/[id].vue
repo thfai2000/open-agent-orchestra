@@ -53,16 +53,61 @@
               <div class="flex flex-col gap-2"><label class="text-sm font-medium">Agent File Path</label><InputText v-model="editForm.agentFilePath" /></div>
               <div class="flex flex-col gap-2"><label class="text-sm font-medium">Skills Directory</label><InputText v-model="editForm.skillsDirectory" /></div>
             </template>
+            <div class="flex flex-col gap-2 md:col-span-2">
+              <label class="text-sm font-medium">mcp.json.template</label>
+              <Textarea v-model="editForm.mcpJsonTemplate" rows="8" class="font-mono text-sm" placeholder='{"mcpServers": {"example": {"command": "npx", "args": ["-y", "some-mcp-server"]}}}' />
+              <small class="text-surface-400">The default OAO Platform MCP server is auto-included and authenticated as the current signed-in user via a short-lived JWT. Only add extra MCP servers here.</small>
+            </div>
           </div>
           <Divider />
-          <div class="flex flex-col gap-2">
-            <label class="text-sm font-medium">Built-in Tools</label>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <div v-for="tool in availableTools" :key="tool" class="flex items-center gap-2">
-                <Checkbox v-model="editForm.builtinToolsEnabled" :inputId="'edit-'+tool" :value="tool" />
-                <label :for="'edit-'+tool" class="text-sm">{{ formatToolName(tool) }}</label>
+          <div class="flex flex-col gap-3">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <label class="text-sm font-medium">Tool Selection</label>
+                <p class="text-xs text-surface-400 mt-1">Built-ins and MCP tools are grouped by provider. Changing the selection stores an explicit allowlist for this agent.</p>
+              </div>
+              <Button label="Refresh Catalog" icon="pi pi-refresh" severity="secondary" outlined size="small" :loading="toolCatalogPending" @click="refreshToolCatalog(true)" />
+            </div>
+            <Message v-if="toolCatalogError" severity="warn" :closable="false">{{ toolCatalogError }}</Message>
+            <Message v-else-if="toolCatalogUnresolved.length > 0" severity="warn" :closable="false">
+              Some previously selected tools are no longer discoverable: {{ toolCatalogUnresolved.join(', ') }}
+            </Message>
+            <div v-if="toolCatalogPending && !toolCatalog" class="text-sm text-surface-500">Inspecting tool catalog...</div>
+            <div v-else-if="toolCatalogGroups.length > 0" class="flex flex-col gap-3">
+              <div v-for="group in toolCatalogGroups" :key="group.key" class="rounded-lg border border-surface-200 p-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <h4 class="font-medium">{{ group.label }}</h4>
+                      <Tag :value="group.sourceLabel" :severity="group.sourceSeverity" />
+                      <span class="ml-1 inline-flex items-center justify-center w-5 h-5 rounded-full bg-surface-700 text-surface-300 text-[10px] leading-none align-middle">{{ group.tools.length }}</span>
+                      <Tag v-if="group.error" value="Unavailable" severity="danger" />
+                    </div>
+                    <p v-if="group.description" class="text-xs text-surface-400 mt-1">{{ group.description }}</p>
+                    <p v-if="group.authNote" class="text-xs text-surface-400 mt-1">{{ group.authNote }}</p>
+                    <p v-if="group.error" class="text-xs text-red-500 mt-1">{{ group.error }}</p>
+                  </div>
+                </div>
+                <div v-if="group.sections.length > 0" class="mt-4 flex flex-col gap-4">
+                  <div v-for="section in group.sections" :key="`${group.key}:${section.label || 'tools'}`" class="flex flex-col gap-2">
+                    <div v-if="section.label" class="text-[11px] font-semibold uppercase tracking-wide text-surface-500">{{ section.label }}</div>
+                    <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <label v-for="tool in section.tools" :key="tool.name" class="flex items-start gap-3 rounded-md border border-surface-200 p-3">
+                        <Checkbox v-model="selectedToolNames" :inputId="`${group.key}-${tool.name}`" :value="tool.name" />
+                        <span class="flex-1">
+                          <span class="flex flex-wrap items-center gap-2">
+                            <span class="text-sm font-medium">{{ tool.label }}</span>
+                            <Tag v-if="tool.requiresPermission" value="Write" severity="warn" />
+                          </span>
+                          <p v-if="tool.description" class="text-xs text-surface-400 mt-1">{{ tool.description }}</p>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
+            <div v-else class="text-sm text-surface-500">No tools discovered yet.</div>
           </div>
           <div class="flex justify-end gap-2 mt-4">
             <Button label="Cancel" severity="secondary" @click="editing = false" />
@@ -101,7 +146,7 @@
               <Card>
                 <template #content>
                   <div class="flex flex-col gap-3">
-                    <div><span class="text-surface-500 text-sm">Built-in Tools</span><p class="font-medium">{{ agent.builtinToolsEnabled?.length ?? 0 }} enabled</p></div>
+                    <div><span class="text-surface-500 text-sm">Selected Tools</span><p class="font-medium">{{ configuredToolCount }} enabled</p></div>
                     <div><span class="text-surface-500 text-sm">Last Session</span><p class="font-medium">{{ agent.lastSessionAt ? new Date(agent.lastSessionAt).toLocaleString() : 'Never' }}</p></div>
                     <div><span class="text-surface-500 text-sm">Created</span><p class="font-medium">{{ new Date(agent.createdAt).toLocaleString() }}</p></div>
                   </div>
@@ -220,6 +265,12 @@
 </template>
 
 <script setup lang="ts">
+import {
+  buildExplicitAgentToolSelection,
+  countAgentSelectedTools,
+  extractAgentSelectedToolNames,
+} from '~/composables/useAgentToolSelection';
+
 const { authHeaders } = useAuth();
 const headers = authHeaders();
 const route = useRoute();
@@ -234,6 +285,82 @@ const activeTab = ref('overview');
 const editing = ref(false);
 const editError = ref('');
 const savingEdit = ref(false);
+const configuredToolCount = computed(() => countAgentSelectedTools(agent.value?.builtinToolsEnabled));
+
+type ToolCatalogSource = 'builtin' | 'platform' | 'stored_mcp' | 'template_mcp';
+
+interface ToolCatalogTool {
+  name: string;
+  label?: string;
+  description?: string;
+  group?: string | null;
+  requiresPermission?: boolean;
+}
+
+interface ToolCatalogGroup {
+  key: string;
+  label: string;
+  source: ToolCatalogSource;
+  description?: string | null;
+  authNote?: string | null;
+  error?: string;
+  tools: ToolCatalogTool[];
+}
+
+interface ToolCatalogResponse {
+  selectionMode: 'legacy' | 'explicit';
+  effectiveSelectedToolNames: string[];
+  unresolvedSelectedToolNames: string[];
+  groups: ToolCatalogGroup[];
+}
+
+const toolCatalog = ref<ToolCatalogResponse | null>(null);
+const toolCatalogPending = ref(false);
+const toolCatalogError = ref('');
+const selectedToolNames = ref<string[]>([]);
+const initialSelectedToolNames = ref<string[]>([]);
+const initialToolSelectionPayload = ref<unknown>([]);
+const toolCatalogRequestId = ref(0);
+const toolCatalogRefreshTimer = ref<ReturnType<typeof setTimeout> | null>(null);
+
+const toolCatalogHasErrors = computed(() => (toolCatalog.value?.groups ?? []).some((group) => Boolean(group.error)));
+const toolCatalogUnresolved = computed(() => toolCatalog.value?.unresolvedSelectedToolNames ?? []);
+const toolSelectionDirty = computed(() => {
+  const current = [...selectedToolNames.value].sort();
+  const initial = [...initialSelectedToolNames.value].sort();
+  return JSON.stringify(current) !== JSON.stringify(initial);
+});
+
+const toolCatalogGroups = computed(() => {
+  const builtinGroupOrder = ['Workflow', 'Knowledge', 'Variables', 'Network'];
+
+  return (toolCatalog.value?.groups ?? []).map((group) => {
+    const tools = (group.tools ?? []).map((tool) => ({
+      name: tool.name,
+      label: tool.label || formatToolName(tool.name),
+      description: tool.description || '',
+      group: tool.group || null,
+      requiresPermission: Boolean(tool.requiresPermission),
+    }));
+
+    const sections = group.source === 'builtin'
+      ? builtinGroupOrder
+          .map((sectionLabel) => ({
+            label: sectionLabel,
+            tools: tools.filter((tool) => tool.group === sectionLabel),
+          }))
+          .filter((section) => section.tools.length > 0)
+      : [{ label: null, tools }];
+
+    return {
+      ...group,
+      tools,
+      sections,
+      sourceLabel: sourceLabel(group.source),
+      sourceSeverity: sourceSeverity(group.source),
+    };
+  });
+});
 
 // Load agent
 const { data: agentData, refresh: refreshAgent } = await useFetch(computed(() => `/api/agents/${agentId.value}`), { headers });
@@ -298,32 +425,130 @@ function scopeSeverity(s: string) { return { workspace: 'secondary', user: 'info
 // Edit form
 const editForm = reactive({
   name: '', description: '', gitRepoUrl: '', gitBranch: '', agentFilePath: '', skillsDirectory: '',
-  builtinToolsEnabled: [] as string[],
+  mcpJsonTemplate: '',
 });
 
-const availableTools = [
-  'schedule_next_workflow_execution', 'manage_webhook_trigger', 'record_decision',
-  'memory_store', 'memory_retrieve', 'edit_workflow', 'read_variables', 'edit_variables', 'simple_http_request',
-];
-
 function formatToolName(t: string) { return t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()); }
+
+function sourceLabel(source: ToolCatalogSource) {
+  return {
+    builtin: 'Built-in',
+    platform: 'OAO Platform',
+    stored_mcp: 'Stored MCP',
+    template_mcp: 'Template MCP',
+  }[source];
+}
+
+function sourceSeverity(source: ToolCatalogSource) {
+  return {
+    builtin: 'info',
+    platform: 'success',
+    stored_mcp: 'secondary',
+    template_mcp: 'warn',
+  }[source];
+}
+
+function applyToolSelectionSnapshot(names: string[]) {
+  const normalizedNames = Array.from(new Set(names)).sort((left, right) => left.localeCompare(right));
+  selectedToolNames.value = normalizedNames;
+  initialSelectedToolNames.value = [...normalizedNames];
+}
+
+async function refreshToolCatalog(immediate = false) {
+  if (!editing.value || !agent.value) return;
+
+  if (toolCatalogRefreshTimer.value) {
+    clearTimeout(toolCatalogRefreshTimer.value);
+    toolCatalogRefreshTimer.value = null;
+  }
+
+  if (!immediate) {
+    toolCatalogRefreshTimer.value = setTimeout(() => {
+      void refreshToolCatalog(true);
+    }, 500);
+    return;
+  }
+
+  const requestId = ++toolCatalogRequestId.value;
+  toolCatalogPending.value = true;
+  toolCatalogError.value = '';
+
+  try {
+    const catalog = await $fetch<ToolCatalogResponse>(`/api/agents/${agentId.value}/tool-catalog`, {
+      method: 'POST',
+      headers,
+      body: {
+        mcpJsonTemplate: editForm.mcpJsonTemplate.trim() ? editForm.mcpJsonTemplate : null,
+      },
+    });
+
+    if (requestId !== toolCatalogRequestId.value) return;
+    toolCatalog.value = catalog;
+
+    if (!toolSelectionDirty.value) {
+      applyToolSelectionSnapshot(catalog.effectiveSelectedToolNames);
+    }
+  } catch (e: any) {
+    if (requestId !== toolCatalogRequestId.value) return;
+    toolCatalogError.value = e?.data?.error || 'Failed to inspect the tool catalog.';
+  } finally {
+    if (requestId === toolCatalogRequestId.value) {
+      toolCatalogPending.value = false;
+    }
+  }
+}
 
 watch(agent, (a) => {
   if (a) Object.assign(editForm, {
     name: a.name, description: a.description || '', gitRepoUrl: a.gitRepoUrl || '',
     gitBranch: a.gitBranch || '', agentFilePath: a.agentFilePath || '', skillsDirectory: a.skillsDirectory || '',
-    builtinToolsEnabled: [...(a.builtinToolsEnabled || [])],
+    mcpJsonTemplate: a.mcpJsonTemplate || '',
   });
+  initialToolSelectionPayload.value = a?.builtinToolsEnabled ?? [];
+  applyToolSelectionSnapshot(extractAgentSelectedToolNames(a?.builtinToolsEnabled));
+  toolCatalog.value = null;
+  toolCatalogError.value = '';
 }, { immediate: true });
+
+watch(editing, (isEditing) => {
+  if (isEditing) {
+    void refreshToolCatalog(true);
+    return;
+  }
+
+  if (toolCatalogRefreshTimer.value) {
+    clearTimeout(toolCatalogRefreshTimer.value);
+    toolCatalogRefreshTimer.value = null;
+  }
+});
+
+watch(() => editForm.mcpJsonTemplate, () => {
+  if (!editing.value) return;
+  void refreshToolCatalog(false);
+});
+
+onBeforeUnmount(() => {
+  if (toolCatalogRefreshTimer.value) {
+    clearTimeout(toolCatalogRefreshTimer.value);
+  }
+});
 
 async function handleSaveEdit() {
   editError.value = '';
   savingEdit.value = true;
   try {
+    if (toolSelectionDirty.value && (toolCatalogError.value || toolCatalogHasErrors.value)) {
+      editError.value = 'Resolve tool catalog errors before saving tool selection changes.';
+      return;
+    }
+
     const body: Record<string, unknown> = {
       name: editForm.name.trim(),
       description: editForm.description.trim(),
-      builtinToolsEnabled: [...editForm.builtinToolsEnabled],
+      builtinToolsEnabled: toolSelectionDirty.value
+        ? buildExplicitAgentToolSelection(selectedToolNames.value)
+        : initialToolSelectionPayload.value,
+      mcpJsonTemplate: editForm.mcpJsonTemplate.trim() ? editForm.mcpJsonTemplate : null,
     };
 
     if (agent.value?.sourceType !== 'database') {

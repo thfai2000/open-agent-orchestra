@@ -3,8 +3,12 @@ import { eq, desc, and, or, sql, arrayContains } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { workflows, workflowSteps, triggers, workflowExecutions, users, agents } from '../database/schema.js';
 import { authMiddleware, uuidSchema } from '@oao/shared';
+import {
+  platformCreateWorkflowBodySchema,
+  platformReplaceWorkflowStepsBodySchema,
+  platformUpdateWorkflowBodySchema,
+} from '../contracts/platform-api.js';
 import { emitEvent, EVENT_NAMES } from '../services/system-events.js';
-import { creatableTriggerTypeSchema } from '../services/trigger-definitions.js';
 import { serializeTriggers } from '../services/trigger-serialization.js';
 import { createWorkflowTrigger, deleteWorkflowTrigger } from '../services/trigger-manager.js';
 import { TriggerServiceError } from '../services/trigger-errors.js';
@@ -164,42 +168,11 @@ workflowsRouter.get('/labels', async (c) => {
 });
 
 // POST / — create workflow with steps and optional triggers
-const stepSchema = z.object({
-  name: z.string().min(1).max(200),
-  promptTemplate: z.string().min(1),
-  stepOrder: z.number().int().min(1),
-  agentId: z.string().uuid().optional(), // optional — falls back to workflow defaultAgentId
-  model: z.string().max(100).optional(),
-  reasoningEffort: z.enum(['high', 'medium', 'low']).optional(),
-  workerRuntime: z.enum(['static', 'ephemeral']).optional(),
-  timeoutSeconds: z.number().int().min(30).max(3600).default(300),
-});
-
-const triggerSchema = z.object({
-  triggerType: creatableTriggerTypeSchema,
-  configuration: z.record(z.unknown()).default({}),
-  isActive: z.boolean().optional(),
-});
-
-const createWorkflowSchema = z.object({
-  name: z.string().min(1).max(200),
-  description: z.string().max(1000).optional(),
-  labels: z.array(z.string().min(1).max(50)).max(10).default([]),
-  defaultAgentId: z.string().uuid().optional(),
-  defaultModel: z.string().max(100).optional(),
-  defaultReasoningEffort: z.enum(['high', 'medium', 'low']).optional(),
-  workerRuntime: z.enum(['static', 'ephemeral']).default('static'),
-  stepAllocationTimeoutSeconds: z.number().int().min(15).max(3600).default(300),
-  scope: z.enum(['user', 'workspace']).default('user'),
-  steps: z.array(stepSchema).min(1).max(20),
-  triggers: z.array(triggerSchema).optional(),
-});
-
 workflowsRouter.post('/', async (c) => {
   const user = c.get('user');
   if (!user.workspaceId) return c.json({ error: 'No workspace context' }, 403);
   if (user.role === 'view_user') return c.json({ error: 'View-only users cannot create workflows' }, 403);
-  const body = createWorkflowSchema.parse(await c.req.json());
+  const body = platformCreateWorkflowBodySchema.parse(await c.req.json());
 
   // Only workspace_admin/super_admin can create workspace-scoped workflows
   if (body.scope === 'workspace' && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
@@ -343,22 +316,10 @@ workflowsRouter.get('/:id', async (c) => {
 });
 
 // PUT /:id — update workflow (increments version)
-const updateWorkflowSchema = z.object({
-  name: z.string().min(1).max(200).optional(),
-  description: z.string().max(1000).optional(),
-  labels: z.array(z.string().min(1).max(50)).max(10).optional(),
-  isActive: z.boolean().optional(),
-  defaultAgentId: z.string().uuid().nullable().optional(),
-  defaultModel: z.string().max(100).nullable().optional(),
-  defaultReasoningEffort: z.enum(['high', 'medium', 'low']).nullable().optional(),
-  workerRuntime: z.enum(['static', 'ephemeral']).optional(),
-  stepAllocationTimeoutSeconds: z.number().int().min(15).max(3600).optional(),
-});
-
 workflowsRouter.put('/:id', async (c) => {
   const user = c.get('user');
   const id = uuidSchema.parse(c.req.param('id'));
-  const body = updateWorkflowSchema.parse(await c.req.json());
+  const body = platformUpdateWorkflowBodySchema.parse(await c.req.json());
 
   const existing = await db.query.workflows.findFirst({ where: eq(workflows.id, id) });
   if (!existing) return c.json({ error: 'Workflow not found' }, 404);
@@ -399,9 +360,7 @@ workflowsRouter.put('/:id', async (c) => {
 workflowsRouter.put('/:id/steps', async (c) => {
   const user = c.get('user');
   const id = uuidSchema.parse(c.req.param('id'));
-  const { steps } = z
-    .object({ steps: z.array(stepSchema).min(1).max(20) })
-    .parse(await c.req.json());
+  const { steps } = platformReplaceWorkflowStepsBodySchema.parse(await c.req.json());
 
   // Verify workflow exists and belongs to user's workspace
   const existing = await db.query.workflows.findFirst({ where: eq(workflows.id, id) });

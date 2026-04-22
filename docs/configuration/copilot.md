@@ -87,6 +87,13 @@ The default OAO Platform MCP server is a bundled stdio server that calls the OAO
 - The server is system-managed per agent and can be disabled, but not deleted.
 - Custom MCP servers still use their configured command, args, and credential-to-env mapping.
 
+The agent editor uses the same runtime assumptions when inspecting tools. The grouped tool catalog shows the default OAO Platform server automatically and renders any `mcp.json.template` override before it probes template-defined MCP servers.
+
+Agent tool selection now supports two modes:
+
+- Legacy mode: the saved value is a built-in tool array, so all discovered MCP tools remain enabled.
+- Explicit mode: the saved value is a full allowlist, so OAO filters both built-ins and MCP tools before starting the Copilot session.
+
 ## Permission Handling
 
 For agent workflows, all tool calls are auto-approved:

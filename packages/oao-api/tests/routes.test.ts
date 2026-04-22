@@ -109,6 +109,7 @@ vi.mock('../src/services/workflow-engine.js', () => ({
 }));
 
 vi.mock('../src/services/conversation-service.js', () => ({
+  CONVERSATION_REASONING_EFFORTS: ['low', 'medium', 'high', 'xhigh'],
   sendConversationMessage: mockSendConversationMessage,
 }));
 

@@ -6,10 +6,10 @@ import {
   creditUsage,
   userQuotaSettings,
   workspaceQuotaSettings,
-  models,
   users,
 } from '../database/schema.js';
 import { authMiddleware } from '@oao/shared';
+import { listWorkspaceActiveModels } from '../services/workspace-models.js';
 
 const quotaRouter = new Hono();
 quotaRouter.use('/*', authMiddleware);
@@ -261,10 +261,7 @@ quotaRouter.get('/models', async (c) => {
   const user = c.get('user');
   if (!user.workspaceId) return c.json({ models: [] });
 
-  const allModels = await db.query.models.findMany({
-    where: and(eq(models.workspaceId, user.workspaceId), eq(models.isActive, true)),
-    orderBy: models.name,
-  });
+  const allModels = await listWorkspaceActiveModels(user.workspaceId);
   return c.json({ models: allModels });
 });
 

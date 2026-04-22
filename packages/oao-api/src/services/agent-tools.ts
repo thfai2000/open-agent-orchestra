@@ -917,7 +917,7 @@ export function createAgentTools(
 
     // ── Filter by enabled tools ──────────────────────────────────────
 
-    if (enabledTools && enabledTools.length > 0) {
+    if (enabledTools !== undefined) {
       return enabledTools
         .filter((name) => toolMap[name])
         .map((name) => toolMap[name]);

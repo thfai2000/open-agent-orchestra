@@ -5,6 +5,10 @@ import { db } from '../database/index.js';
 import { agentVariables, userVariables, workspaceVariables, agents } from '../database/schema.js';
 import { authMiddleware, encrypt, uuidSchema } from '@oao/shared';
 import {
+  platformCreateVariableBodySchema,
+  platformUpdateVariableBodySchema,
+} from '../contracts/platform-api.js';
+import {
   buildVariableVersionSnapshot,
   captureAgentHistoricalVersion,
   captureVariableHistoricalVersion,
@@ -373,25 +377,10 @@ variablesRouter.get('/:id/versions/:version', async (c) => {
 });
 
 // POST / — add variable (agent-level, user-level, or workspace-level)
-const createVariableSchema = z.object({
-  agentId: z.string().uuid().optional(),
-  scope: z.enum(['agent', 'user', 'workspace']).default('agent'),
-  key: z
-    .string()
-    .min(1)
-    .max(100)
-    .regex(/^[A-Z_][A-Z0-9_]*$/, 'Key must be uppercase with underscores'),
-  value: z.string().min(1).max(50000),
-  variableType: z.enum(['property', 'credential']).default('credential'),
-  credentialSubType: z.enum(['secret_text', 'github_token', 'github_app', 'user_account', 'private_key', 'certificate']).default('secret_text'),
-  injectAsEnvVariable: z.boolean().default(false),
-  description: z.string().max(300).optional(),
-});
-
 variablesRouter.post('/', async (c) => {
   const user = c.get('user');
   if (user.role === 'view_user') return c.json({ error: 'View-only users cannot create variables' }, 403);
-  const body = createVariableSchema.parse(await c.req.json());
+  const body = platformCreateVariableBodySchema.parse(await c.req.json());
 
   if (body.scope === 'workspace' || (!body.agentId && body.scope !== 'user')) {
     if (!user.workspaceId) return c.json({ error: 'No workspace context' }, 403);
@@ -557,20 +546,11 @@ variablesRouter.post('/', async (c) => {
 });
 
 // PUT /:id — update variable (agent, user, or workspace)
-const updateVariableSchema = z.object({
-  value: z.string().min(1).max(50000).optional(),
-  variableType: z.enum(['property', 'credential']).optional(),
-  credentialSubType: z.enum(['secret_text', 'github_token', 'github_app', 'user_account', 'private_key', 'certificate']).optional(),
-  injectAsEnvVariable: z.boolean().optional(),
-  description: z.string().max(300).optional(),
-  scope: z.enum(['agent', 'user', 'workspace']).default('agent'),
-});
-
 variablesRouter.put('/:id', async (c) => {
   const id = uuidSchema.parse(c.req.param('id'));
   const user = c.get('user');
   if (user.role === 'view_user') return c.json({ error: 'View-only users cannot modify variables' }, 403);
-  const body = updateVariableSchema.parse(await c.req.json());
+  const body = platformUpdateVariableBodySchema.parse(await c.req.json());
 
   const updateData: Record<string, unknown> = { updatedAt: new Date() };
   if (body.value) updateData.valueEncrypted = encrypt(body.value);

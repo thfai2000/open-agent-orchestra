@@ -7,7 +7,7 @@ import { createLogger } from '@oao/shared';
 import { db } from '../database/index.js';
 import { mcpServerConfigs, users, workspaces } from '../database/schema.js';
 import { renderTemplate } from './jinja-renderer.js';
-import { connectToMcpServer, type McpServerConfig } from './mcp-client.js';
+import { connectToMcpServer, type McpServerConfig, type McpToolDescriptor } from './mcp-client.js';
 
 const logger = createLogger('platform-mcp');
 
@@ -26,15 +26,29 @@ export const PLATFORM_MCP_WRITE_TOOLS = [
   'oao_delete_variable',
 ] as const;
 
-interface PlatformMcpAuthContext {
+export interface PlatformMcpAuthContext {
   agentId: string;
   userId: string;
   workspaceId: string;
 }
 
-interface AgentMcpSource {
+export interface AgentMcpSource {
   id: string;
   mcpJsonTemplate: string | null;
+}
+
+interface RenderedMcpJson {
+  mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+}
+
+export interface McpToolCatalogGroup {
+  key: string;
+  label: string;
+  source: 'platform' | 'stored_mcp' | 'template_mcp';
+  description: string | null;
+  authNote?: string | null;
+  tools: McpToolDescriptor[];
+  error?: string;
 }
 
 type McpServerConfigRecord = typeof mcpServerConfigs.$inferSelect;
@@ -196,15 +210,140 @@ function withDefaultPlatformConfig(
   ] as McpServerConfigRecord[];
 }
 
+function renderMcpJsonTemplate(template: string, templateContext: Record<string, unknown>): RenderedMcpJson {
+  const renderedMcpJson = renderTemplate(template, templateContext);
+  return JSON.parse(renderedMcpJson) as RenderedMcpJson;
+}
+
+function normalizeCatalogTools(toolDescriptors: McpToolDescriptor[]): McpToolDescriptor[] {
+  return [...toolDescriptors].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export async function listConfiguredMcpToolCatalog(params: {
+  agent: AgentMcpSource;
+  credentials: Map<string, string>;
+  templateContext: Record<string, unknown>;
+  authContext: PlatformMcpAuthContext;
+  mcpJsonTemplateOverride?: string | null;
+  logContext: string;
+}): Promise<McpToolCatalogGroup[]> {
+  const { agent, credentials, templateContext, authContext, mcpJsonTemplateOverride, logContext } = params;
+  const cleanups: Array<() => Promise<void>> = [];
+
+  try {
+    const groups: McpToolCatalogGroup[] = [];
+    const storedConfigs = await db.query.mcpServerConfigs.findMany({
+      where: eq(mcpServerConfigs.agentId, agent.id),
+    });
+
+    const configs = withDefaultPlatformConfig(agent.id, storedConfigs).filter((config) => config.isEnabled);
+
+    for (const mcpConfig of configs) {
+      const source = mcpConfig.serverType === PLATFORM_MCP_SERVER_TYPE ? 'platform' : 'stored_mcp';
+
+      try {
+        const runtimeConfig = await resolveRuntimeMcpServerConfig(mcpConfig, credentials, authContext);
+        const mcp = await connectToMcpServer(runtimeConfig);
+        cleanups.push(mcp.cleanup);
+
+        groups.push({
+          key: `${source}:${mcpConfig.id}`,
+          label: mcpConfig.name,
+          source,
+          description: mcpConfig.description ?? null,
+          authNote: source === 'platform'
+            ? 'Auto-included. Authenticated as the current signed-in OAO user via a short-lived JWT. No mcp.json.template entry is required.'
+            : null,
+          tools: normalizeCatalogTools(mcp.toolDescriptors),
+        });
+      } catch (error) {
+        groups.push({
+          key: `${source}:${mcpConfig.id}`,
+          label: mcpConfig.name,
+          source,
+          description: mcpConfig.description ?? null,
+          authNote: source === 'platform'
+            ? 'Auto-included. Authenticated as the current signed-in OAO user via a short-lived JWT. No mcp.json.template entry is required.'
+            : null,
+          tools: [],
+          error: error instanceof Error ? error.message : 'Failed to connect MCP server.',
+        });
+        logger.warn({ server: mcpConfig.name, error, logContext }, 'Failed to inspect MCP server for tool catalog');
+      }
+    }
+
+    const resolvedTemplate = mcpJsonTemplateOverride !== undefined
+      ? mcpJsonTemplateOverride
+      : agent.mcpJsonTemplate;
+
+    if (resolvedTemplate) {
+      try {
+        const mcpJson = renderMcpJsonTemplate(resolvedTemplate, templateContext);
+
+        for (const [serverName, serverConfig] of Object.entries(mcpJson.mcpServers ?? {})) {
+          try {
+            const mcp = await connectToMcpServer({
+              name: serverName,
+              command: serverConfig.command,
+              args: serverConfig.args ?? [],
+              env: serverConfig.env ?? {},
+            });
+            cleanups.push(mcp.cleanup);
+
+            groups.push({
+              key: `template:${serverName}`,
+              label: serverName,
+              source: 'template_mcp',
+              description: 'Discovered from mcp.json.template.',
+              tools: normalizeCatalogTools(mcp.toolDescriptors),
+            });
+          } catch (error) {
+            groups.push({
+              key: `template:${serverName}`,
+              label: serverName,
+              source: 'template_mcp',
+              description: 'Discovered from mcp.json.template.',
+              tools: [],
+              error: error instanceof Error ? error.message : 'Failed to connect MCP server from template.',
+            });
+            logger.warn({ server: serverName, error, logContext }, 'Failed to inspect MCP server from template');
+          }
+        }
+      } catch (error) {
+        groups.push({
+          key: 'template:parse',
+          label: 'MCP JSON Template',
+          source: 'template_mcp',
+          description: 'Discovered from mcp.json.template.',
+          tools: [],
+          error: error instanceof Error ? error.message : 'Failed to render or parse mcp.json.template.',
+        });
+        logger.warn({ error, logContext }, 'Failed to inspect mcp.json.template for tool catalog');
+      }
+    }
+
+    return groups;
+  } finally {
+    for (const cleanup of cleanups) {
+      try {
+        await cleanup();
+      } catch {
+        // ignore cleanup failures
+      }
+    }
+  }
+}
+
 export async function loadConfiguredMcpTools(params: {
   agent: AgentMcpSource;
   credentials: Map<string, string>;
   templateContext: Record<string, unknown>;
   authContext: PlatformMcpAuthContext;
+  enabledToolNames?: string[];
   mcpCleanups: Array<() => Promise<void>>;
   logContext: string;
 }) {
-  const { agent, credentials, templateContext, authContext, mcpCleanups, logContext } = params;
+  const { agent, credentials, templateContext, authContext, enabledToolNames, mcpCleanups, logContext } = params;
 
   const storedConfigs = await db.query.mcpServerConfigs.findMany({
     where: eq(mcpServerConfigs.agentId, agent.id),
@@ -216,7 +355,7 @@ export async function loadConfiguredMcpTools(params: {
   for (const mcpConfig of configs) {
     try {
       const runtimeConfig = await resolveRuntimeMcpServerConfig(mcpConfig, credentials, authContext);
-      const mcp = await connectToMcpServer(runtimeConfig);
+        const mcp = await connectToMcpServer(runtimeConfig, { enabledToolNames });
       tools.push(...mcp.tools);
       mcpCleanups.push(mcp.cleanup);
       logger.info({ server: mcpConfig.name, mcpToolCount: mcp.tools.length, logContext }, 'MCP tools loaded');
@@ -227,10 +366,7 @@ export async function loadConfiguredMcpTools(params: {
 
   if (agent.mcpJsonTemplate) {
     try {
-      const renderedMcpJson = renderTemplate(agent.mcpJsonTemplate, templateContext);
-      const mcpJson = JSON.parse(renderedMcpJson) as {
-        mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
-      };
+      const mcpJson = renderMcpJsonTemplate(agent.mcpJsonTemplate, templateContext);
 
       if (mcpJson.mcpServers) {
         for (const [serverName, serverConfig] of Object.entries(mcpJson.mcpServers)) {
@@ -240,7 +376,7 @@ export async function loadConfiguredMcpTools(params: {
               command: serverConfig.command,
               args: serverConfig.args ?? [],
               env: serverConfig.env ?? {},
-            });
+            }, { enabledToolNames });
             tools.push(...mcp.tools);
             mcpCleanups.push(mcp.cleanup);
             logger.info({ server: serverName, mcpToolCount: mcp.tools.length, logContext }, 'MCP tools loaded from mcp.json.template');

@@ -16,6 +16,7 @@ import jiraWebhooksRouter from './routes/jira-webhooks.js';
 import webhooks from './routes/webhooks.js';
 import supervisorRouter from './routes/supervisor.js';
 import adminRouter from './routes/admin.js';
+import modelsRouter from './routes/models.js';
 import quotaRouter from './routes/quota.js';
 import workspacesRouter from './routes/workspaces.js';
 import eventsRouter from './routes/events.js';
@@ -51,6 +52,7 @@ const app = createApp({
     ['/api/webhooks', webhooks],
     ['/api/supervisor', supervisorRouter],
     ['/api/admin', adminRouter],
+    ['/api/models', modelsRouter],
     ['/api/quota', quotaRouter],
     ['/api/workspaces', workspacesRouter],
     ['/api/events', eventsRouter],

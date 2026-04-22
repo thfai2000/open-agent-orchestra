@@ -270,7 +270,7 @@ curl -X POST http://localhost:4002/api/agents \
 | `githubTokenCredentialId` | uuid | — | Reference to credential variable |
 | `copilotTokenCredentialId` | uuid | — | Copilot auth credential reference |
 | `scope` | `"user"` \| `"workspace"` | `"user"` | `workspace` requires admin role |
-| `builtinToolsEnabled` | string[] | all tools | Subset of built-in tools to enable |
+| `builtinToolsEnabled` | string[] or object | all tools | Legacy built-in array, or `{ "mode": "explicit", "names": [...] }` for a full tool allowlist |
 | `mcpJsonTemplate` | string | — | Jinja2 template for MCP config (max 50KB) |
 | `files` | object[] | `[]` | Initial files for `database` source agents |
 
@@ -279,6 +279,59 @@ curl -X POST http://localhost:4002/api/agents \
 ### `GET /api/agents/:id`
 
 Get agent detail. **Auth**: JWT/PAT
+
+### `POST /api/agents/tool-catalog`
+
+Resolve the grouped tool catalog used by the create-agent page before an agent is saved. **Auth**: JWT/PAT
+
+This endpoint:
+
+- Includes built-in tools.
+- Auto-includes the default OAO Platform MCP server.
+- Renders an optional `mcpJsonTemplate` override and inspects its `mcpServers` entries.
+- Uses the current user and workspace variables when rendering the preview.
+
+**Request Body**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mcpJsonTemplate` | string or `null` | Optional unsaved template override to inspect |
+
+### `POST /api/agents/:id/tool-catalog`
+
+Resolve the grouped tool catalog used by the agent editor. **Auth**: JWT/PAT · **Role**: agent owner or admin
+
+This endpoint:
+
+- Includes built-in tools.
+- Auto-includes the default OAO Platform MCP server.
+- Inspects stored MCP server configs for the agent.
+- Renders an optional `mcpJsonTemplate` override and inspects its `mcpServers` entries.
+
+**Request Body**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mcpJsonTemplate` | string or `null` | Optional unsaved template override to inspect |
+
+**Response** `200`
+
+```json
+{
+  "selectionMode": "legacy",
+  "defaultSelectedToolNames": ["record_decision", "oao_list_workflows"],
+  "effectiveSelectedToolNames": ["record_decision", "oao_list_workflows"],
+  "unresolvedSelectedToolNames": [],
+  "groups": [
+    {
+      "key": "builtin:core",
+      "label": "Built-in Tools",
+      "source": "builtin",
+      "tools": [{ "name": "record_decision", "label": "Record Decision" }]
+    }
+  ]
+}
+```
 
 ### `GET /api/agents/:id/versions`
 
@@ -354,6 +407,41 @@ curl -X POST http://localhost:4002/api/conversations \
 
 Get conversation metadata plus the full ordered message transcript. **Auth**: JWT/PAT
 
+Response includes:
+
+- `conversation` — thread header
+- `messages` — ordered transcript with assistant metadata
+- `agent` — currently selected agent summary including `builtinToolsEnabled`
+- `settings` — last-used turn settings derived from message metadata
+
+### `GET /api/conversations/:id/tool-catalog`
+
+Resolve the grouped tool catalog for the current conversation agent. **Auth**: JWT/PAT
+
+This endpoint combines the current agent defaults with the last-used per-turn tool override so the conversation UI can show both:
+
+- `defaultSelectedToolNames` — the current agent defaults
+- `effectiveSelectedToolNames` — the selection that the next turn will currently use
+
+It includes built-in tools, the default OAO Platform MCP server, stored MCP servers, and any servers rendered from the agent's `mcpJsonTemplate`.
+
+### `PATCH /api/conversations/:id`
+
+Switch the active agent for future turns in the conversation. **Auth**: JWT/PAT
+
+```bash
+curl -X PATCH http://localhost:4002/api/conversations/$CONVERSATION_ID \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agentId": "new-agent-uuid"
+  }'
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `agentId` | uuid | Yes | Replacement active agent for subsequent turns |
+
 ### `POST /api/conversations/:id/messages`
 
 Append a user turn and wait for the assistant response. **Auth**: JWT/PAT
@@ -363,13 +451,20 @@ curl -X POST http://localhost:4002/api/conversations/$CONVERSATION_ID/messages \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "content": "Summarize the latest deployment risks for this workspace."
+    "content": "Summarize the latest deployment risks for this workspace.",
+    "model": "gpt-5.4",
+    "reasoningEffort": "high",
+    "enabledToolNames": ["record_decision", "read_variables", "simple_http_request", "oao_list_workflows"]
   }'
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `content` | string | Yes | User message (1–20,000 chars) |
+| `model` | string | No | Per-turn model override |
+| `reasoningEffort` | `low` \| `medium` \| `high` \| `xhigh` | No | Per-turn reasoning override |
+| `enabledToolNames` | string[] | No | Per-turn full tool override across built-ins and MCP tools; empty array disables all optional tools |
+| `enabledBuiltinTools` | string[] | No | Backward-compatible built-in-only override for older clients |
 
 Responses:
 
@@ -385,8 +480,14 @@ Event types:
 
 - `conversation.message.started`
 - `conversation.message.delta`
+- `conversation.message.reasoning`
+- `conversation.message.reasoning_delta`
 - `conversation.message.completed`
 - `conversation.message.failed`
+- `conversation.tool.execution_start`
+- `conversation.tool.execution_complete`
+- `conversation.turn.started`
+- `conversation.turn.completed`
 
 ---
 
@@ -1027,7 +1128,13 @@ curl -X POST http://localhost:4002/api/workspaces \
 | `GET` | `/api/quota/settings` | Get rate limit settings (user + workspace defaults) |
 | `PUT` | `/api/quota/settings` | Update own credit limits |
 | `GET` | `/api/quota/usage` | Credit usage stats for `user`, `workspace`, or `platform` scope, depending on role |
-| `GET` | `/api/quota/models` | Active models for dropdowns |
+| `GET` | `/api/quota/models` | Active models for dropdowns (compatibility alias) |
+
+## Models
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/models` | Active models from the workspace model registry for authenticated selection UIs |
 
 `GET /api/quota/usage` supports `?days=30` and `?scope=user|workspace|platform`.
 

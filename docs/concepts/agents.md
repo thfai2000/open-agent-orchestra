@@ -140,7 +140,7 @@ Every agent has access to 9 built-in Copilot tools (individually toggleable):
 | `edit_variables` | Create/update variables |
 | `simple_http_request` | Curl-like HTTP requests with Jinja2 templating on all arguments |
 
-By default, all tools are enabled. Admins and agent owners can toggle individual tools when creating or editing agents.
+By default, all built-in tools are enabled. The create and edit pages both show tools in grouped sections and can persist an explicit tool allowlist once you change the selection. Existing agents that still store the legacy built-in array continue to enable all discovered MCP tools until you switch them to an explicit selection.
 
 ### Default OAO Platform MCP Server
 
@@ -164,6 +164,8 @@ The default server exposes platform tools such as:
 | `oao_delete_variable` | Delete a variable |
 
 The OAO Platform MCP record can be disabled per agent, but it cannot be deleted. Existing agents created before this feature still receive the same tools at runtime even before their DB record is backfilled.
+
+In the agent create and edit pages, this server appears in the grouped tool catalog automatically. You do not add it to `mcp.json.template`.
 
 ### Simple HTTP Request Tool
 
@@ -269,6 +271,8 @@ In addition to DB-configured MCP servers, agents can define an **MCP JSON Templa
 
 The rendered JSON must contain a `mcpServers` key mapping server names to `{ command, args?, env? }` objects.
 
+When you edit `mcpJsonTemplate` in the create or edit page, OAO renders the template immediately with the current workspace and user variables, plus agent variables when the agent already exists, then inspects each reachable MCP server and shows the discovered tools in the grouped selection UI. Template-defined MCP groups sit alongside built-in tools, the auto-included OAO Platform server, and any stored MCP server records.
+
 ### Tool Loading Flow
 
 ```mermaid
@@ -285,3 +289,5 @@ graph TB
     INIT --> EXEC[Execute session]
     EXEC --> CLEANUP[Cleanup all MCP processes]
 ```
+
+  If the agent has an explicit tool allowlist, OAO filters both built-in tools and MCP tools against that saved selection before creating the Copilot session.

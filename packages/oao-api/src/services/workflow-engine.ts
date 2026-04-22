@@ -20,6 +20,7 @@ import { getRedisConnection } from './redis.js';
 import { CopilotClient, approveAll } from '@github/copilot-sdk';
 import { prepareAgentWorkspace, prepareDbAgentWorkspace } from './agent-workspace.js';
 import { createAgentTools } from './agent-tools.js';
+import { resolveAgentToolSelection } from './agent-tool-selection.js';
 import { renderTemplate, buildTemplateContext } from './jinja-renderer.js';
 import { loadConfiguredMcpTools } from './platform-mcp.js';
 
@@ -1043,13 +1044,15 @@ export async function executeCopilotSession(params: {
     const systemContent = `${workspace.agentMarkdown}${skillsContent}`;
 
     // 3. Create agent tools (built-in + MCP tools from configured servers)
+    const agentToolSelection = resolveAgentToolSelection(agent.builtinToolsEnabled);
+
     const builtInTools = createAgentTools(credentials, {
       agentId: agent.id,
       workflowId,
       executionId,
       userId: agent.userId,
       workspaceId,
-    }, (agent.builtinToolsEnabled as string[]) ?? undefined, templateContext);
+    }, agentToolSelection.selectedBuiltinToolNames, templateContext);
 
     const mcpTools = await loadConfiguredMcpTools({
       agent,
@@ -1060,6 +1063,7 @@ export async function executeCopilotSession(params: {
         userId: agent.userId,
         workspaceId,
       },
+      enabledToolNames: agentToolSelection.explicitToolSelection ? agentToolSelection.selectedToolNames : undefined,
       mcpCleanups,
       logContext: 'workflow',
     });

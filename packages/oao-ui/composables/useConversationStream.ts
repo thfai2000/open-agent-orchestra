@@ -40,8 +40,14 @@ export function useConversationStream(conversationId: Ref<string>, options?: { e
     const eventTypes = [
       'conversation.message.started',
       'conversation.message.delta',
+      'conversation.message.reasoning',
+      'conversation.message.reasoning_delta',
       'conversation.message.completed',
       'conversation.message.failed',
+      'conversation.tool.execution_start',
+      'conversation.tool.execution_complete',
+      'conversation.turn.started',
+      'conversation.turn.completed',
     ];
 
     for (const type of eventTypes) {

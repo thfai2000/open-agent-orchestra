@@ -45,7 +45,7 @@
         </template>
       </Column>
       <Column header="Tools" style="width: 80px">
-        <template #body="{ data }">{{ data.builtinToolsEnabled?.length ?? 0 }}</template>
+        <template #body="{ data }">{{ toolCount(data.builtinToolsEnabled) }}</template>
       </Column>
       <Column header="Last Session" style="width: 140px">
         <template #body="{ data }">
@@ -64,6 +64,8 @@
 </template>
 
 <script setup lang="ts">
+import { countAgentSelectedTools } from '~/composables/useAgentToolSelection';
+
 const { authHeaders } = useAuth();
 const headers = authHeaders();
 const route = useRoute();
@@ -78,6 +80,10 @@ const { data, pending } = await useFetch(
 );
 const agents = computed(() => (data.value as any)?.agents ?? []);
 const total = computed(() => (data.value as any)?.total ?? 0);
+
+function toolCount(value: unknown) {
+  return countAgentSelectedTools(value);
+}
 
 function onPage(event: any) { page.value = event.page + 1; }
 function onRowsChange(newRows: number) { limit.value = newRows; page.value = 1; }

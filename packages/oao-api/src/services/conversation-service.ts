@@ -15,10 +15,15 @@ import {
 } from '../database/schema.js';
 import { prepareAgentWorkspace, prepareDbAgentWorkspace } from './agent-workspace.js';
 import { createAgentTools } from './agent-tools.js';
+import {
+  isBuiltInToolName,
+  resolveAgentToolSelection,
+} from './agent-tool-selection.js';
 import { buildTemplateContext } from './jinja-renderer.js';
 import { loadConfiguredMcpTools } from './platform-mcp.js';
 import { publishRealtimeEvent } from './realtime-bus.js';
 import { getRedisConnection } from './redis.js';
+import { resolveWorkspaceActiveModelName } from './workspace-models.js';
 
 const logger = createLogger('conversation-service');
 
@@ -33,6 +38,23 @@ const WORKFLOW_CONTEXT_REQUIRED_TOOLS = new Set([
 ]);
 const MAX_TRANSCRIPT_MESSAGES = 40;
 const DEFAULT_CONVERSATION_TIMEOUT_SECONDS = parseInt(process.env.DEFAULT_CONVERSATION_TIMEOUT_SECONDS || '300', 10);
+const CONVERSATION_PROGRESS_FLUSH_MS = 750;
+
+export const CONVERSATION_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
+
+type ConversationReasoningEffort = (typeof CONVERSATION_REASONING_EFFORTS)[number];
+
+interface ConversationLiveEvent {
+  type: 'info' | 'message_delta' | 'reasoning' | 'reasoning_delta' | 'tool_call_start' | 'tool_call_end' | 'turn_start' | 'turn_end';
+  timestamp: string;
+  content?: string;
+  message?: string;
+  reasoningId?: string;
+  tool?: string;
+  args?: unknown;
+  result?: unknown;
+  success?: boolean;
+}
 
 interface SessionLockInfo {
   agentId: string;
@@ -278,6 +300,224 @@ function buildConversationPrompt(messages: ConversationTranscriptMessage[]): str
   ].join('\n\n');
 }
 
+function buildReasoningText(events: ConversationLiveEvent[]): string {
+  const reasoningBlocks = new Map<string, string>();
+  const order: string[] = [];
+
+  for (const event of events) {
+    if ((event.type !== 'reasoning' && event.type !== 'reasoning_delta') || !event.reasoningId) {
+      continue;
+    }
+
+    if (!reasoningBlocks.has(event.reasoningId)) {
+      reasoningBlocks.set(event.reasoningId, '');
+      order.push(event.reasoningId);
+    }
+
+    if (event.type === 'reasoning') {
+      reasoningBlocks.set(event.reasoningId, event.content ?? '');
+      continue;
+    }
+
+    reasoningBlocks.set(event.reasoningId, `${reasoningBlocks.get(event.reasoningId) ?? ''}${event.content ?? ''}`);
+  }
+
+  return order
+    .map((reasoningId) => (reasoningBlocks.get(reasoningId) ?? '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function extractAppendedContent(events: ConversationLiveEvent[], startIndex: number, type: 'message_delta' | 'reasoning_delta'): string {
+  return events
+    .slice(startIndex)
+    .filter((event) => event.type === type && event.content)
+    .map((event) => event.content)
+    .join('');
+}
+
+function buildConversationProgressMetadata(params: {
+  agent: typeof agents.$inferSelect;
+  model: string;
+  reasoningEffort: ConversationReasoningEffort | null;
+  enabledToolNames?: string[];
+  enabledBuiltinTools: string[];
+  liveEvents: ConversationLiveEvent[];
+}): Record<string, unknown> {
+  return {
+    agentId: params.agent.id,
+    agentName: params.agent.name,
+    model: params.model,
+    reasoningEffort: params.reasoningEffort,
+    enabledToolNames: params.enabledToolNames,
+    enabledBuiltinTools: params.enabledBuiltinTools,
+    liveOutput: params.liveEvents,
+    reasoningText: buildReasoningText(params.liveEvents),
+  };
+}
+
+function normalizeConversationToolNames(names: readonly string[] | undefined): string[] {
+  if (!names) return [];
+
+  return Array.from(
+    new Set(
+      names
+        .filter((name): name is string => typeof name === 'string')
+        .map((name) => name.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function removeConversationRestrictedBuiltins(names: readonly string[]): string[] {
+  return names.filter((toolName) => !WORKFLOW_CONTEXT_REQUIRED_TOOLS.has(toolName));
+}
+
+function resolveConversationTurnTools(params: {
+  agentToolSelectionValue: unknown;
+  enabledToolNames?: string[];
+  enabledBuiltinTools?: string[];
+}) {
+  const { agentToolSelectionValue, enabledToolNames, enabledBuiltinTools } = params;
+  const agentToolSelection = resolveAgentToolSelection(agentToolSelectionValue);
+  const defaultBuiltinTools = removeConversationRestrictedBuiltins(agentToolSelection.selectedBuiltinToolNames);
+  const defaultExplicitToolNames = agentToolSelection.explicitToolSelection
+    ? removeConversationRestrictedBuiltins(agentToolSelection.selectedToolNames)
+    : undefined;
+
+  if (enabledToolNames !== undefined) {
+    const normalizedToolNames = removeConversationRestrictedBuiltins(normalizeConversationToolNames(enabledToolNames));
+    return {
+      selectedBuiltinToolNames: normalizedToolNames.filter(isBuiltInToolName),
+      enabledToolNames: normalizedToolNames,
+      metadataEnabledToolNames: normalizedToolNames,
+      metadataEnabledBuiltinTools: normalizedToolNames.filter(isBuiltInToolName),
+    };
+  }
+
+  if (enabledBuiltinTools !== undefined) {
+    const normalizedBuiltinTools = removeConversationRestrictedBuiltins(normalizeConversationToolNames(enabledBuiltinTools))
+      .filter(isBuiltInToolName);
+    const mergedToolNames = defaultExplicitToolNames === undefined
+      ? undefined
+      : [
+        ...defaultExplicitToolNames.filter((toolName) => !isBuiltInToolName(toolName)),
+        ...normalizedBuiltinTools,
+      ];
+
+    return {
+      selectedBuiltinToolNames: normalizedBuiltinTools,
+      enabledToolNames: mergedToolNames,
+      metadataEnabledToolNames: mergedToolNames,
+      metadataEnabledBuiltinTools: normalizedBuiltinTools,
+    };
+  }
+
+  return {
+    selectedBuiltinToolNames: defaultBuiltinTools,
+    enabledToolNames: defaultExplicitToolNames,
+    metadataEnabledToolNames: defaultExplicitToolNames,
+    metadataEnabledBuiltinTools: defaultBuiltinTools,
+  };
+}
+
+function publishConversationLiveEvent(params: {
+  conversationId: string;
+  assistantMessageId: string;
+  workspaceId: string;
+  event: ConversationLiveEvent;
+}): void {
+  const { conversationId, assistantMessageId, workspaceId, event } = params;
+
+  switch (event.type) {
+    case 'message_delta':
+      publishRealtimeEvent({
+        type: 'conversation.message.delta',
+        conversationId,
+        messageId: assistantMessageId,
+        workspaceId,
+        timestamp: event.timestamp,
+        data: { delta: event.content ?? '' },
+      });
+      return;
+    case 'reasoning':
+      publishRealtimeEvent({
+        type: 'conversation.message.reasoning',
+        conversationId,
+        messageId: assistantMessageId,
+        workspaceId,
+        timestamp: event.timestamp,
+        data: {
+          reasoningId: event.reasoningId,
+          content: event.content ?? '',
+        },
+      });
+      return;
+    case 'reasoning_delta':
+      publishRealtimeEvent({
+        type: 'conversation.message.reasoning_delta',
+        conversationId,
+        messageId: assistantMessageId,
+        workspaceId,
+        timestamp: event.timestamp,
+        data: {
+          reasoningId: event.reasoningId,
+          delta: event.content ?? '',
+        },
+      });
+      return;
+    case 'tool_call_start':
+      publishRealtimeEvent({
+        type: 'conversation.tool.execution_start',
+        conversationId,
+        messageId: assistantMessageId,
+        workspaceId,
+        timestamp: event.timestamp,
+        data: {
+          toolName: event.tool ?? 'unknown',
+          arguments: event.args,
+        },
+      });
+      return;
+    case 'tool_call_end':
+      publishRealtimeEvent({
+        type: 'conversation.tool.execution_complete',
+        conversationId,
+        messageId: assistantMessageId,
+        workspaceId,
+        timestamp: event.timestamp,
+        data: {
+          toolName: event.tool ?? 'unknown',
+          success: event.success ?? false,
+          result: event.result,
+        },
+      });
+      return;
+    case 'turn_start':
+      publishRealtimeEvent({
+        type: 'conversation.turn.started',
+        conversationId,
+        messageId: assistantMessageId,
+        workspaceId,
+        timestamp: event.timestamp,
+        data: {},
+      });
+      return;
+    case 'turn_end':
+      publishRealtimeEvent({
+        type: 'conversation.turn.completed',
+        conversationId,
+        messageId: assistantMessageId,
+        workspaceId,
+        timestamp: event.timestamp,
+        data: {},
+      });
+      return;
+    default:
+      return;
+  }
+}
+
 async function runConversationSession(params: {
   agent: typeof agents.$inferSelect;
   conversationId: string;
@@ -288,8 +528,11 @@ async function runConversationSession(params: {
   envVariables: Map<string, string>;
   userId: string;
   workspaceId: string;
-  enabledTools: string[];
-  onProgress?: (events: Array<{ type: string; content?: string }>) => Promise<void> | void;
+  enabledBuiltinTools: string[];
+  enabledToolNames?: string[];
+  model?: string | null;
+  reasoningEffort?: ConversationReasoningEffort | null;
+  onProgress?: (events: ConversationLiveEvent[]) => Promise<void> | void;
 }): Promise<{ output: string; model: string; reasoningTrace: Record<string, unknown> }> {
   const {
     agent,
@@ -301,7 +544,10 @@ async function runConversationSession(params: {
     envVariables,
     userId,
     workspaceId,
-    enabledTools,
+    enabledBuiltinTools,
+    enabledToolNames,
+    model: modelOverride,
+    reasoningEffort,
     onProgress,
   } = params;
 
@@ -401,7 +647,7 @@ async function runConversationSession(params: {
         userId,
         workspaceId,
       },
-      enabledTools,
+      enabledBuiltinTools,
       templateContext,
     );
 
@@ -414,6 +660,7 @@ async function runConversationSession(params: {
         userId,
         workspaceId,
       },
+      enabledToolNames,
       mcpCleanups,
       logContext: 'conversation',
     });
@@ -425,8 +672,12 @@ async function runConversationSession(params: {
     }
 
     const client = new CopilotClient();
-    const model = process.env.DEFAULT_AGENT_MODEL ?? 'gpt-4.1';
-    const session = await client.createSession({
+    const model = await resolveWorkspaceActiveModelName({
+      workspaceId,
+      requestedModel: modelOverride,
+      envDefaultModel: process.env.DEFAULT_AGENT_MODEL,
+    });
+    const sessionOptions: Record<string, unknown> = {
       model,
       tools: allTools,
       onPermissionRequest: approveAll,
@@ -442,17 +693,32 @@ async function runConversationSession(params: {
         },
         content: systemContent,
       },
-    } as Parameters<typeof client.createSession>[0]);
+    };
 
-    const liveEvents: Array<{ type: string; content?: string }> = [];
+    if (reasoningEffort) {
+      sessionOptions.reasoningEffort = reasoningEffort;
+    }
+
+    const session = await client.createSession(sessionOptions as unknown as Parameters<typeof client.createSession>[0]);
+
+    const liveEvents: ConversationLiveEvent[] = [];
+    const toolCallNames = new Map<string, string>();
     let progressFlushTimer: ReturnType<typeof setInterval> | null = null;
     let lastFlushedLength = 0;
 
-    const pushLiveEvent = (event: { type: string; content?: string }) => {
+    const pushLiveEvent = (event: ConversationLiveEvent) => {
       liveEvents.push(event);
     };
 
     if (onProgress) {
+      pushLiveEvent({
+        type: 'info',
+        timestamp: new Date().toISOString(),
+        message: reasoningEffort
+          ? `Copilot session started (model: ${model}, reasoning: ${reasoningEffort})`
+          : `Copilot session started (model: ${model})`,
+      });
+
       progressFlushTimer = setInterval(async () => {
         if (liveEvents.length > lastFlushedLength) {
           lastFlushedLength = liveEvents.length;
@@ -462,19 +728,83 @@ async function runConversationSession(params: {
             // ignore streaming flush errors
           }
         }
-      }, 2000);
+      }, CONVERSATION_PROGRESS_FLUSH_MS);
     }
 
     session.on('tool.execution_start', (event) => {
       const toolName = event.data?.toolName ?? 'unknown';
       toolCalls.push({ tool: toolName, args: event.data?.arguments });
+      if (event.data?.toolCallId) {
+        toolCallNames.set(event.data.toolCallId, toolName);
+      }
+      pushLiveEvent({
+        type: 'tool_call_start',
+        timestamp: event.timestamp ?? new Date().toISOString(),
+        tool: toolName,
+        args: event.data?.arguments,
+      });
+    });
+
+    session.on('tool.execution_complete', (event) => {
+      const toolName = (event.data?.toolCallId && toolCallNames.get(event.data.toolCallId))
+        ?? event.data?.toolCallId
+        ?? 'unknown';
+      pushLiveEvent({
+        type: 'tool_call_end',
+        timestamp: event.timestamp ?? new Date().toISOString(),
+        tool: toolName,
+        result: event.data?.result,
+        success: event.data?.success,
+      });
     });
 
     session.on('assistant.message_delta', (event) => {
       const deltaContent = event.data?.deltaContent ?? '';
       if (deltaContent) {
-        pushLiveEvent({ type: 'message_delta', content: deltaContent });
+        pushLiveEvent({
+          type: 'message_delta',
+          timestamp: event.timestamp ?? new Date().toISOString(),
+          content: deltaContent,
+        });
       }
+    });
+
+    session.on('assistant.reasoning', (event) => {
+      const content = event.data?.content ?? '';
+      if (content) {
+        pushLiveEvent({
+          type: 'reasoning',
+          timestamp: event.timestamp ?? new Date().toISOString(),
+          reasoningId: event.data?.reasoningId,
+          content,
+        });
+      }
+    });
+
+    session.on('assistant.reasoning_delta', (event) => {
+      const deltaContent = event.data?.deltaContent ?? '';
+      if (deltaContent) {
+        pushLiveEvent({
+          type: 'reasoning_delta',
+          timestamp: event.timestamp ?? new Date().toISOString(),
+          reasoningId: event.data?.reasoningId,
+          content: deltaContent,
+        });
+      }
+    });
+
+    session.on('assistant.turn_start', (event) => {
+      pushLiveEvent({
+        type: 'turn_start',
+        timestamp: event.timestamp ?? new Date().toISOString(),
+      });
+    });
+
+    session.on('assistant.turn_end', (event) => {
+      pushLiveEvent({
+        type: 'turn_end',
+        timestamp: event.timestamp ?? new Date().toISOString(),
+      });
     });
 
     const response = await session.sendAndWait({ prompt }, DEFAULT_CONVERSATION_TIMEOUT_SECONDS * 1000);
@@ -552,12 +882,20 @@ async function runConversationSession(params: {
       reasoningTrace: {
         conversationId,
         assistantMessageId,
+        agentId: agent.id,
+        agentName: agent.name,
         workerRuntime: 'static',
         agentFile: agent.agentFilePath,
         skills: agent.skillsPaths,
+        model,
+        reasoningEffort: reasoningEffort ?? null,
+        enabledToolNames,
+        enabledBuiltinTools,
         promptTokens: prompt.length,
         completionTokens: output.length,
         toolCalls,
+        liveOutput: liveEvents,
+        reasoningText: buildReasoningText(liveEvents),
       },
     };
   } finally {
@@ -586,24 +924,29 @@ async function runConversationSession(params: {
   }
 }
 
-function extractDelta(events: Array<{ type: string; content?: string }>, startIndex: number): string {
-  return events
-    .slice(startIndex)
-    .filter((event) => event.type === 'message_delta' && event.content)
-    .map((event) => event.content)
-    .join('');
-}
-
 export async function sendConversationMessage(params: {
   conversation: typeof conversations.$inferSelect;
   content: string;
   userId: string;
   workspaceId: string;
+  model?: string | null;
+  reasoningEffort?: ConversationReasoningEffort | null;
+  enabledToolNames?: string[];
+  enabledBuiltinTools?: string[];
 }): Promise<{
   userMessage: typeof conversationMessages.$inferSelect;
   assistantMessage: typeof conversationMessages.$inferSelect;
 }> {
-  const { conversation, content, userId, workspaceId } = params;
+  const {
+    conversation,
+    content,
+    userId,
+    workspaceId,
+    model: requestedModel,
+    reasoningEffort,
+    enabledToolNames,
+    enabledBuiltinTools,
+  } = params;
 
   if (!conversation.agentId) {
     throw new Error('This conversation is no longer linked to an active agent. Start a new conversation to continue chatting.');
@@ -620,6 +963,18 @@ export async function sendConversationMessage(params: {
   if (agent.status !== 'active') {
     throw new Error(`Agent ${agent.name} is not active. Activate it before continuing the conversation.`);
   }
+
+  const resolvedModel = await resolveWorkspaceActiveModelName({
+    workspaceId,
+    requestedModel,
+    envDefaultModel: process.env.DEFAULT_AGENT_MODEL,
+  });
+  const resolvedReasoningEffort = reasoningEffort ?? null;
+  const resolvedToolSelection = resolveConversationTurnTools({
+    agentToolSelectionValue: agent.builtinToolsEnabled,
+    enabledToolNames,
+    enabledBuiltinTools,
+  });
 
   const existingPending = await db.query.conversationMessages.findFirst({
     where: and(
@@ -641,7 +996,14 @@ export async function sendConversationMessage(params: {
       role: 'user',
       status: 'completed',
       content,
-      metadata: {},
+      metadata: {
+        agentId: agent.id,
+        agentName: agent.name,
+        model: resolvedModel,
+        reasoningEffort: resolvedReasoningEffort,
+        enabledToolNames: resolvedToolSelection.metadataEnabledToolNames,
+        enabledBuiltinTools: resolvedToolSelection.metadataEnabledBuiltinTools,
+      },
       createdAt: now,
       updatedAt: now,
     })
@@ -654,7 +1016,14 @@ export async function sendConversationMessage(params: {
       role: 'assistant',
       status: 'pending',
       content: '',
-      metadata: {},
+      metadata: buildConversationProgressMetadata({
+        agent,
+        model: resolvedModel,
+        reasoningEffort: resolvedReasoningEffort,
+        enabledToolNames: resolvedToolSelection.enabledToolNames,
+        enabledBuiltinTools: resolvedToolSelection.selectedBuiltinToolNames,
+        liveEvents: [],
+      }),
       createdAt: now,
       updatedAt: now,
     })
@@ -675,6 +1044,10 @@ export async function sendConversationMessage(params: {
       agentId: agent.id,
       agentName: agent.name,
       userMessageId: userMessage.id,
+      model: resolvedModel,
+      reasoningEffort: resolvedReasoningEffort,
+      enabledToolNames: resolvedToolSelection.metadataEnabledToolNames,
+      enabledBuiltinTools: resolvedToolSelection.metadataEnabledBuiltinTools,
     },
   });
 
@@ -701,12 +1074,9 @@ export async function sendConversationMessage(params: {
     workspaceId,
   });
 
-  const enabledTools = ((agent.builtinToolsEnabled as string[]) ?? []).filter(
-    (toolName) => !WORKFLOW_CONTEXT_REQUIRED_TOOLS.has(toolName),
-  );
-
   let streamedLength = 0;
   let streamedContent = '';
+  let latestLiveEvents: ConversationLiveEvent[] = [];
 
   try {
     const result = await runConversationSession({
@@ -719,30 +1089,44 @@ export async function sendConversationMessage(params: {
       envVariables,
       userId,
       workspaceId,
-      enabledTools,
+      enabledBuiltinTools: resolvedToolSelection.selectedBuiltinToolNames,
+      enabledToolNames: resolvedToolSelection.enabledToolNames,
+      model: resolvedModel,
+      reasoningEffort: resolvedReasoningEffort,
       onProgress: async (events) => {
-        const delta = extractDelta(events, streamedLength);
+        const delta = extractAppendedContent(events, streamedLength, 'message_delta');
+        const newEvents = events.slice(streamedLength);
         streamedLength = events.length;
-        if (!delta) return;
+        latestLiveEvents = events;
 
-        streamedContent += delta;
+        if (delta) {
+          streamedContent += delta;
+        }
 
         await db
           .update(conversationMessages)
           .set({
             content: streamedContent,
+            metadata: buildConversationProgressMetadata({
+              agent,
+              model: resolvedModel,
+              reasoningEffort: resolvedReasoningEffort,
+              enabledToolNames: resolvedToolSelection.enabledToolNames,
+              enabledBuiltinTools: resolvedToolSelection.selectedBuiltinToolNames,
+              liveEvents: events,
+            }),
             updatedAt: new Date(),
           })
           .where(eq(conversationMessages.id, assistantMessage.id));
 
-        publishRealtimeEvent({
-          type: 'conversation.message.delta',
-          conversationId: conversation.id,
-          messageId: assistantMessage.id,
-          workspaceId,
-          timestamp: new Date().toISOString(),
-          data: { delta },
-        });
+        for (const event of newEvents) {
+          publishConversationLiveEvent({
+            conversationId: conversation.id,
+            assistantMessageId: assistantMessage.id,
+            workspaceId,
+            event,
+          });
+        }
       },
     });
 
@@ -788,6 +1172,14 @@ export async function sendConversationMessage(params: {
         status: 'failed',
         content: streamedContent,
         error: message,
+        metadata: buildConversationProgressMetadata({
+          agent,
+          model: resolvedModel,
+          reasoningEffort: resolvedReasoningEffort,
+          enabledToolNames: resolvedToolSelection.enabledToolNames,
+          enabledBuiltinTools: resolvedToolSelection.selectedBuiltinToolNames,
+          liveEvents: latestLiveEvents,
+        }),
         updatedAt: new Date(),
       })
       .where(eq(conversationMessages.id, assistantMessage.id))

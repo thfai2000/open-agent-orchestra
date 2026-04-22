@@ -4,8 +4,15 @@ import { z } from 'zod';
 import { authMiddleware, paginationSchema, uuidSchema } from '@oao/shared';
 import { db } from '../database/index.js';
 import { agents, conversations, conversationMessages } from '../database/schema.js';
+import {
+  BUILTIN_TOOL_NAMES,
+  createExplicitAgentToolSelection,
+  isBuiltInToolName,
+  resolveAgentToolSelection,
+} from '../services/agent-tool-selection.js';
+import { resolveAgentToolCatalog } from '../services/agent-tool-catalog.js';
 import { onRealtimeEvent, type RealtimeEvent } from '../services/realtime-bus.js';
-import { sendConversationMessage } from '../services/conversation-service.js';
+import { CONVERSATION_REASONING_EFFORTS, sendConversationMessage } from '../services/conversation-service.js';
 
 const conversationsRouter = new Hono();
 conversationsRouter.use('/*', authMiddleware);
@@ -19,8 +26,16 @@ const createConversationSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
 });
 
+const updateConversationSchema = z.object({
+  agentId: z.string().uuid(),
+});
+
 const sendMessageSchema = z.object({
   content: z.string().trim().min(1).max(20000),
+  model: z.string().trim().min(1).max(100).optional(),
+  reasoningEffort: z.enum(CONVERSATION_REASONING_EFFORTS).optional(),
+  enabledToolNames: z.array(z.string().trim().min(1)).optional(),
+  enabledBuiltinTools: z.array(z.enum(BUILTIN_TOOL_NAMES)).optional(),
 });
 
 function userCanUseAgent(agent: typeof agents.$inferSelect, user: { userId: string; role: string; workspaceId?: string | null }) {
@@ -39,6 +54,74 @@ async function loadConversationForUser(conversationId: string, user: { userId: s
   if (conversation.workspaceId !== user.workspaceId) return null;
   if (conversation.userId !== user.userId) return null;
   return conversation;
+}
+
+function parseMessageMetadata(metadata: unknown): Record<string, unknown> {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return {};
+  return metadata as Record<string, unknown>;
+}
+
+function getConversationSettings(
+  messages: Array<typeof conversationMessages.$inferSelect>,
+  agent: typeof agents.$inferSelect | null | undefined,
+  conversation: typeof conversations.$inferSelect,
+) {
+  const latestSettingsMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === 'assistant' || message.role === 'user');
+
+  const metadata = latestSettingsMessage ? parseMessageMetadata(latestSettingsMessage.metadata) : {};
+  const metadataEnabledToolNames = Array.isArray(metadata.enabledToolNames)
+    ? metadata.enabledToolNames.filter((toolName): toolName is string => typeof toolName === 'string')
+    : null;
+  const metadataEnabledTools = Array.isArray(metadata.enabledBuiltinTools)
+    ? metadata.enabledBuiltinTools.filter((toolName): toolName is string => typeof toolName === 'string')
+    : null;
+  const agentToolSelection = resolveAgentToolSelection(agent?.builtinToolsEnabled);
+
+  return {
+    selectedAgentId: conversation.agentId,
+    model: typeof metadata.model === 'string' ? metadata.model : null,
+    reasoningEffort: typeof metadata.reasoningEffort === 'string' ? metadata.reasoningEffort : null,
+    enabledToolNames: metadataEnabledToolNames,
+    enabledBuiltinTools: metadataEnabledTools ?? agentToolSelection.selectedBuiltinToolNames.filter(
+      (toolName) => toolName !== 'schedule_next_workflow_execution' && toolName !== 'manage_webhook_trigger' && toolName !== 'edit_workflow',
+    ),
+  };
+}
+
+function getConversationEffectiveToolSelectionValue(
+  messages: Array<typeof conversationMessages.$inferSelect>,
+  agent: typeof agents.$inferSelect | null | undefined,
+) {
+  const latestSettingsMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === 'assistant' || message.role === 'user');
+
+  const metadata = latestSettingsMessage ? parseMessageMetadata(latestSettingsMessage.metadata) : {};
+  const metadataEnabledToolNames = Array.isArray(metadata.enabledToolNames)
+    ? metadata.enabledToolNames.filter((toolName): toolName is string => typeof toolName === 'string')
+    : null;
+
+  if (metadataEnabledToolNames) {
+    return createExplicitAgentToolSelection(metadataEnabledToolNames);
+  }
+
+  const metadataEnabledBuiltinTools = Array.isArray(metadata.enabledBuiltinTools)
+    ? metadata.enabledBuiltinTools.filter((toolName): toolName is string => typeof toolName === 'string')
+    : null;
+
+  if (metadataEnabledBuiltinTools) {
+    const agentToolSelection = resolveAgentToolSelection(agent?.builtinToolsEnabled);
+    if (!agentToolSelection.explicitToolSelection) {
+      return metadataEnabledBuiltinTools;
+    }
+
+    const selectedMcpTools = agentToolSelection.selectedToolNames.filter((toolName) => !isBuiltInToolName(toolName));
+    return createExplicitAgentToolSelection([...selectedMcpTools, ...metadataEnabledBuiltinTools]);
+  }
+
+  return agent?.builtinToolsEnabled ?? [...BUILTIN_TOOL_NAMES];
 }
 
 conversationsRouter.get('/', async (c) => {
@@ -140,6 +223,48 @@ conversationsRouter.post('/', async (c) => {
   return c.json({ conversation }, 201);
 });
 
+conversationsRouter.patch('/:id', async (c) => {
+  const user = c.get('user');
+  const conversationId = uuidSchema.parse(c.req.param('id'));
+  const body = updateConversationSchema.parse(await c.req.json());
+
+  const conversation = await loadConversationForUser(conversationId, user);
+  if (!conversation) return c.json({ error: 'Conversation not found' }, 404);
+
+  const agent = await db.query.agents.findFirst({
+    where: eq(agents.id, body.agentId),
+  });
+
+  if (!agent || !userCanUseAgent(agent, user)) {
+    return c.json({ error: 'Agent not found' }, 404);
+  }
+
+  if (agent.status !== 'active') {
+    return c.json({ error: `Agent ${agent.name} is not active.` }, 400);
+  }
+
+  const [updatedConversation] = await db
+    .update(conversations)
+    .set({
+      agentId: agent.id,
+      agentNameSnapshot: agent.name,
+      updatedAt: new Date(),
+    })
+    .where(eq(conversations.id, conversation.id))
+    .returning();
+
+  return c.json({
+    conversation: updatedConversation,
+    agent: {
+      id: agent.id,
+      name: agent.name,
+      status: agent.status,
+      scope: agent.scope,
+      builtinToolsEnabled: agent.builtinToolsEnabled,
+    },
+  });
+});
+
 conversationsRouter.get('/:id', async (c) => {
   const user = c.get('user');
   const conversationId = uuidSchema.parse(c.req.param('id'));
@@ -167,9 +292,49 @@ conversationsRouter.get('/:id', async (c) => {
           name: agent.name,
           status: agent.status,
           scope: agent.scope,
+          builtinToolsEnabled: agent.builtinToolsEnabled,
         }
       : null,
+    settings: getConversationSettings(messages, agent, conversation),
+    availableBuiltinTools: BUILTIN_TOOL_NAMES,
   });
+});
+
+conversationsRouter.get('/:id/tool-catalog', async (c) => {
+  const user = c.get('user');
+  if (!user.workspaceId) return c.json({ error: 'No workspace selected' }, 400);
+
+  const conversationId = uuidSchema.parse(c.req.param('id'));
+  const conversation = await loadConversationForUser(conversationId, user);
+  if (!conversation) return c.json({ error: 'Conversation not found' }, 404);
+  if (!conversation.agentId) return c.json({ error: 'This conversation is not linked to an active agent.' }, 400);
+
+  const [messages, agent] = await Promise.all([
+    db
+      .select()
+      .from(conversationMessages)
+      .where(eq(conversationMessages.conversationId, conversationId))
+      .orderBy(asc(conversationMessages.createdAt)),
+    db.query.agents.findFirst({ where: eq(agents.id, conversation.agentId) }),
+  ]);
+
+  if (!agent || !userCanUseAgent(agent, user)) {
+    return c.json({ error: 'Agent not found' }, 404);
+  }
+
+  const toolCatalog = await resolveAgentToolCatalog({
+    agent: {
+      id: agent.id,
+      mcpJsonTemplate: agent.mcpJsonTemplate,
+    },
+    userId: user.userId,
+    workspaceId: user.workspaceId,
+    defaultSelectionValue: agent.builtinToolsEnabled,
+    effectiveSelectionValue: getConversationEffectiveToolSelectionValue(messages, agent),
+    logContext: 'conversation-tool-catalog',
+  });
+
+  return c.json(toolCatalog, 200);
 });
 
 conversationsRouter.post('/:id/messages', async (c) => {
@@ -189,6 +354,10 @@ conversationsRouter.post('/:id/messages', async (c) => {
       content: body.content,
       userId: user.userId,
       workspaceId: user.workspaceId,
+      model: body.model,
+      reasoningEffort: body.reasoningEffort,
+      enabledToolNames: body.enabledToolNames,
+      enabledBuiltinTools: body.enabledBuiltinTools,
     });
 
     return c.json(result, 201);

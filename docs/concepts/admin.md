@@ -24,6 +24,8 @@ Admins configure which AI models are available in the workspace. Each model has:
 | **Credit Cost** | Credits consumed per session (default: 1.00) |
 | **Active** | Whether the model is available for use |
 
+Active model records power the authenticated model selectors used by conversations and other runtime configuration screens. If a model is deactivated or removed, turn settings fall back to the current workspace default instead of continuing to show a phantom hard-coded model name.
+
 Default models created by the seed script:
 
 | Model | Provider | Credit Cost |

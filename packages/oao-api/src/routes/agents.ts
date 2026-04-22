@@ -3,8 +3,14 @@ import { eq, and, or, desc, sql } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { agents, agentFiles, mcpServerConfigs } from '../database/schema.js';
 import { authMiddleware, encrypt } from '@oao/shared';
+import {
+  BUILTIN_TOOL_NAMES,
+} from '../services/agent-tool-selection.js';
+import { resolveAgentToolCatalog } from '../services/agent-tool-catalog.js';
 import { emitEvent, EVENT_NAMES } from '../services/system-events.js';
-import { buildDefaultPlatformMcpServerValues } from '../services/platform-mcp.js';
+import {
+  buildDefaultPlatformMcpServerValues,
+} from '../services/platform-mcp.js';
 import {
   captureAgentHistoricalVersion,
   getAgentVersionView,
@@ -26,12 +32,15 @@ const PaginationQuery = z.object({
 
 /* ────────────────── agent-specific schemas ────────────────── */
 
-const BUILTIN_TOOL_NAMES = [
-  'schedule_next_workflow_execution', 'manage_webhook_trigger', 'record_decision',
-  'memory_store', 'memory_retrieve',
-  'edit_workflow', 'read_variables', 'edit_variables',
-  'simple_http_request',
-] as const;
+const ExplicitToolSelectionSchema = z.object({
+  mode: z.literal('explicit'),
+  names: z.array(z.string().min(1)).default([]),
+});
+
+const AgentToolSelectionSchema = z.union([
+  z.array(z.string().min(1)),
+  ExplicitToolSelectionSchema,
+]);
 
 const agentFileSchema = z.object({
   filePath: z.string().min(1).max(500),
@@ -51,7 +60,7 @@ const CreateAgentBody = z.object({
   githubTokenCredentialId: z.string().uuid().optional(),
   copilotTokenCredentialId: z.string().uuid().optional(),
   scope: z.enum(['user', 'workspace']).default('user'),
-  builtinToolsEnabled: z.array(z.enum(BUILTIN_TOOL_NAMES)).default([...BUILTIN_TOOL_NAMES]),
+  builtinToolsEnabled: AgentToolSelectionSchema.default([...BUILTIN_TOOL_NAMES]),
   mcpJsonTemplate: z.string().max(50000).optional(),
   files: z.array(agentFileSchema).max(50).default([]),
 }).refine(
@@ -80,7 +89,7 @@ const UpdateAgentBody = z.object({
   githubTokenCredentialId: z.string().uuid().nullable().optional(),
   copilotTokenCredentialId: z.string().uuid().nullable().optional(),
   status: z.enum(['active', 'paused']).optional(),
-  builtinToolsEnabled: z.array(z.enum(BUILTIN_TOOL_NAMES)).optional(),
+  builtinToolsEnabled: AgentToolSelectionSchema.optional(),
   mcpJsonTemplate: z.string().max(50000).nullable().optional(),
 });
 
@@ -128,6 +137,79 @@ const getAgentRoute = createRoute({
     200: { description: 'Agent detail', content: { 'application/json': { schema: z.object({ agent: z.any() }) } } },
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
+
+const inspectAgentToolCatalogRoute = createRoute({
+  method: 'post',
+  path: '/{id}/tool-catalog',
+  tags: ['Agents'],
+  summary: 'Inspect agent tool catalog',
+  description: 'Resolve grouped built-in and MCP tools for the agent editor, including mcp.json.template overrides.',
+  request: {
+    params: IdParam,
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            mcpJsonTemplate: z.string().max(50000).nullable().optional(),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Grouped tool catalog for the agent editor',
+      content: {
+        'application/json': {
+          schema: z.object({
+            selectionMode: z.enum(['legacy', 'explicit']),
+            effectiveSelectedToolNames: z.array(z.string()),
+            unresolvedSelectedToolNames: z.array(z.string()),
+            groups: z.array(z.any()),
+          }),
+        },
+      },
+    },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
+
+const previewAgentToolCatalogRoute = createRoute({
+  method: 'post',
+  path: '/tool-catalog',
+  tags: ['Agents'],
+  summary: 'Inspect new-agent tool catalog',
+  description: 'Resolve grouped built-in and MCP tools for the create-agent page before the agent is saved.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            mcpJsonTemplate: z.string().max(50000).nullable().optional(),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Grouped tool catalog for the create-agent page',
+      content: {
+        'application/json': {
+          schema: z.object({
+            selectionMode: z.enum(['legacy', 'explicit']),
+            defaultSelectedToolNames: z.array(z.string()),
+            effectiveSelectedToolNames: z.array(z.string()),
+            unresolvedSelectedToolNames: z.array(z.string()),
+            groups: z.array(z.any()),
+          }),
+        },
+      },
+    },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
   },
 });
 
@@ -208,6 +290,25 @@ const agentsRouter = new OpenAPIHono({
   },
 });
 agentsRouter.use('/*', authMiddleware);
+
+function canManageAgent(
+  agent: typeof agents.$inferSelect,
+  user: { userId: string; workspaceId?: string | null; role: string },
+) {
+  if (agent.workspaceId !== user.workspaceId) {
+    return false;
+  }
+
+  if (user.role === 'view_user') {
+    return false;
+  }
+
+  if (agent.scope === 'workspace') {
+    return user.role === 'workspace_admin' || user.role === 'super_admin';
+  }
+
+  return agent.userId === user.userId || user.role === 'workspace_admin' || user.role === 'super_admin';
+}
 
 // GET / — list agents visible to user: user-scoped (own) + workspace-scoped
 agentsRouter.openapi(listAgentsRoute, async (c) => {
@@ -315,6 +416,28 @@ agentsRouter.openapi(createAgentRoute, async (c) => {
   );
 });
 
+agentsRouter.openapi(previewAgentToolCatalogRoute, async (c) => {
+  const user = c.get('user');
+  const body = c.req.valid('json');
+
+  if (!user.workspaceId) return c.json({ error: 'No workspace context' }, 403);
+
+  const previewAgentId = `preview-${user.userId}`;
+  const toolCatalog = await resolveAgentToolCatalog({
+    agent: {
+      id: previewAgentId,
+      mcpJsonTemplate: null,
+    },
+    userId: user.userId,
+    workspaceId: user.workspaceId,
+    defaultSelectionValue: [...BUILTIN_TOOL_NAMES],
+    mcpJsonTemplateOverride: body.mcpJsonTemplate,
+    logContext: 'agent-tool-catalog-preview',
+  });
+
+  return c.json(toolCatalog, 200);
+});
+
 // GET /:id — agent detail
 agentsRouter.openapi(getAgentRoute, async (c) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -335,6 +458,31 @@ agentsRouter.openapi(getAgentRoute, async (c) => {
       hasInlineGitToken: Boolean(agent.githubTokenEncrypted),
     },
   }, 200);
+});
+
+agentsRouter.openapi(inspectAgentToolCatalogRoute, async (c) => {
+  const user = c.get('user');
+  const { id } = c.req.valid('param');
+  const body = c.req.valid('json');
+
+  const agent = await db.query.agents.findFirst({ where: eq(agents.id, id) });
+  if (!agent) return c.json({ error: 'Agent not found' }, 404);
+  if (!canManageAgent(agent, user)) return c.json({ error: 'Forbidden' }, 403);
+  if (!user.workspaceId) return c.json({ error: 'No workspace context' }, 403);
+
+  const toolCatalog = await resolveAgentToolCatalog({
+    agent: {
+      id: agent.id,
+      mcpJsonTemplate: agent.mcpJsonTemplate,
+    },
+    userId: user.userId,
+    workspaceId: user.workspaceId,
+    defaultSelectionValue: agent.builtinToolsEnabled,
+    mcpJsonTemplateOverride: body.mcpJsonTemplate,
+    logContext: 'agent-tool-catalog',
+  });
+
+  return c.json(toolCatalog, 200);
 });
 
 // PUT /:id — update agent
@@ -381,7 +529,7 @@ agentsRouter.openapi(updateAgentRoute, async (c) => {
     updateData.copilotTokenCredentialId = body.copilotTokenCredentialId;
   }
   if (body.status) updateData.status = body.status;
-  if (body.builtinToolsEnabled) updateData.builtinToolsEnabled = body.builtinToolsEnabled;
+  if (body.builtinToolsEnabled !== undefined) updateData.builtinToolsEnabled = body.builtinToolsEnabled;
   if (body.mcpJsonTemplate !== undefined) updateData.mcpJsonTemplate = body.mcpJsonTemplate;
 
   // Auto-increment version on any update

@@ -28,6 +28,19 @@ export interface McpServerConfig {
   writeTools?: string[];
 }
 
+export interface McpToolDescriptor {
+  name: string;
+  description: string;
+  inputSchema: McpToolSchema;
+  requiresPermission: boolean;
+}
+
+interface ListedMcpTool {
+  name: string;
+  description?: string;
+  inputSchema?: McpToolSchema;
+}
+
 interface McpToolSchema {
   type?: string | string[];
   properties?: Record<string, McpToolSchema>;
@@ -122,7 +135,8 @@ function schemaToZod(schema: McpToolSchema, isRequired = true): z.ZodTypeAny {
  */
 export async function connectToMcpServer(
   config: McpServerConfig,
-): Promise<{ tools: Tool[]; cleanup: () => Promise<void> }> {
+  options?: { enabledToolNames?: string[] },
+): Promise<{ tools: Tool[]; toolDescriptors: McpToolDescriptor[]; cleanup: () => Promise<void> }> {
   const transport = new StdioClientTransport({
     command: config.command,
     args: config.args,
@@ -133,14 +147,27 @@ export async function connectToMcpServer(
   await client.connect(transport);
 
   // List all tools from the MCP server
-  const { tools: mcpTools } = await client.listTools();
+  const { tools: rawTools } = await client.listTools();
+  const mcpTools = rawTools as ListedMcpTool[];
   logger.info({ server: config.name, count: mcpTools.length }, 'Connected to MCP server');
 
   const writeToolSet = new Set(config.writeTools ?? []);
+  const enabledToolSet = options?.enabledToolNames ? new Set(options.enabledToolNames) : null;
+
+  const toolDescriptors: McpToolDescriptor[] = mcpTools.map((mcpTool) => ({
+    name: mcpTool.name,
+    description: mcpTool.description ?? mcpTool.name,
+    inputSchema: (mcpTool.inputSchema ?? {}) as McpToolSchema,
+    requiresPermission: writeToolSet.has(mcpTool.name),
+  }));
+
+  const selectedMcpTools = enabledToolSet
+    ? mcpTools.filter((mcpTool) => enabledToolSet.has(mcpTool.name))
+    : mcpTools;
 
   // Convert each MCP tool into a Copilot SDK tool
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tools: Tool[] = mcpTools.map((mcpTool: any) => {
+  const tools: Tool[] = selectedMcpTools.map((mcpTool: any) => {
     const schema = (mcpTool.inputSchema ?? {}) as McpToolSchema;
     const zodShape: Record<string, z.ZodTypeAny> = {};
 
@@ -185,5 +212,5 @@ export async function connectToMcpServer(
     }
   };
 
-  return { tools, cleanup };
+  return { tools, toolDescriptors, cleanup };
 }

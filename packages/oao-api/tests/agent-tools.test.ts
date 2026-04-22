@@ -106,12 +106,11 @@ describe('createAgentTools', () => {
     expect(toolNames).toContain('memory_store');
   });
 
-  it('returns all tools when enabledTools is empty array (filter requires non-empty)', async () => {
+  it('returns no tools when enabledTools is an empty array', async () => {
     const { createAgentTools } = await import('../src/services/agent-tools.js');
     const credentials = new Map<string, string>();
-    // Empty array doesn't trigger the filter (enabledTools.length > 0 is false)
     const tools = createAgentTools(credentials, TEST_CONTEXT, []);
-    expect(tools.length).toBe(9);
+    expect(tools.length).toBe(0);
   });
 
   it('returns all tools when enabledTools is undefined', async () => {

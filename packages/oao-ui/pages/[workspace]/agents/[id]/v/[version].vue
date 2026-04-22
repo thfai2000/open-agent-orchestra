@@ -62,7 +62,7 @@
               <Card>
                 <template #content>
                   <div class="flex flex-col gap-3">
-                    <div><span class="text-surface-500 text-sm">Built-in Tools</span><p class="font-medium">{{ snapshotAgent.builtinToolsEnabled?.length ?? 0 }} enabled</p></div>
+                    <div><span class="text-surface-500 text-sm">Selected Tools</span><p class="font-medium">{{ configuredToolCount }} enabled</p></div>
                     <div><span class="text-surface-500 text-sm">Last Session</span><p class="font-medium">{{ snapshotAgent.lastSessionAt ? new Date(snapshotAgent.lastSessionAt).toLocaleString() : 'Never' }}</p></div>
                     <div><span class="text-surface-500 text-sm">Created</span><p class="font-medium">{{ snapshotAgent.createdAt ? new Date(snapshotAgent.createdAt).toLocaleString() : '—' }}</p></div>
                   </div>
@@ -118,6 +118,8 @@
 </template>
 
 <script setup lang="ts">
+import { countAgentSelectedTools } from '~/composables/useAgentToolSelection';
+
 const { authHeaders } = useAuth();
 const headers = authHeaders();
 const route = useRoute();
@@ -149,6 +151,7 @@ const breadcrumbs = computed(() => [
   { label: snapshotAgent.value?.name || 'Loading...', route: latestPath.value },
   { label: `v${versionNumber.value}` },
 ]);
+const configuredToolCount = computed(() => countAgentSelectedTools(snapshotAgent.value?.builtinToolsEnabled));
 
 function navigateToVersion(version?: number) {
   if (!version) return;
