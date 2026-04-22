@@ -60,6 +60,10 @@ export const credentialSubTypeEnum = pgEnum('credential_sub_type', [
 export const agentInstanceTypeEnum = pgEnum('agent_instance_type', ['static', 'ephemeral']);
 export const agentInstanceStatusEnum = pgEnum('agent_instance_status', ['idle', 'busy', 'offline', 'terminated']);
 export const authProviderTypeEnum = pgEnum('auth_provider_type', ['database', 'ldap']);
+export const mcpServerTypeEnum = pgEnum('mcp_server_type', ['custom', 'oao_platform']);
+export const conversationStatusEnum = pgEnum('conversation_status', ['active', 'archived']);
+export const conversationMessageRoleEnum = pgEnum('conversation_message_role', ['user', 'assistant']);
+export const conversationMessageStatusEnum = pgEnum('conversation_message_status', ['pending', 'completed', 'failed']);
 
 // ─── Workspaces ──────────────────────────────────────────────────────
 
@@ -239,6 +243,45 @@ export const triggers = pgTable('triggers', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// ─── Conversations ───────────────────────────────────────────────────
+
+export const conversations = pgTable('conversations', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull(),
+  agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+  agentNameSnapshot: varchar('agent_name_snapshot', { length: 100 }).notNull(),
+  title: varchar('title', { length: 200 }).notNull(),
+  status: conversationStatusEnum('status').notNull().default('active'),
+  lastMessageAt: timestamp('last_message_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  conversationWorkspaceIdx: index('conversations_workspace_idx').on(table.workspaceId),
+  conversationUserIdx: index('conversations_user_idx').on(table.userId),
+  conversationAgentIdx: index('conversations_agent_idx').on(table.agentId),
+}));
+
+export const conversationMessages = pgTable('conversation_messages', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  conversationId: uuid('conversation_id')
+    .notNull()
+    .references(() => conversations.id, { onDelete: 'cascade' }),
+  role: conversationMessageRoleEnum('role').notNull(),
+  status: conversationMessageStatusEnum('status').notNull().default('completed'),
+  content: text('content').notNull().default(''),
+  model: varchar('model', { length: 100 }),
+  error: text('error'),
+  metadata: jsonb('metadata').notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  conversationMessageConversationIdx: index('conversation_messages_conversation_idx').on(table.conversationId),
+  conversationMessageCreatedIdx: index('conversation_messages_created_idx').on(table.createdAt),
+}));
+
 // ─── Workflow Executions ─────────────────────────────────────────────
 
 export const workflowExecutions = pgTable('workflow_executions', {
@@ -375,6 +418,7 @@ export const mcpServerConfigs = pgTable(
     agentId: uuid('agent_id')
       .notNull()
       .references(() => agents.id, { onDelete: 'cascade' }),
+    serverType: mcpServerTypeEnum('server_type').notNull().default('custom'),
     name: varchar('name', { length: 100 }).notNull(),
     description: varchar('description', { length: 500 }),
     command: varchar('command', { length: 200 }).notNull(), // e.g. "node", "npx", "python"

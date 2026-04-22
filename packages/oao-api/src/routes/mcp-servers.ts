@@ -1,12 +1,31 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { eq, and } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { mcpServerConfigs, agents } from '../database/schema.js';
 import { authMiddleware, uuidSchema } from '@oao/shared';
+import {
+  ensureDefaultPlatformMcpServerConfig,
+  PLATFORM_MCP_SERVER_TYPE,
+} from '../services/platform-mcp.js';
 
 const mcpServersRouter = new Hono();
 mcpServersRouter.use('/*', authMiddleware);
+
+function canManageAgentMcpServers(
+  agent: typeof agents.$inferSelect,
+  user: { userId: string; workspaceId?: string | null; role: string },
+) {
+  if (agent.workspaceId !== user.workspaceId) {
+    return false;
+  }
+
+  if (agent.scope === 'workspace') {
+    return user.role === 'workspace_admin' || user.role === 'super_admin';
+  }
+
+  return agent.userId === user.userId || user.role === 'workspace_admin' || user.role === 'super_admin';
+}
 
 // GET / — list MCP server configs for an agent
 mcpServersRouter.get('/', async (c) => {
@@ -16,11 +35,10 @@ mcpServersRouter.get('/', async (c) => {
     return c.json({ error: 'Valid agentId query parameter is required' }, 400);
   }
 
-  // Verify agent ownership AND workspace isolation
-  const agent = await db.query.agents.findFirst({
-    where: and(eq(agents.id, agentId), eq(agents.userId, user.userId), eq(agents.workspaceId, user.workspaceId!)),
-  });
-  if (!agent) return c.json({ error: 'Agent not found' }, 404);
+  const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
+  if (!agent || !canManageAgentMcpServers(agent, user)) return c.json({ error: 'Agent not found' }, 404);
+
+  await ensureDefaultPlatformMcpServerConfig(agentId);
 
   const configs = await db.query.mcpServerConfigs.findMany({
     where: eq(mcpServerConfigs.agentId, agentId),
@@ -42,15 +60,13 @@ const createMcpServerSchema = z.object({
 
 mcpServersRouter.post('/', async (c) => {
   const user = c.get('user');
+  if (user.role === 'view_user') return c.json({ error: 'View-only users cannot create MCP server configs' }, 403);
   const body = await c.req.json();
   const parsed = createMcpServerSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 
-  // Verify agent ownership AND workspace isolation
-  const agent = await db.query.agents.findFirst({
-    where: and(eq(agents.id, parsed.data.agentId), eq(agents.userId, user.userId), eq(agents.workspaceId, user.workspaceId!)),
-  });
-  if (!agent) return c.json({ error: 'Agent not found' }, 404);
+  const agent = await db.query.agents.findFirst({ where: eq(agents.id, parsed.data.agentId) });
+  if (!agent || !canManageAgentMcpServers(agent, user)) return c.json({ error: 'Agent not found' }, 404);
 
   const [config] = await db
     .insert(mcpServerConfigs)
@@ -84,6 +100,7 @@ mcpServersRouter.put('/:id', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
   if (!uuidSchema.safeParse(id).success) return c.json({ error: 'Invalid ID' }, 400);
+  if (user.role === 'view_user') return c.json({ error: 'View-only users cannot update MCP server configs' }, 403);
 
   const body = await c.req.json();
   const parsed = updateMcpServerSchema.safeParse(body);
@@ -95,10 +112,21 @@ mcpServersRouter.put('/:id', async (c) => {
   });
   if (!existing) return c.json({ error: 'MCP server config not found' }, 404);
 
-  const agent = await db.query.agents.findFirst({
-    where: and(eq(agents.id, existing.agentId), eq(agents.userId, user.userId), eq(agents.workspaceId, user.workspaceId!)),
-  });
-  if (!agent) return c.json({ error: 'Agent not found' }, 404);
+  const agent = await db.query.agents.findFirst({ where: eq(agents.id, existing.agentId) });
+  if (!agent || !canManageAgentMcpServers(agent, user)) return c.json({ error: 'Agent not found' }, 404);
+
+  if (existing.serverType === PLATFORM_MCP_SERVER_TYPE) {
+    if (
+      parsed.data.name !== undefined ||
+      parsed.data.description !== undefined ||
+      parsed.data.command !== undefined ||
+      parsed.data.args !== undefined ||
+      parsed.data.envMapping !== undefined ||
+      parsed.data.writeTools !== undefined
+    ) {
+      return c.json({ error: 'The default OAO Platform MCP server is system-managed. Only enable or disable it.' }, 400);
+    }
+  }
 
   const updates: Record<string, unknown> = { updatedAt: new Date() };
   if (parsed.data.name !== undefined) updates.name = parsed.data.name;
@@ -123,6 +151,7 @@ mcpServersRouter.delete('/:id', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
   if (!uuidSchema.safeParse(id).success) return c.json({ error: 'Invalid ID' }, 400);
+  if (user.role === 'view_user') return c.json({ error: 'View-only users cannot delete MCP server configs' }, 403);
 
   // Find config and verify ownership
   const existing = await db.query.mcpServerConfigs.findFirst({
@@ -130,10 +159,12 @@ mcpServersRouter.delete('/:id', async (c) => {
   });
   if (!existing) return c.json({ error: 'MCP server config not found' }, 404);
 
-  const agent = await db.query.agents.findFirst({
-    where: and(eq(agents.id, existing.agentId), eq(agents.userId, user.userId), eq(agents.workspaceId, user.workspaceId!)),
-  });
-  if (!agent) return c.json({ error: 'Agent not found' }, 404);
+  if (existing.serverType === PLATFORM_MCP_SERVER_TYPE) {
+    return c.json({ error: 'The default OAO Platform MCP server cannot be deleted. Disable it instead.' }, 400);
+  }
+
+  const agent = await db.query.agents.findFirst({ where: eq(agents.id, existing.agentId) });
+  if (!agent || !canManageAgentMcpServers(agent, user)) return c.json({ error: 'Agent not found' }, 404);
 
   await db.delete(mcpServerConfigs).where(eq(mcpServerConfigs.id, id));
   return c.json({ deleted: true });

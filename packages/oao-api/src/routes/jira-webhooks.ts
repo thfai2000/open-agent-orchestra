@@ -29,6 +29,35 @@ function secureCompare(left: string, right: string) {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
+function getEncryptedCallbackToken(trigger: typeof triggers.$inferSelect) {
+  const runtimeState = trigger.runtimeState && typeof trigger.runtimeState === 'object'
+    ? trigger.runtimeState as Record<string, unknown>
+    : {};
+
+  return typeof runtimeState.callbackTokenEncrypted === 'string'
+    ? runtimeState.callbackTokenEncrypted
+    : null;
+}
+
+jiraWebhooksRouter.get('/:triggerId', async (c) => {
+  const triggerId = c.req.param('triggerId');
+  const callbackToken = c.req.query('token');
+  const trigger = await db.query.triggers.findFirst({
+    where: and(eq(triggers.id, triggerId), eq(triggers.triggerType, 'jira_changes_notification')),
+  });
+
+  if (!trigger) {
+    return c.json({ error: 'Trigger not found' }, 404);
+  }
+
+  const encryptedToken = getEncryptedCallbackToken(trigger);
+  if (!callbackToken || !encryptedToken || !secureCompare(callbackToken, decrypt(encryptedToken))) {
+    return c.json({ error: 'Invalid Jira callback token' }, 401);
+  }
+
+  return c.json({ status: 'reachable', triggerId: trigger.id, isActive: trigger.isActive }, 200);
+});
+
 jiraWebhooksRouter.post('/:triggerId', async (c) => {
   const triggerId = c.req.param('triggerId');
   const callbackToken = c.req.query('token');
@@ -40,12 +69,7 @@ jiraWebhooksRouter.post('/:triggerId', async (c) => {
     return c.json({ error: 'Trigger not found' }, 404);
   }
 
-  const runtimeState = trigger.runtimeState && typeof trigger.runtimeState === 'object'
-    ? trigger.runtimeState as Record<string, unknown>
-    : {};
-  const encryptedToken = typeof runtimeState.callbackTokenEncrypted === 'string'
-    ? runtimeState.callbackTokenEncrypted
-    : null;
+  const encryptedToken = getEncryptedCallbackToken(trigger);
   if (!callbackToken || !encryptedToken || !secureCompare(callbackToken, decrypt(encryptedToken))) {
     return c.json({ error: 'Invalid Jira callback token' }, 401);
   }

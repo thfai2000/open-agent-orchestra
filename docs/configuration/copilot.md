@@ -65,10 +65,11 @@ Platform tools created with `defineTool()` from the Copilot SDK:
 | `edit_workflow` | `stepUpdates[]` | Modify workflow steps |
 | `read_variables` | `scope`, `variableType` | Read variables |
 | `edit_variables` | `key`, `value`, `scope`, etc. | Create/update variables |
+| `simple_http_request` | `method`, `url`, `headers`, etc. | Curl-like HTTP requests with Jinja2 templating |
 
 ### MCP Tools
 
-Loaded from configured MCP servers at session start:
+Loaded from configured MCP servers at session start. Every agent receives a default **OAO Platform** MCP server, and custom MCP servers are merged on top of it:
 
 ```mermaid
 graph LR
@@ -78,6 +79,13 @@ graph LR
     Register --> Use[Agent uses tools]
     Use --> Cleanup[Kill child process]
 ```
+
+The default OAO Platform MCP server is a bundled stdio server that calls the OAO REST API with a short-lived JWT derived from the current session context:
+
+- Workflow sessions act as the owning agent user.
+- Conversation sessions act as the interactive user.
+- The server is system-managed per agent and can be disabled, but not deleted.
+- Custom MCP servers still use their configured command, args, and credential-to-env mapping.
 
 ## Permission Handling
 
@@ -106,6 +114,7 @@ The model is resolved per step:
 | `REDIS_URL` | Redis connection string |
 | `JWT_SECRET` | Secret for JWT signing/verification |
 | `ENCRYPTION_KEY` | 64-char hex string for AES-256-GCM credential encryption |
+| `OAO_PLATFORM_API_URL` | Base URL used by the bundled OAO Platform MCP server to call the API |
 
 ## Security
 

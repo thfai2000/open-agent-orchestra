@@ -80,9 +80,19 @@
         </div>
         <div class="flex flex-col gap-2">
           <label class="text-sm font-medium">OAuth Access Token Variable</label>
-          <InputText v-model="jiraCredentials.accessTokenVariableKey" :disabled="disabled" placeholder="JIRA_OAUTH_ACCESS_TOKEN" />
+          <Select
+            v-model="jiraCredentials.accessTokenVariableKey"
+            :disabled="disabled"
+            :options="getCredentialOptions(jiraCredentials.accessTokenVariableKey)"
+            optionLabel="optionLabel"
+            optionValue="key"
+            filter
+            showClear
+            placeholder="Select a credential variable"
+          />
         </div>
       </div>
+      <small class="text-surface-400">Workflow triggers can resolve workspace and user credential variables only.</small>
 
       <div class="flex flex-col gap-2">
         <label class="text-sm font-medium">JQL Filter</label>
@@ -92,15 +102,42 @@
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div class="flex flex-col gap-2">
           <label class="text-sm font-medium">Refresh Token Variable</label>
-          <InputText v-model="jiraCredentials.refreshTokenVariableKey" :disabled="disabled" placeholder="Optional, enables token refresh" />
+          <Select
+            v-model="jiraCredentials.refreshTokenVariableKey"
+            :disabled="disabled"
+            :options="getCredentialOptions(jiraCredentials.refreshTokenVariableKey)"
+            optionLabel="optionLabel"
+            optionValue="key"
+            filter
+            showClear
+            placeholder="Optional, enables token refresh"
+          />
         </div>
         <div class="flex flex-col gap-2">
           <label class="text-sm font-medium">Client ID Variable</label>
-          <InputText v-model="jiraCredentials.clientIdVariableKey" :disabled="disabled" placeholder="Required when using refresh token" />
+          <Select
+            v-model="jiraCredentials.clientIdVariableKey"
+            :disabled="disabled"
+            :options="getCredentialOptions(jiraCredentials.clientIdVariableKey)"
+            optionLabel="optionLabel"
+            optionValue="key"
+            filter
+            showClear
+            placeholder="Required when using refresh token"
+          />
         </div>
         <div class="flex flex-col gap-2">
           <label class="text-sm font-medium">Client Secret Variable</label>
-          <InputText v-model="jiraCredentials.clientSecretVariableKey" :disabled="disabled" placeholder="Required when using refresh token" />
+          <Select
+            v-model="jiraCredentials.clientSecretVariableKey"
+            :disabled="disabled"
+            :options="getCredentialOptions(jiraCredentials.clientSecretVariableKey)"
+            optionLabel="optionLabel"
+            optionValue="key"
+            filter
+            showClear
+            placeholder="Required when using refresh token"
+          />
         </div>
       </div>
 
@@ -208,18 +245,45 @@
         </div>
         <div class="flex flex-col gap-2">
           <label class="text-sm font-medium">API Token Variable</label>
-          <InputText v-model="jiraCredentials.apiTokenVariableKey" :disabled="disabled" placeholder="JIRA_API_TOKEN" />
+          <Select
+            v-model="jiraCredentials.apiTokenVariableKey"
+            :disabled="disabled"
+            :options="getCredentialOptions(jiraCredentials.apiTokenVariableKey)"
+            optionLabel="optionLabel"
+            optionValue="key"
+            filter
+            showClear
+            placeholder="Select a credential variable"
+          />
         </div>
       </div>
 
       <div v-else class="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
         <div class="flex flex-col gap-2">
           <label class="text-sm font-medium">OAuth Access Token Variable</label>
-          <InputText v-model="jiraCredentials.accessTokenVariableKey" :disabled="disabled" placeholder="JIRA_OAUTH_ACCESS_TOKEN" />
+          <Select
+            v-model="jiraCredentials.accessTokenVariableKey"
+            :disabled="disabled"
+            :options="getCredentialOptions(jiraCredentials.accessTokenVariableKey)"
+            optionLabel="optionLabel"
+            optionValue="key"
+            filter
+            showClear
+            placeholder="Select a credential variable"
+          />
         </div>
         <div class="flex flex-col gap-2">
           <label class="text-sm font-medium">Refresh Token Variable</label>
-          <InputText v-model="jiraCredentials.refreshTokenVariableKey" :disabled="disabled" placeholder="Optional, enables token refresh" />
+          <Select
+            v-model="jiraCredentials.refreshTokenVariableKey"
+            :disabled="disabled"
+            :options="getCredentialOptions(jiraCredentials.refreshTokenVariableKey)"
+            optionLabel="optionLabel"
+            optionValue="key"
+            filter
+            showClear
+            placeholder="Optional, enables token refresh"
+          />
         </div>
         <div class="flex flex-col gap-2">
           <label class="text-sm font-medium">Cloud ID Override</label>
@@ -227,11 +291,29 @@
         </div>
         <div class="flex flex-col gap-2">
           <label class="text-sm font-medium">Client ID Variable</label>
-          <InputText v-model="jiraCredentials.clientIdVariableKey" :disabled="disabled" placeholder="Required when using refresh token" />
+          <Select
+            v-model="jiraCredentials.clientIdVariableKey"
+            :disabled="disabled"
+            :options="getCredentialOptions(jiraCredentials.clientIdVariableKey)"
+            optionLabel="optionLabel"
+            optionValue="key"
+            filter
+            showClear
+            placeholder="Required when using refresh token"
+          />
         </div>
         <div class="flex flex-col gap-2">
           <label class="text-sm font-medium">Client Secret Variable</label>
-          <InputText v-model="jiraCredentials.clientSecretVariableKey" :disabled="disabled" placeholder="Required when using refresh token" />
+          <Select
+            v-model="jiraCredentials.clientSecretVariableKey"
+            :disabled="disabled"
+            :options="getCredentialOptions(jiraCredentials.clientSecretVariableKey)"
+            optionLabel="optionLabel"
+            optionValue="key"
+            filter
+            showClear
+            placeholder="Required when using refresh token"
+          />
         </div>
       </div>
     </template>
@@ -239,10 +321,18 @@
 </template>
 
 <script setup lang="ts">
-const props = defineProps<{
+interface CredentialOption {
+  key: string;
+  optionLabel: string;
+}
+
+const props = withDefaults(defineProps<{
   trigger: Record<string, any>;
   disabled?: boolean;
-}>();
+  credentialOptions?: CredentialOption[];
+}>(), {
+  credentialOptions: () => [],
+});
 
 const disabled = computed(() => Boolean(props.disabled));
 
@@ -294,6 +384,17 @@ const selectedJiraEvents = computed(() => {
   }
   return configuration.value.events as string[];
 });
+
+function getCredentialOptions(selectedKey?: string | null) {
+  if (!selectedKey || props.credentialOptions.some((option) => option.key === selectedKey)) {
+    return props.credentialOptions;
+  }
+
+  return [
+    { key: selectedKey, optionLabel: `${selectedKey} (current value)` },
+    ...props.credentialOptions,
+  ];
+}
 
 function addWebhookParameter() {
   webhookParameters.value.push({ name: '', required: false, description: '' });

@@ -29,6 +29,10 @@
           <p v-if="agent.description" class="text-surface-500 mt-2">{{ agent.description }}</p>
         </div>
         <div class="flex gap-2">
+          <NuxtLink v-if="agent.status === 'active'" :to="`/${ws}/conversations/new?agentId=${agent.id}`">
+            <Button label="Start Conversation" icon="pi pi-comments" severity="secondary" size="small" />
+          </NuxtLink>
+          <Button v-else label="Start Conversation" icon="pi pi-comments" severity="secondary" size="small" disabled />
           <Button :label="agent.status === 'active' ? 'Pause' : 'Activate'" :icon="agent.status === 'active' ? 'pi pi-pause' : 'pi pi-play'" severity="secondary" size="small" @click="toggleStatus" />
           <Button label="Edit" icon="pi pi-pencil" severity="secondary" size="small" @click="editing = true" v-if="!editing" />
           <Button label="Delete" icon="pi pi-trash" severity="danger" size="small" @click="confirmDelete" />

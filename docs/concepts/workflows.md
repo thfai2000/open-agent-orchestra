@@ -183,7 +183,13 @@ Triggers define **when** a workflow executes. Workflows can also be run manually
 | **Jira Changes Notification** | Register an Atlassian dynamic webhook filtered by JQL | Jira site URL + OAuth 2.0 credential references + JQL + Jira event list |
 | **Jira Polling** | Poll Jira search results on an interval with overlap-window dedupe | Jira site URL + API token or OAuth 2.0 credential references + JQL + interval |
 
-The workflow create and detail pages now use a **trigger catalog** plus an inline editor, so new trigger types can be added without changing the page layout. Existing trigger cards also surface sanitized runtime summaries such as Jira registration state, webhook expiration, last sync time, or the last successful polling time.
+The workflow create and detail pages now use a **trigger catalog** plus an inline editor, so new trigger types can be added without changing the page layout. On the workflow detail page, the catalog opens from the right edge of the trigger tab, while editing an existing trigger converts that specific trigger card into the edit form instead of opening a second detached form.
+
+Existing trigger cards also surface sanitized runtime summaries such as Jira registration state, webhook expiration, last sync time, or the last successful polling time.
+
+Jira trigger credential references are selected from workflow-visible credential variables (workspace or user scope), not entered as free text.
+
+Saved trigger cards expose a **Test Connectivity** action. For Jira notification triggers, the connectivity test verifies Jira webhook registration and probes the hosted callback URL. For Jira polling triggers, it executes the configured JQL with the saved credentials.
 
 Triggers can be **edited in place**. Use `PUT /api/triggers/:id` (or the inline editor in the workflow UI) to update the trigger type, configuration, or enabled state. Webhook paths must still be unique across all webhook triggers.
 

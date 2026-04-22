@@ -126,7 +126,7 @@ Agent file changes and agent-scoped variable changes both participate in agent v
 
 ### Built-in Tools
 
-Every agent has access to 10 built-in platform tools (individually toggleable):
+Every agent has access to 9 built-in Copilot tools (individually toggleable):
 
 | Tool | Description |
 |---|---|
@@ -141,6 +141,29 @@ Every agent has access to 10 built-in platform tools (individually toggleable):
 | `simple_http_request` | Curl-like HTTP requests with Jinja2 templating on all arguments |
 
 By default, all tools are enabled. Admins and agent owners can toggle individual tools when creating or editing agents.
+
+### Default OAO Platform MCP Server
+
+Every agent also gets a default **OAO Platform** MCP server record. This server is system-managed and gives the agent first-class access to the current OAO workspace through the existing REST API with the correct scoped authorization for that session.
+
+The default server exposes platform tools such as:
+
+| Tool | Description |
+|---|---|
+| `oao_list_agents` | List visible agents in the current workspace |
+| `oao_list_workflows` | List visible workflows |
+| `oao_get_workflow` | Fetch a workflow with steps and triggers |
+| `oao_create_workflow` | Create a workflow with steps and optional triggers |
+| `oao_update_workflow` | Update workflow metadata |
+| `oao_replace_workflow_steps` | Replace all workflow steps atomically |
+| `oao_run_workflow` | Trigger a manual workflow run |
+| `oao_list_variables` | List agent, user, or workspace variables |
+| `oao_get_variable` | Fetch variable metadata |
+| `oao_create_variable` | Create or upsert a variable |
+| `oao_update_variable` | Update a variable |
+| `oao_delete_variable` | Delete a variable |
+
+The OAO Platform MCP record can be disabled per agent, but it cannot be deleted. Existing agents created before this feature still receive the same tools at runtime even before their DB record is backfilled.
 
 ### Simple HTTP Request Tool
 
@@ -163,11 +186,14 @@ Agents can connect to [Model Context Protocol (MCP)](https://modelcontextprotoco
 
 | Field | Description | Example |
 |---|---|---|
+| **Server Type** | `custom` or system-managed `oao_platform` | `custom` |
 | **Name** | Display name | `Analytics Platform` |
 | **Command** | Executable to spawn | `node`, `python`, `npx` |
 | **Args** | Command arguments | `["server.js", "--port", "3000"]` |
-| **Env Mapping** | Map credential variables → env vars | `{"API_KEY": "SERVICE_API_KEY"}` |
+| **Env Mapping** | Map credential keys → env vars | `{"JIRA_TOKEN": "JIRA_API_TOKEN"}` |
 | **Write Tools** | Tools requiring permission approval | `["send_notification"]` |
+
+For the default **OAO Platform** server, the command, args, and auth env are injected automatically at runtime. Custom MCP servers still use the stored `command`, `args`, and `envMapping` fields.
 
 ```mermaid
 sequenceDiagram
@@ -198,13 +224,13 @@ MCP servers often need credentials. Use env mapping to securely inject them:
 ```json
 {
   "envMapping": {
-    "SERVICE_API_URL": "SERVICE_API_URL",
-    "SERVICE_API_KEY": "SERVICE_API_KEY"
+    "JIRA_TOKEN": "JIRA_API_TOKEN",
+    "JIRA_BASE_URL": "JIRA_BASE_URL"
   }
 }
 ```
 
-The left side is the env var name passed to the MCP server process. The right side is the credential variable key resolved from the agent's credential hierarchy.
+The left side is the credential key resolved from the agent/user/workspace variable hierarchy. The right side is the environment variable name passed to the MCP server process.
 
 #### Write Tool Permissions
 

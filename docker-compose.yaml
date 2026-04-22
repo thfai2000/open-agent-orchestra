@@ -58,6 +58,7 @@ services:
       DEFAULT_AGENT_MODEL: "gpt-4.1"
       EMBEDDING_PROVIDER: "local"
       LOG_LEVEL: "info"
+      OAO_PLATFORM_API_URL: "http://oao-api:4002"
     depends_on:
       postgres:
         condition: service_healthy

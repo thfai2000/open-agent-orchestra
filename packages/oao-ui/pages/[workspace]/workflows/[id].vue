@@ -202,72 +202,155 @@
           <!-- Triggers Tab -->
           <TabPanel value="triggers">
             <div class="mt-4 flex flex-col gap-4">
-              <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <button
-                  v-for="triggerType in triggerTypes"
-                  :key="triggerType.type"
-                  type="button"
-                  class="rounded-xl border border-surface-200 bg-white p-4 text-left transition-colors hover:border-primary/40 hover:bg-surface-50"
-                  @click="startCreateTrigger(triggerType)"
-                >
-                  <div class="flex items-start justify-between gap-3">
-                    <div>
-                      <p class="text-sm font-semibold text-surface-900">{{ triggerType.label }}</p>
-                      <p class="mt-1 text-xs text-surface-500">{{ triggerType.description }}</p>
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 class="text-lg font-semibold text-surface-900">Triggers</h3>
+                  <p class="mt-1 text-sm text-surface-500">Open the trigger catalog from the right, or edit an existing trigger directly inside its card.</p>
+                </div>
+                <Button label="Add Trigger" icon="pi pi-plus" @click="openTriggerPanel" />
+              </div>
+
+              <div class="overflow-hidden rounded-2xl">
+                <div class="flex flex-col gap-4 md:flex-row md:items-start">
+                  <div class="min-w-0 flex-1">
+                    <div v-if="triggers.length === 0" class="rounded-xl border border-dashed border-surface-300 px-4 py-6 text-center text-sm text-surface-400">
+                      No triggers configured yet. Use Add Trigger to open the trigger catalog for this workflow.
                     </div>
-                    <Tag :value="triggerType.category" severity="secondary" class="text-[11px]" />
-                  </div>
-                  <p v-if="triggerType.notes" class="mt-3 text-xs text-surface-400">{{ triggerType.notes }}</p>
-                </button>
-              </div>
 
-              <div v-if="editingTrigger" class="rounded-xl border border-primary/30 bg-surface-50 p-5">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <p class="text-base font-semibold text-surface-900">
-                      {{ triggerEditorMode === 'create' ? `Add ${formatTriggerType(editTriggerForm.triggerType)}` : `Edit ${formatTriggerType(editTriggerForm.triggerType)}` }}
-                    </p>
-                    <p class="mt-1 text-sm text-surface-500">{{ formatTriggerConfiguration(editTriggerForm) }}</p>
-                  </div>
-                  <label class="flex items-center gap-2 text-sm text-surface-600">
-                    <Checkbox v-model="editTriggerForm.isActive" :binary="true" />
-                    Active
-                  </label>
-                </div>
+                    <div v-for="trigger in triggers" :key="trigger.id" class="rounded-xl border border-surface-200 bg-white p-5">
+                      <template v-if="editingTriggerId === trigger.id">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <div class="flex flex-wrap items-center gap-2">
+                              <Tag :value="formatTriggerType(editTriggerForm.triggerType)" severity="info" />
+                              <Tag value="Editing" severity="warn" />
+                            </div>
+                            <p class="mt-2 text-sm text-surface-500">This trigger card is now the edit form. Save or cancel here before switching to another trigger.</p>
+                          </div>
+                          <label class="flex items-center gap-2 text-sm text-surface-600">
+                            <Checkbox v-model="editTriggerForm.isActive" :binary="true" />
+                            Active
+                          </label>
+                        </div>
 
-                <div class="mt-4">
-                  <WorkflowTriggerFields :trigger="editTriggerForm" />
-                </div>
+                        <div class="mt-4">
+                          <WorkflowTriggerFields :trigger="editTriggerForm" :credential-options="workflowCredentialOptions" />
+                        </div>
 
-                <div class="mt-5 flex justify-end gap-2">
-                  <Button label="Cancel" severity="secondary" @click="cancelTriggerEditor" />
-                  <Button label="Save Trigger" icon="pi pi-check" :loading="savingTrigger" @click="handleSaveTrigger" />
-                </div>
-              </div>
+                        <div class="mt-5 flex flex-wrap justify-end gap-2">
+                          <Button label="Cancel" severity="secondary" @click="cancelInlineTriggerEdit" />
+                          <Button label="Save Trigger" icon="pi pi-check" :loading="savingTrigger" @click="handleSaveEditedTrigger" />
+                        </div>
+                      </template>
 
-              <div v-if="triggers.length === 0" class="rounded-xl border border-dashed border-surface-300 px-4 py-6 text-center text-sm text-surface-400">
-                No triggers configured yet. Add one of the trigger types above to automate this workflow.
-              </div>
-
-              <div v-for="trigger in triggers" :key="trigger.id" class="rounded-xl border border-surface-200 bg-white p-5">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <div class="flex flex-wrap items-center gap-2">
-                      <Tag :value="formatTriggerType(trigger.triggerType)" severity="info" />
-                      <Tag :value="trigger.isActive ? 'Active' : 'Inactive'" :severity="trigger.isActive ? 'success' : 'secondary'" />
-                      <Tag
-                        v-if="trigger.runtimeSummary?.status"
-                        :value="String(trigger.runtimeSummary.status)"
-                        :severity="trigger.runtimeSummary?.lastError ? 'danger' : 'secondary'"
-                      />
+                      <template v-else>
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <div class="flex flex-wrap items-center gap-2">
+                              <Tag :value="formatTriggerType(trigger.triggerType)" severity="info" />
+                              <Tag :value="trigger.isActive ? 'Active' : 'Inactive'" :severity="trigger.isActive ? 'success' : 'secondary'" />
+                              <Tag
+                                v-if="trigger.runtimeSummary?.status"
+                                :value="String(trigger.runtimeSummary.status)"
+                                :severity="trigger.runtimeSummary?.lastError ? 'danger' : 'secondary'"
+                              />
+                            </div>
+                            <p class="mt-2 text-sm text-surface-600">{{ formatTriggerConfiguration(trigger) }}</p>
+                            <p v-if="formatTriggerRuntimeSummary(trigger)" class="mt-2 text-xs text-surface-400">{{ formatTriggerRuntimeSummary(trigger) }}</p>
+                            <p class="mt-2 text-xs text-surface-400">Last fired: {{ trigger.lastFiredAt ? new Date(trigger.lastFiredAt).toLocaleString() : 'Never' }}</p>
+                            <p
+                              v-if="triggerConnectivityResults[trigger.id]"
+                              class="mt-2 text-xs"
+                              :class="triggerConnectivityResults[trigger.id].ok ? 'text-emerald-600' : 'text-rose-600'"
+                            >
+                              {{ formatTriggerConnectivityResult(triggerConnectivityResults[trigger.id]) }}
+                            </p>
+                          </div>
+                          <div class="flex flex-wrap items-center gap-2">
+                            <Button
+                              label="Test Connectivity"
+                              icon="pi pi-link"
+                              text
+                              size="small"
+                              :loading="testingTriggerId === trigger.id"
+                              @click="handleTestTriggerConnectivity(trigger.id)"
+                            />
+                            <Button label="Edit" icon="pi pi-pencil" text size="small" @click="startEditTrigger(trigger)" />
+                            <Button label="Delete" icon="pi pi-trash" text severity="danger" size="small" @click="handleDeleteTrigger(trigger.id)" />
+                          </div>
+                        </div>
+                      </template>
                     </div>
-                    <p class="mt-2 text-sm text-surface-600">{{ formatTriggerConfiguration(trigger) }}</p>
-                    <p v-if="formatTriggerRuntimeSummary(trigger)" class="mt-2 text-xs text-surface-400">{{ formatTriggerRuntimeSummary(trigger) }}</p>
-                    <p class="mt-2 text-xs text-surface-400">Last fired: {{ trigger.lastFiredAt ? new Date(trigger.lastFiredAt).toLocaleString() : 'Never' }}</p>
                   </div>
-                  <div class="flex items-center gap-2">
-                    <Button label="Edit" icon="pi pi-pencil" text size="small" @click="startEditTrigger(trigger)" />
-                    <Button label="Delete" icon="pi pi-trash" text severity="danger" size="small" @click="handleDeleteTrigger(trigger.id)" />
+
+                  <div
+                    class="w-full md:shrink-0 md:transition-[width,opacity] md:duration-300 md:ease-out"
+                    :class="triggerPanelOpen ? 'opacity-100 md:w-[26rem]' : 'pointer-events-none hidden opacity-0 md:block md:w-0'"
+                  >
+                    <div class="rounded-2xl border border-surface-200 bg-white shadow-sm">
+                      <div class="flex items-center justify-between border-b border-surface-200 px-4 py-3">
+                        <div>
+                          <p class="text-sm font-semibold text-surface-900">
+                            {{ triggerPanelStep === 'catalog' ? 'Add Trigger' : `Add ${formatTriggerType(createTriggerForm.triggerType)}` }}
+                          </p>
+                          <p class="mt-1 text-xs text-surface-500">
+                            {{ triggerPanelStep === 'catalog' ? 'Choose a trigger type from the scrollable catalog.' : 'Configure the selected trigger, then save it into the workflow.' }}
+                          </p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <Button
+                            v-if="triggerPanelStep === 'form'"
+                            icon="pi pi-arrow-left"
+                            text
+                            rounded
+                            size="small"
+                            aria-label="Back to trigger catalog"
+                            @click="showTriggerCatalog"
+                          />
+                          <Button icon="pi pi-times" text rounded size="small" aria-label="Close trigger panel" @click="closeTriggerPanel" />
+                        </div>
+                      </div>
+
+                      <div v-if="triggerPanelStep === 'catalog'" class="max-h-[72vh] overflow-y-auto p-4">
+                        <div class="flex flex-col gap-3">
+                          <button
+                            v-for="triggerType in triggerTypes"
+                            :key="triggerType.type"
+                            type="button"
+                            class="rounded-xl border border-surface-200 bg-surface-50 p-4 text-left transition-colors hover:border-primary/40 hover:bg-white"
+                            @click="selectTriggerType(triggerType)"
+                          >
+                            <div class="flex items-start justify-between gap-3">
+                              <div>
+                                <p class="text-sm font-semibold text-surface-900">{{ triggerType.label }}</p>
+                                <p class="mt-1 text-xs leading-5 text-surface-500">{{ triggerType.description }}</p>
+                              </div>
+                              <Tag :value="triggerType.category" severity="secondary" class="text-[11px]" />
+                            </div>
+                            <p v-if="triggerType.notes" class="mt-3 text-xs leading-5 text-surface-400">{{ triggerType.notes }}</p>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div v-else class="max-h-[72vh] overflow-y-auto p-4">
+                        <div class="flex items-center justify-between gap-3">
+                          <p class="text-sm text-surface-500">{{ formatTriggerConfiguration(createTriggerForm) }}</p>
+                          <label class="flex items-center gap-2 text-sm text-surface-600">
+                            <Checkbox v-model="createTriggerForm.isActive" :binary="true" />
+                            Active
+                          </label>
+                        </div>
+
+                        <div class="mt-4">
+                          <WorkflowTriggerFields :trigger="createTriggerForm" :credential-options="workflowCredentialOptions" />
+                        </div>
+
+                        <div class="mt-5 flex flex-wrap justify-end gap-2">
+                          <Button label="Cancel" severity="secondary" @click="closeTriggerPanel" />
+                          <Button label="Save Trigger" icon="pi pi-check" :loading="savingTrigger" @click="handleCreateTrigger" />
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -369,6 +452,13 @@ const { data: triggersData, refresh: refreshTriggers } = await useFetch(computed
 const triggers = computed(() => (triggersData.value as any)?.triggers ?? []);
 const { data: triggerTypesData } = await useFetch('/api/triggers/types', { headers });
 const triggerTypes = computed(() => (triggerTypesData.value as any)?.types ?? []);
+const { data: userVarsData } = await useFetch('/api/variables?scope=user', { headers });
+const { data: wsVarsData } = await useFetch('/api/variables?scope=workspace', { headers });
+const { buildCredentialOptions } = useAgentCredentialOptions();
+const workflowCredentialOptions = computed(() => buildCredentialOptions([
+  { scope: 'user', scopeLabel: 'User', variables: (userVarsData.value as any)?.variables ?? [] },
+  { scope: 'workspace', scopeLabel: 'Workspace', variables: (wsVarsData.value as any)?.variables ?? [] },
+]));
 
 const { data: execsData, refresh: refreshExecs } = await useFetch(computed(() => `/api/executions?workflowId=${wfId.value}&limit=50`), { headers });
 const wfExecutions = computed(() => (execsData.value as any)?.executions ?? []);
@@ -503,61 +593,82 @@ async function handleSaveSteps() {
 }
 
 // ─── Triggers CRUD ───
-const editingTrigger = ref(false);
+const triggerPanelOpen = ref(false);
+const triggerPanelStep = ref<'catalog' | 'form'>('catalog');
+const editingTriggerId = ref<string | null>(null);
 const savingTrigger = ref(false);
-const triggerEditorMode = ref<'create' | 'edit'>('create');
+const testingTriggerId = ref<string | null>(null);
+const createTriggerForm = reactive({ triggerType: '', configuration: {} as any, isActive: true });
 const editTriggerForm = reactive({ id: '', triggerType: '', configuration: {} as any, isActive: true });
+const triggerConnectivityResults = reactive<Record<string, { ok: boolean; message?: string; summary?: string }>>({});
 
 function getStatusSeverity(s: string) {
   return { completed: 'success', running: 'warn', pending: 'warn', failed: 'danger', cancelled: 'secondary' }[s] || 'secondary';
 }
 
-function startCreateTrigger(triggerType: any) {
-  Object.assign(editTriggerForm, { id: '', ...createTriggerDraft(triggerType) });
-  triggerEditorMode.value = 'create';
-  editingTrigger.value = true;
+function resetCreateTriggerForm() {
+  Object.assign(createTriggerForm, { triggerType: '', configuration: {}, isActive: true });
 }
 
-function startEditTrigger(t: any) {
-  Object.assign(editTriggerForm, { id: t.id, triggerType: t.triggerType, configuration: JSON.parse(JSON.stringify(t.configuration)), isActive: t.isActive !== false });
-  triggerEditorMode.value = 'edit';
-  editingTrigger.value = true;
-}
-
-function cancelTriggerEditor() {
-  editingTrigger.value = false;
-  triggerEditorMode.value = 'create';
+function resetEditTriggerForm() {
   Object.assign(editTriggerForm, { id: '', triggerType: '', configuration: {}, isActive: true });
 }
 
-async function handleSaveTrigger() {
+function openTriggerPanel() {
+  editingTriggerId.value = null;
+  resetEditTriggerForm();
+  resetCreateTriggerForm();
+  triggerPanelStep.value = 'catalog';
+  triggerPanelOpen.value = true;
+}
+
+function closeTriggerPanel() {
+  triggerPanelOpen.value = false;
+  triggerPanelStep.value = 'catalog';
+  resetCreateTriggerForm();
+}
+
+function showTriggerCatalog() {
+  triggerPanelStep.value = 'catalog';
+  resetCreateTriggerForm();
+}
+
+function selectTriggerType(triggerType: any) {
+  Object.assign(createTriggerForm, createTriggerDraft(triggerType));
+  triggerPanelStep.value = 'form';
+}
+
+function startEditTrigger(trigger: any) {
+  closeTriggerPanel();
+  editingTriggerId.value = trigger.id;
+  Object.assign(editTriggerForm, {
+    id: trigger.id,
+    triggerType: trigger.triggerType,
+    configuration: JSON.parse(JSON.stringify(trigger.configuration)),
+    isActive: trigger.isActive !== false,
+  });
+}
+
+function cancelInlineTriggerEdit() {
+  editingTriggerId.value = null;
+  resetEditTriggerForm();
+}
+
+async function handleCreateTrigger() {
   savingTrigger.value = true;
   try {
-    if (triggerEditorMode.value === 'create') {
-      await $fetch('/api/triggers', {
-        method: 'POST',
-        headers,
-        body: {
-          workflowId: wfId.value,
-          triggerType: editTriggerForm.triggerType,
-          configuration: editTriggerForm.configuration,
-          isActive: editTriggerForm.isActive,
-        },
-      });
-      toast.add({ severity: 'success', summary: 'Trigger added', life: 3000 });
-    } else {
-      await $fetch(`/api/triggers/${editTriggerForm.id}`, {
-        method: 'PUT',
-        headers,
-        body: {
-          triggerType: editTriggerForm.triggerType,
-          configuration: editTriggerForm.configuration,
-          isActive: editTriggerForm.isActive,
-        },
-      });
-      toast.add({ severity: 'success', summary: 'Trigger saved', life: 3000 });
-    }
-    cancelTriggerEditor();
+    await $fetch('/api/triggers', {
+      method: 'POST',
+      headers,
+      body: {
+        workflowId: wfId.value,
+        triggerType: createTriggerForm.triggerType,
+        configuration: createTriggerForm.configuration,
+        isActive: createTriggerForm.isActive,
+      },
+    });
+    toast.add({ severity: 'success', summary: 'Trigger added', life: 3000 });
+    closeTriggerPanel();
     await Promise.all([refreshTriggers(), refreshWf(), refreshWorkflowVersions()]);
   } catch (e: any) {
     const details = Array.isArray(e?.data?.issues)
@@ -566,6 +677,66 @@ async function handleSaveTrigger() {
     toast.add({ severity: 'error', summary: 'Error', detail: details || e?.data?.error || 'Failed', life: 5000 });
   } finally {
     savingTrigger.value = false;
+  }
+}
+
+async function handleSaveEditedTrigger() {
+  if (!editingTriggerId.value) {
+    return;
+  }
+
+  savingTrigger.value = true;
+  try {
+    await $fetch(`/api/triggers/${editingTriggerId.value}`, {
+      method: 'PUT',
+      headers,
+      body: {
+        triggerType: editTriggerForm.triggerType,
+        configuration: editTriggerForm.configuration,
+        isActive: editTriggerForm.isActive,
+      },
+    });
+    toast.add({ severity: 'success', summary: 'Trigger saved', life: 3000 });
+    cancelInlineTriggerEdit();
+    await Promise.all([refreshTriggers(), refreshWf(), refreshWorkflowVersions()]);
+  } catch (e: any) {
+    const details = Array.isArray(e?.data?.issues)
+      ? e.data.issues.map((issue: any) => issue.message).filter(Boolean).join('; ')
+      : '';
+    toast.add({ severity: 'error', summary: 'Error', detail: details || e?.data?.error || 'Failed', life: 5000 });
+  } finally {
+    savingTrigger.value = false;
+  }
+}
+
+function formatTriggerConnectivityResult(result: { ok: boolean; message?: string; summary?: string }) {
+  return result.summary || result.message || (result.ok ? 'Connectivity test passed.' : 'Connectivity test failed.');
+}
+
+async function handleTestTriggerConnectivity(triggerId: string) {
+  testingTriggerId.value = triggerId;
+  try {
+    const result = await $fetch<any>(`/api/triggers/${triggerId}/test`, {
+      method: 'POST',
+      headers,
+    });
+    triggerConnectivityResults[triggerId] = {
+      ok: result?.ok !== false,
+      message: result?.message,
+      summary: result?.summary,
+    };
+    toast.add({
+      severity: result?.ok === false ? 'error' : 'success',
+      summary: result?.ok === false ? 'Connectivity Failed' : 'Connectivity OK',
+      detail: result?.summary || result?.message || 'Connectivity test completed.',
+      life: 5000,
+    });
+  } catch (e: any) {
+    const message = e?.data?.summary || e?.data?.message || e?.data?.error || 'Connectivity test failed.';
+    triggerConnectivityResults[triggerId] = { ok: false, message };
+    toast.add({ severity: 'error', summary: 'Connectivity Failed', detail: message, life: 5000 });
+  } finally {
+    testingTriggerId.value = null;
   }
 }
 

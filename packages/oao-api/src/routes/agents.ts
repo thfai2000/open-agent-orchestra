@@ -1,9 +1,10 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { eq, and, or, desc, sql } from 'drizzle-orm';
 import { db } from '../database/index.js';
-import { agents, agentFiles } from '../database/schema.js';
+import { agents, agentFiles, mcpServerConfigs } from '../database/schema.js';
 import { authMiddleware, encrypt } from '@oao/shared';
 import { emitEvent, EVENT_NAMES } from '../services/system-events.js';
+import { buildDefaultPlatformMcpServerValues } from '../services/platform-mcp.js';
 import {
   captureAgentHistoricalVersion,
   getAgentVersionView,
@@ -288,6 +289,8 @@ agentsRouter.openapi(createAgentRoute, async (c) => {
           content: file.content,
         })));
     }
+
+    await tx.insert(mcpServerConfigs).values(buildDefaultPlatformMcpServerValues(createdAgent.id));
 
     return createdAgent;
   });

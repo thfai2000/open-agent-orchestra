@@ -107,7 +107,7 @@ function hasOAuthRefreshCredentials(credentials: Record<string, unknown>) {
   );
 }
 
-function buildTriggerCallbackUrl(triggerId: string, callbackToken: string) {
+export function buildTriggerCallbackUrl(triggerId: string, callbackToken: string) {
   const baseUrl = process.env.PUBLIC_API_BASE_URL?.trim();
   if (!baseUrl) {
     throw new TriggerServiceError(
@@ -125,6 +125,25 @@ function buildTriggerCallbackUrl(triggerId: string, callbackToken: string) {
 
   const normalizedBaseUrl = normalizeSiteUrl(parsedUrl.toString());
   return `${normalizedBaseUrl}/api/jira-webhooks/${triggerId}?token=${encodeURIComponent(callbackToken)}`;
+}
+
+function buildJiraWebhookRequest(configuration: Record<string, unknown>, callbackUrl: string) {
+  const fieldIdsFilter = Array.isArray(configuration.fieldIdsFilter)
+    ? configuration.fieldIdsFilter
+    : [];
+
+  return {
+    url: callbackUrl,
+    webhooks: [
+      {
+        events: configuration.events,
+        jqlFilter: configuration.jql,
+        ...(fieldIdsFilter.length > 0
+          ? { fieldIdsFilter }
+          : {}),
+      },
+    ],
+  };
 }
 
 function getCallbackToken(state: JiraRuntimeState) {
@@ -485,21 +504,10 @@ export async function registerJiraChangesNotificationTrigger(
   const runtimeState = cloneRuntimeState(runtimeStateInput);
   const callbackToken = getCallbackToken(runtimeState);
   const parsedConfig = parsedConfiguration.data as Record<string, unknown>;
-  const fieldIdsFilter = Array.isArray(parsedConfig.fieldIdsFilter)
-    ? parsedConfig.fieldIdsFilter
-    : [];
-  const webhookRequest = {
-    url: buildTriggerCallbackUrl(trigger.id, callbackToken),
-    webhooks: [
-      {
-        events: parsedConfig.events,
-        jqlFilter: parsedConfig.jql,
-        ...(fieldIdsFilter.length > 0
-          ? { fieldIdsFilter }
-          : {}),
-      },
-    ],
-  };
+  const webhookRequest = buildJiraWebhookRequest(
+    parsedConfig,
+    buildTriggerCallbackUrl(trigger.id, callbackToken),
+  );
 
   const registrationResponse = await requestJira(
     workflow,
@@ -543,6 +551,124 @@ export async function registerJiraChangesNotificationTrigger(
   }
 
   return runtimeState;
+}
+
+export async function testJiraChangesNotificationTriggerConnectivity(
+  workflow: WorkflowRecord,
+  trigger: TriggerRecord,
+) {
+  const parsedConfiguration = safeParseTriggerConfiguration('jira_changes_notification', trigger.configuration);
+  if (!parsedConfiguration.success) {
+    throw new TriggerServiceError('Validation failed', 400, parsedConfiguration.error.issues);
+  }
+
+  const runtimeState = cloneRuntimeState(trigger.runtimeState);
+  const callbackToken = getCallbackToken(runtimeState);
+  const callbackUrl = buildTriggerCallbackUrl(trigger.id, callbackToken);
+  const webhookRequest = buildJiraWebhookRequest(
+    parsedConfiguration.data as Record<string, unknown>,
+    callbackUrl,
+  );
+
+  const registrationResponse = await requestJira(
+    workflow,
+    parsedConfiguration.data as Record<string, unknown>,
+    runtimeState,
+    '/rest/api/3/webhook',
+    {
+      method: 'POST',
+      body: webhookRequest,
+    },
+  ) as { webhookRegistrationResult?: Array<{ createdWebhookId?: number; errors?: string[] }> } | null;
+
+  const firstResult = registrationResponse?.webhookRegistrationResult?.[0];
+  if (!firstResult?.createdWebhookId) {
+    throw new TriggerServiceError(
+      firstResult?.errors?.join('; ') || 'Jira did not return a createdWebhookId for the requested webhook',
+      400,
+    );
+  }
+
+  const createdWebhookId = Number(firstResult.createdWebhookId);
+  let cleanupWarning: string | null = null;
+
+  try {
+    await requestJira(
+      workflow,
+      parsedConfiguration.data as Record<string, unknown>,
+      runtimeState,
+      '/rest/api/3/webhook',
+      {
+        method: 'DELETE',
+        body: { webhookIds: [createdWebhookId] },
+      },
+    );
+  } catch (error) {
+    cleanupWarning = error instanceof Error ? error.message : 'Failed to clean up the temporary Jira webhook registration.';
+    logger.warn({ triggerId: trigger.id, createdWebhookId, cleanupWarning }, 'Connectivity test left a temporary Jira webhook registration behind');
+  }
+
+  const callbackProbeResponse = await fetch(callbackUrl, { method: 'GET' });
+  if (!callbackProbeResponse.ok) {
+    throw new TriggerServiceError(
+      `Callback probe failed (${callbackProbeResponse.status}) for ${callbackUrl}`,
+      callbackProbeResponse.status >= 500 ? 502 : 400,
+    );
+  }
+
+  return {
+    ok: true,
+    summary: cleanupWarning
+      ? `Jira webhook registration and callback probe succeeded, but cleanup failed: ${cleanupWarning}`
+      : 'Jira webhook registration succeeded and the public callback probe responded successfully.',
+    details: {
+      callbackUrl,
+      callbackProbeStatus: callbackProbeResponse.status,
+      temporaryWebhookId: createdWebhookId,
+      cloudId: runtimeState.cloudId || null,
+      cleanupWarning,
+    },
+  };
+}
+
+export async function testJiraPollingTriggerConnectivity(
+  workflow: WorkflowRecord,
+  trigger: TriggerRecord,
+) {
+  const parsedConfiguration = safeParseTriggerConfiguration('jira_polling', trigger.configuration);
+  if (!parsedConfiguration.success) {
+    throw new TriggerServiceError('Validation failed', 400, parsedConfiguration.error.issues);
+  }
+
+  const configuration = parsedConfiguration.data as Record<string, unknown>;
+  const runtimeState = cloneRuntimeState(trigger.runtimeState);
+  const response = await requestJira(
+    workflow,
+    configuration,
+    runtimeState,
+    '/rest/api/3/search/jql',
+    {
+      method: 'POST',
+      body: {
+        jql: configuration.jql,
+        maxResults: 1,
+        fields: configuration.fields,
+      },
+    },
+  ) as { issues?: Array<Record<string, unknown>> } | null;
+
+  const sampleIssues = (response?.issues || []).slice(0, 1).map((issue) => normalizeJiraIssue(issue, asString(configuration.jiraSiteUrl) || ''));
+
+  return {
+    ok: true,
+    summary: sampleIssues.length > 0
+      ? `Jira search succeeded. Sample issue: ${sampleIssues[0].key}.`
+      : 'Jira search succeeded and the JQL executed without errors.',
+    details: {
+      cloudId: runtimeState.cloudId || null,
+      sampleIssues,
+    },
+  };
 }
 
 export async function cleanupSpecificJiraWebhookIds(

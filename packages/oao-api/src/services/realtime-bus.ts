@@ -26,13 +26,21 @@ export interface RealtimeEvent {
     | 'step.started'
     | 'step.progress'
     | 'step.completed'
-    | 'step.failed';
+    | 'step.failed'
+    | 'conversation.message.started'
+    | 'conversation.message.delta'
+    | 'conversation.message.completed'
+    | 'conversation.message.failed';
   /** Workflow execution ID */
-  executionId: string;
+  executionId?: string;
   /** Workflow ID (for listing page filtering) */
   workflowId?: string;
   /** Workspace ID (for access scoping) */
   workspaceId?: string;
+  /** Conversation ID (for chat page filtering) */
+  conversationId?: string;
+  /** Conversation message ID */
+  messageId?: string;
   /** Step execution ID (for step-level events) */
   stepExecutionId?: string;
   /** Step order (1-based) */

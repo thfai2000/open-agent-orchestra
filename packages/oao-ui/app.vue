@@ -110,6 +110,7 @@ const roleLabel = computed(() => {
 const mainNav = computed(() => [
   { to: `/${ws.value}`, icon: 'pi pi-home', label: 'Dashboard' },
   { to: `/${ws.value}/agents`, icon: 'pi pi-microchip-ai', label: 'Agents' },
+  { to: `/${ws.value}/conversations`, icon: 'pi pi-comments', label: 'Conversations' },
   { to: `/${ws.value}/workflows`, icon: 'pi pi-sitemap', label: 'Workflows' },
   { to: `/${ws.value}/executions`, icon: 'pi pi-play-circle', label: 'Executions' },
   { to: `/${ws.value}/instances`, icon: 'pi pi-server', label: 'Instances' },

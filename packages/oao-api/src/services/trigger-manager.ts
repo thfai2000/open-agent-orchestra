@@ -114,6 +114,7 @@ export async function updateWorkflowTrigger(params: {
 
   const wasJiraNotification = params.trigger.triggerType === 'jira_changes_notification';
   const willBeJiraNotification = nextTriggerType === 'jira_changes_notification';
+  const jiraConfigChanged = !configsEqual(params.trigger.configuration, nextConfiguration);
   const previousWebhookIds = wasJiraNotification
     ? Array.isArray((params.trigger.runtimeState as Record<string, unknown> | null)?.webhookRegistrationIds)
       ? ((params.trigger.runtimeState as Record<string, unknown>).webhookRegistrationIds as number[])
@@ -129,7 +130,10 @@ export async function updateWorkflowTrigger(params: {
   }
 
   if (willBeJiraNotification) {
-    nextRuntimeState = nextIsActive
+    const shouldRegisterJiraWebhook = nextIsActive
+      && (!wasJiraNotification || jiraConfigChanged || !params.trigger.isActive || previousWebhookIds.length === 0);
+
+    nextRuntimeState = shouldRegisterJiraWebhook
       ? await registerJiraChangesNotificationTrigger(
         params.workflow,
         params.trigger,

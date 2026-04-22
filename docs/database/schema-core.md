@@ -88,9 +88,7 @@ Immutable snapshots of agent config at each version, for audit trail.
 | createdAt | timestamp | |
 | | | UNIQUE(agentId, version) |
 
-### mcp_server_configs (deprecated)
-
-> **Deprecated**: MCP server management through the UI has been removed in v1.15.0. Use the agent's `mcpJsonTemplate` field instead. The table is retained for backward compatibility with existing data.
+### mcp_server_configs
 
 MCP server configurations per agent.
 
@@ -98,6 +96,7 @@ MCP server configurations per agent.
 |---|---|---|
 | id | UUID PK | |
 | agentId | UUID FK → agents | |
+| serverType | enum | `custom` or system-managed `oao_platform` |
 | name | varchar(100) | Display name |
 | description | varchar(500) | |
 | command | varchar(200) | Process command (`node`, `npx`, `python`) |
@@ -106,6 +105,8 @@ MCP server configurations per agent.
 | isEnabled | boolean | |
 | writeTools | jsonb | Tool names requiring permission |
 | createdAt, updatedAt | timestamp | |
+
+Every new agent gets one default `oao_platform` row. That system-managed row points at the bundled OAO Platform MCP server and carries per-session auth/env at runtime rather than storing secrets in the table.
 
 ## Workflow Tables
 
@@ -186,6 +187,40 @@ Trigger configurations for workflows.
 - **Datetime**: `{ "datetime": "2025-01-15T09:00:00Z" }` (one-shot, auto-deactivates)
 - **Webhook**: `{ "secret": "hmac-secret-encrypted" }`
 - **Event**: `{ "eventName": "workflow.completed", "conditions": { "status": "completed" } }`
+
+## Conversation Tables
+
+### conversations
+
+Persisted interactive chat threads between a user and a selected agent.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| workspaceId | UUID FK → workspaces | Cascade delete |
+| userId | UUID FK → users | Conversation owner |
+| agentId | UUID FK → agents | Nullable if the source agent is deleted later |
+| agentNameSnapshot | varchar(100) | Stored display name at conversation creation time |
+| title | varchar(200) | User-supplied or auto-generated |
+| status | conversation_status | `active` or `archived` |
+| lastMessageAt | timestamp | Updated whenever a turn is added |
+| createdAt, updatedAt | timestamp | |
+
+### conversation_messages
+
+Stored user and assistant turns for each conversation.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| conversationId | UUID FK → conversations | Cascade delete |
+| role | conversation_message_role | `user` or `assistant` |
+| status | conversation_message_status | `pending`, `completed`, `failed` |
+| content | text | Assistant messages stream into this field as deltas arrive |
+| model | varchar(100) | Recorded for assistant turns when available |
+| error | text | Failure message for failed assistant turns |
+| metadata | jsonb | Reasoning trace and tool-call summary |
+| createdAt, updatedAt | timestamp | |
 
 ## Execution Tables
 

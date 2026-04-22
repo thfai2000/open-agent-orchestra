@@ -12,6 +12,7 @@ const mockFindMany = vi.fn().mockResolvedValue([]);
 const mockInsertReturning = vi.fn().mockResolvedValue([{ id: 'new-id-001', name: 'test' }]);
 const mockUpdateReturning = vi.fn().mockResolvedValue([{ id: 'updated-id-001' }]);
 const mockDeleteWhere = vi.fn().mockResolvedValue([]);
+const mockSendConversationMessage = vi.fn();
 
 // Build a chainable mock for db operations
 // Helper: create a thenable select chain (supports both `await chain.where()` and `.where().orderBy().limit()...`)
@@ -19,7 +20,9 @@ function createSelectChain(resolveValue: unknown[] = []) {
   const chain: Record<string, unknown> = {};
   const self = () => chain;
   chain.from = vi.fn(self);
+  chain.leftJoin = vi.fn(self);
   chain.where = vi.fn(self);
+  chain.groupBy = vi.fn(self);
   chain.orderBy = vi.fn(self);
   chain.limit = vi.fn(self);
   chain.offset = vi.fn(self);
@@ -48,6 +51,8 @@ function buildChainableMock() {
       workspaces: { findFirst: mockFindFirst, findMany: mockFindMany },
       agentFiles: { findFirst: mockFindFirst, findMany: mockFindMany },
       models: { findFirst: mockFindFirst, findMany: mockFindMany },
+      conversations: { findFirst: mockFindFirst, findMany: mockFindMany },
+      conversationMessages: { findFirst: mockFindFirst, findMany: mockFindMany },
     },
     select: vi.fn().mockImplementation(() => createSelectChain([])),
     insert: vi.fn().mockReturnValue({
@@ -103,6 +108,10 @@ vi.mock('../src/services/workflow-engine.js', () => ({
   }),
 }));
 
+vi.mock('../src/services/conversation-service.js', () => ({
+  sendConversationMessage: mockSendConversationMessage,
+}));
+
 // Mock system-events
 vi.mock('../src/services/system-events.js', () => ({
   emitEvent: vi.fn().mockResolvedValue('event-id-001'),
@@ -127,6 +136,7 @@ const TEST_UUID = '550e8400-e29b-41d4-a716-446655440000';
 const TEST_WORKSPACE_ID = '550e8400-e29b-41d4-a716-446655440001';
 const TEST_AGENT_ID = '550e8400-e29b-41d4-a716-446655440010';
 const TEST_WORKFLOW_ID = '550e8400-e29b-41d4-a716-446655440020';
+const TEST_CONVERSATION_ID = '550e8400-e29b-41d4-a716-446655440030';
 
 beforeAll(async () => {
   process.env.JWT_SECRET = 'test-secret-key-must-be-at-least-32-chars-long!!';
@@ -143,6 +153,7 @@ beforeEach(() => {
   // Reset findFirst/findMany to return defaults
   mockFindFirst.mockResolvedValue(null);
   mockFindMany.mockResolvedValue([]);
+  mockSendConversationMessage.mockReset();
 });
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -226,7 +237,7 @@ describe('Agent routes — authenticated', () => {
     });
 
     expect(res.status).toBe(201);
-    expect(mockDb.insert).toHaveBeenCalledTimes(2);
+    expect(mockDb.insert).toHaveBeenCalledTimes(3);
   });
 
   it('POST /api/agents rejects missing name', async () => {
@@ -344,6 +355,111 @@ describe('Agent routes — authenticated', () => {
       headers: authHeaders(token),
     });
     expect(res.status).toBe(404);
+  });
+});
+
+// ======================================================================
+// CONVERSATION ROUTES
+// ======================================================================
+
+describe('Conversation routes — authenticated', () => {
+  it('GET /api/conversations returns the current user conversation history', async () => {
+    const token = await getToken();
+    mockDb.select
+      .mockImplementationOnce(() => createSelectChain([{
+        id: TEST_CONVERSATION_ID,
+        title: 'Agent Chat',
+        agentNameSnapshot: 'Test Agent',
+        status: 'active',
+        messageCount: 2,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        lastMessageAt: new Date().toISOString(),
+      }]))
+      .mockImplementationOnce(() => createSelectChain([{ count: 1 }]));
+
+    const res = await app.request('/api/conversations?page=1&limit=20', {
+      headers: authHeaders(token),
+    });
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.conversations).toHaveLength(1);
+    expect(json.total).toBe(1);
+  });
+
+  it('POST /api/conversations creates a conversation for an active agent', async () => {
+    const token = await getToken();
+    mockFindFirst.mockResolvedValueOnce({
+      id: TEST_AGENT_ID,
+      workspaceId: TEST_WORKSPACE_ID,
+      userId: TEST_UUID,
+      scope: 'user',
+      status: 'active',
+      name: 'Test Agent',
+    });
+    mockInsertReturning.mockResolvedValueOnce([{
+      id: TEST_CONVERSATION_ID,
+      workspaceId: TEST_WORKSPACE_ID,
+      userId: TEST_UUID,
+      agentId: TEST_AGENT_ID,
+      agentNameSnapshot: 'Test Agent',
+      title: 'Agent Chat',
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }]);
+
+    const res = await app.request('/api/conversations', {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify({
+        agentId: TEST_AGENT_ID,
+        title: 'Agent Chat',
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const json = await res.json();
+    expect(json.conversation.id).toBe(TEST_CONVERSATION_ID);
+  });
+
+  it('POST /api/conversations/:id/messages sends a message through the conversation service', async () => {
+    const token = await getToken();
+    mockFindFirst.mockResolvedValueOnce({
+      id: TEST_CONVERSATION_ID,
+      workspaceId: TEST_WORKSPACE_ID,
+      userId: TEST_UUID,
+      agentId: TEST_AGENT_ID,
+      agentNameSnapshot: 'Test Agent',
+      title: 'Agent Chat',
+      status: 'active',
+    });
+    mockSendConversationMessage.mockResolvedValueOnce({
+      userMessage: {
+        id: '550e8400-e29b-41d4-a716-446655440031',
+        role: 'user',
+        status: 'completed',
+        content: 'Hello agent',
+      },
+      assistantMessage: {
+        id: '550e8400-e29b-41d4-a716-446655440032',
+        role: 'assistant',
+        status: 'completed',
+        content: 'Hello user',
+      },
+    });
+
+    const res = await app.request(`/api/conversations/${TEST_CONVERSATION_ID}/messages`, {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify({ content: 'Hello agent' }),
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockSendConversationMessage).toHaveBeenCalledTimes(1);
+    const json = await res.json();
+    expect(json.assistantMessage.content).toBe('Hello user');
   });
 });
 
@@ -615,6 +731,36 @@ describe('Trigger routes — authenticated', () => {
     expect(Array.isArray(json.types)).toBe(true);
     expect(json.types.some((entry: any) => entry.type === 'jira_changes_notification')).toBe(true);
     expect(json.types.some((entry: any) => entry.type === 'jira_polling')).toBe(true);
+  });
+
+  it('POST /api/triggers/:id/test validates a saved non-Jira trigger', async () => {
+    const token = await getToken();
+    const triggerId = '550e8400-e29b-41d4-a716-446655440040';
+
+    mockFindFirst
+      .mockResolvedValueOnce({
+        id: triggerId,
+        workflowId: TEST_WORKFLOW_ID,
+        triggerType: 'time_schedule',
+        configuration: { cron: '*/5 * * * *' },
+        isActive: true,
+      })
+      .mockResolvedValueOnce({
+        id: TEST_WORKFLOW_ID,
+        workspaceId: TEST_WORKSPACE_ID,
+        userId: TEST_UUID,
+        scope: 'user',
+      });
+
+    const res = await app.request(`/api/triggers/${triggerId}/test`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.summary).toMatch(/configuration is valid/i);
   });
 
   it('POST /api/triggers creates a trigger', async () => {

@@ -43,9 +43,14 @@ GITHUB_TOKEN=your-github-token
 
 # Public API origin used for Jira change-notification callbacks
 PUBLIC_API_BASE_URL=http://localhost:4002
+
+# Base URL used by the bundled OAO Platform MCP server
+OAO_PLATFORM_API_URL=http://localhost:4002
 ```
 
 For Docker Desktop Kubernetes with ingress, set `PUBLIC_API_BASE_URL=http://oao.local`. Jira change-notification triggers need this value because Atlassian must reach the OAO API callback endpoint from outside the controller loop.
+
+For Kubernetes or Docker Compose workers, set `OAO_PLATFORM_API_URL` to an internal service URL such as `http://oao-api:4002` so spawned MCP subprocesses can reach the API from worker/controller containers.
 
 ## 3. Pre-Build Checks
 

@@ -407,6 +407,35 @@ describe('Jira webhook callbacks', () => {
     expect(res.status).toBe(404);
   });
 
+  it('GET /api/jira-webhooks/:triggerId accepts a valid callback token for reachability probes', async () => {
+    const callbackToken = 'jira-callback-token';
+
+    mockFindFirst.mockResolvedValueOnce({
+      id: TEST_TRIGGER_ID,
+      workflowId: TEST_WORKFLOW_ID,
+      triggerType: 'jira_changes_notification',
+      isActive: false,
+      runtimeState: {
+        callbackTokenEncrypted: encrypt(callbackToken),
+      },
+      configuration: {
+        jiraSiteUrl: 'https://example.atlassian.net',
+        authMode: 'oauth2',
+        credentials: { accessTokenVariableKey: 'JIRA_ACCESS_TOKEN' },
+        jql: 'project = OAO',
+        events: ['jira:issue_updated'],
+        fieldIdsFilter: [],
+      },
+    });
+
+    const res = await app.request(`/api/jira-webhooks/${TEST_TRIGGER_ID}?token=${callbackToken}`);
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.status).toBe('reachable');
+    expect(json.triggerId).toBe(TEST_TRIGGER_ID);
+  });
+
   it('POST /api/jira-webhooks/:triggerId accepts a valid callback and dedupes repeated webhook ids', async () => {
     const callbackToken = 'jira-callback-token';
     const payload = JSON.stringify({

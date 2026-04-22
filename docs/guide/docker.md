@@ -62,6 +62,7 @@ services:
       ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       DEFAULT_AGENT_MODEL: gpt-4.1
+      OAO_PLATFORM_API_URL: http://oao-api:4002
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,6 +79,7 @@ services:
       JWT_SECRET: your-jwt-secret-change-in-production
       ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       GITHUB_TOKEN: ${GITHUB_TOKEN}
+      OAO_PLATFORM_API_URL: http://oao-api:4002
     depends_on:
       postgres:
         condition: service_healthy
@@ -94,6 +96,7 @@ services:
       JWT_SECRET: your-jwt-secret-change-in-production
       ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       GITHUB_TOKEN: ${GITHUB_TOKEN}
+      OAO_PLATFORM_API_URL: http://oao-api:4002
     depends_on:
       postgres:
         condition: service_healthy

@@ -21,6 +21,8 @@ import workspacesRouter from './routes/workspaces.js';
 import eventsRouter from './routes/events.js';
 import agentFilesRouter from './routes/agent-files.js';
 import agentInstancesRouter from './routes/agent-instances.js';
+import conversationsRouter from './routes/conversations.js';
+import mcpServersRouter from './routes/mcp-servers.js';
 import tokensRouter, { validatePat } from './routes/tokens.js';
 import { startRealtimeSubscriber } from './services/realtime-bus.js';
 
@@ -54,6 +56,8 @@ const app = createApp({
     ['/api/events', eventsRouter],
     ['/api/agent-files', agentFilesRouter],
     ['/api/agent-instances', agentInstancesRouter],
+    ['/api/conversations', conversationsRouter],
+    ['/api/mcp-servers', mcpServersRouter],
     ['/api/tokens', tokensRouter],
   ],
 });

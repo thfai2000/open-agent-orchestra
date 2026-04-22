@@ -71,6 +71,7 @@ oao-api/
 │   │   ├── auth.ts       # Register, login, me, change-password, providers
 │   │   ├── auth-providers.ts # Auth provider CRUD (admin)
 │   │   ├── executions.ts # View/cancel/retry executions
+│   │   ├── conversations.ts # Interactive agent chat history + streaming
 │   │   ├── events.ts     # System event log
 │   │   ├── quota.ts      # Rate limit settings and usage stats
 │   │   ├── supervisor.ts # Emergency stop/resume
@@ -82,6 +83,7 @@ oao-api/
 │   │   └── agent-files.ts # DB-stored agent file management
 │   ├── services/
 │   │   ├── workflow-engine.ts  # Core: enqueue, execute, retry, agent provisioning
+│   │   ├── conversation-service.ts # Agent conversation turns + realtime streaming
 │   │   ├── ldap-auth.ts       # LDAP authentication (ldapts client)
 │   │   ├── k8s-provisioner.ts # K8s agent instance lifecycle (ephemeral mode)
 │   │   ├── agent-instance-registry.ts # Agent instance tracking & heartbeat
@@ -122,6 +124,7 @@ oao-ui/
 │   └── [workspace]/      # Dynamic workspace routing
 │       ├── index.vue     # Workspace home
 │       ├── agents/       # Agent list + in-page create/edit pages
+│       ├── conversations/ # Conversation history + chat pages
 │       ├── workflows/    # Workflow list + builder pages
 │       ├── executions/   # Execution history + detail pages
 │       ├── variables/    # Variable list + dedicated create/edit pages
@@ -133,7 +136,8 @@ oao-ui/
 │           ├── quotas.vue    # Legacy redirect to rate-limits
 │           └── security.vue  # Security settings
 ├── composables/
-│   └── useAuth.ts        # JWT token management
+│   ├── useAuth.ts        # JWT token management
+│   └── useConversationStream.ts # SSE chat streaming for conversations
 ├── middleware/
 │   └── auth.global.ts    # Route guards
 ├── components/

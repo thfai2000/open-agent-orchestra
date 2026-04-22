@@ -29,9 +29,89 @@ export interface McpServerConfig {
 }
 
 interface McpToolSchema {
-  type: string;
-  properties?: Record<string, { type: string; description?: string; enum?: string[]; default?: unknown; items?: unknown }>;
+  type?: string | string[];
+  properties?: Record<string, McpToolSchema>;
   required?: string[];
+  items?: McpToolSchema;
+  enum?: string[];
+  description?: string;
+  default?: unknown;
+  additionalProperties?: boolean | McpToolSchema;
+  anyOf?: McpToolSchema[];
+  oneOf?: McpToolSchema[];
+}
+
+function getSchemaType(schema: McpToolSchema): string | undefined {
+  if (Array.isArray(schema.type)) {
+    return schema.type.find((value) => value !== 'null') ?? schema.type[0];
+  }
+  return schema.type;
+}
+
+function schemaToZod(schema: McpToolSchema, isRequired = true): z.ZodTypeAny {
+  const variants = schema.anyOf ?? schema.oneOf;
+  if (variants?.length) {
+    return schemaToZod(variants[0], isRequired);
+  }
+
+  let field: z.ZodTypeAny;
+
+  if (schema.enum?.length) {
+    field = z.enum(schema.enum as [string, ...string[]]);
+  } else {
+    switch (getSchemaType(schema)) {
+      case 'number':
+        field = z.number();
+        break;
+      case 'integer':
+        field = z.number().int();
+        break;
+      case 'boolean':
+        field = z.boolean();
+        break;
+      case 'array':
+        field = z.array(schemaToZod(schema.items ?? { type: 'string' }));
+        break;
+      case 'object':
+        if (schema.properties && Object.keys(schema.properties).length > 0) {
+          const required = new Set(schema.required ?? []);
+          const shape: Record<string, z.ZodTypeAny> = {};
+          for (const [key, propertySchema] of Object.entries(schema.properties)) {
+            shape[key] = schemaToZod(propertySchema, required.has(key));
+          }
+
+          field = z.object(shape);
+          if (schema.additionalProperties) {
+            field = field.passthrough();
+          }
+        } else if (typeof schema.additionalProperties === 'object') {
+          field = z.record(schemaToZod(schema.additionalProperties));
+        } else {
+          field = z.record(z.unknown());
+        }
+        break;
+      case 'string':
+        field = z.string();
+        break;
+      default:
+        field = z.unknown();
+        break;
+    }
+  }
+
+  if (schema.description) {
+    field = field.describe(schema.description);
+  }
+
+  if (schema.default !== undefined) {
+    field = field.default(schema.default as never);
+  }
+
+  if (!isRequired) {
+    field = field.optional();
+  }
+
+  return field;
 }
 
 /**
@@ -66,29 +146,9 @@ export async function connectToMcpServer(
 
     // Build a Zod schema from the JSON Schema properties
     if (schema.properties) {
+      const required = new Set(schema.required ?? []);
       for (const [key, prop] of Object.entries(schema.properties)) {
-        let field: z.ZodTypeAny;
-
-        if (prop.enum) {
-          field = z.enum(prop.enum as [string, ...string[]]);
-        } else if (prop.type === 'number' || prop.type === 'integer') {
-          field = z.number();
-        } else if (prop.type === 'boolean') {
-          field = z.boolean();
-        } else if (prop.type === 'array') {
-          field = z.array(z.string());
-        } else {
-          field = z.string();
-        }
-
-        if (prop.description) field = field.describe(prop.description);
-
-        // If not required, make optional
-        if (!schema.required?.includes(key)) {
-          field = field.optional();
-        }
-
-        zodShape[key] = field;
+        zodShape[key] = schemaToZod(prop, required.has(key));
       }
     }
 

@@ -8,6 +8,8 @@ import { captureWorkflowHistoricalVersion } from '../services/versioning.js';
 import {
   creatableTriggerTypeSchema,
   getTriggerCatalog,
+  getTriggerTypeLabel,
+  safeParseTriggerConfiguration,
 } from '../services/trigger-definitions.js';
 import { serializeTrigger, serializeTriggers } from '../services/trigger-serialization.js';
 import {
@@ -16,6 +18,10 @@ import {
   updateWorkflowTrigger,
 } from '../services/trigger-manager.js';
 import { TriggerServiceError } from '../services/trigger-errors.js';
+import {
+  testJiraChangesNotificationTriggerConnectivity,
+  testJiraPollingTriggerConnectivity,
+} from '../services/jira-integration.js';
 
 const triggersRouter = new Hono();
 triggersRouter.use('/*', authMiddleware);
@@ -175,6 +181,56 @@ triggersRouter.put('/:id', async (c) => {
     .where(eq(workflows.id, access.workflow.id));
 
   return c.json({ trigger: serializeTrigger(trigger) });
+});
+
+// POST /:id/test — run trigger connectivity validation
+triggersRouter.post('/:id/test', async (c) => {
+  const user = c.get('user');
+  const id = uuidSchema.parse(c.req.param('id'));
+
+  const access = await verifyTriggerAccess(id, user.workspaceId, user.userId, user.role);
+  if (!access) return c.json({ error: 'Trigger not found' }, 404);
+
+  if (access.workflow.scope === 'workspace' && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Only admins can test workspace-level workflow triggers' }, 403);
+  }
+
+  try {
+    if (access.trigger.triggerType === 'jira_changes_notification') {
+      return c.json(await testJiraChangesNotificationTriggerConnectivity(access.workflow, access.trigger));
+    }
+
+    if (access.trigger.triggerType === 'jira_polling') {
+      return c.json(await testJiraPollingTriggerConnectivity(access.workflow, access.trigger));
+    }
+
+    if (access.trigger.triggerType === 'manual') {
+      return c.json({ ok: true, summary: 'Manual triggers do not require connectivity checks.' });
+    }
+
+    const validationResult = safeParseTriggerConfiguration(
+      access.trigger.triggerType as typeof creatableTriggerTypeSchema._type,
+      access.trigger.configuration,
+    );
+
+    if (!validationResult.success) {
+      return c.json({
+        ok: false,
+        summary: `${getTriggerTypeLabel(access.trigger.triggerType)} configuration is invalid.`,
+        issues: validationResult.error.issues,
+      }, 400);
+    }
+
+    return c.json({
+      ok: true,
+      summary: `${getTriggerTypeLabel(access.trigger.triggerType)} configuration is valid.`,
+    });
+  } catch (error) {
+    if (error instanceof TriggerServiceError) {
+      return c.json({ ok: false, summary: error.message, issues: error.issues }, error.status);
+    }
+    throw error;
+  }
 });
 
 // DELETE /:id (workspace-scoped)

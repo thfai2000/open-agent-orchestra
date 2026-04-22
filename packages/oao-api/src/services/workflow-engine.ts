@@ -11,7 +11,6 @@ import {
   userVariables,
   workspaceVariables,
   agentQuotaUsage,
-  mcpServerConfigs,
   creditUsage,
   models,
 } from '../database/schema.js';
@@ -21,8 +20,8 @@ import { getRedisConnection } from './redis.js';
 import { CopilotClient, approveAll } from '@github/copilot-sdk';
 import { prepareAgentWorkspace, prepareDbAgentWorkspace } from './agent-workspace.js';
 import { createAgentTools } from './agent-tools.js';
-import { connectToMcpServer } from './mcp-client.js';
 import { renderTemplate, buildTemplateContext } from './jinja-renderer.js';
+import { loadConfiguredMcpTools } from './platform-mcp.js';
 
 import { createAgentPod, waitForPodCompletion, deleteAgentPod } from './k8s-provisioner.js';
 import { registerEphemeralInstance, terminateEphemeralInstance } from './agent-instance-registry.js';
@@ -1052,69 +1051,20 @@ export async function executeCopilotSession(params: {
       workspaceId,
     }, (agent.builtinToolsEnabled as string[]) ?? undefined, templateContext);
 
-    // 3.1 Load MCP server configurations for this agent from DB
-    const mcpConfigs = await db.query.mcpServerConfigs.findMany({
-      where: eq(mcpServerConfigs.agentId, agent.id),
+    const mcpTools = await loadConfiguredMcpTools({
+      agent,
+      credentials,
+      templateContext,
+      authContext: {
+        agentId: agent.id,
+        userId: agent.userId,
+        workspaceId,
+      },
+      mcpCleanups,
+      logContext: 'workflow',
     });
 
-    const enabledConfigs = mcpConfigs.filter((c) => c.isEnabled);
-    let allTools = builtInTools;
-
-    for (const mcpConfig of enabledConfigs) {
-      try {
-        // Resolve env vars from agent credentials using envMapping
-        const envMapping = (mcpConfig.envMapping ?? {}) as Record<string, string>;
-        const resolvedEnv: Record<string, string> = {};
-        for (const [credKey, envVar] of Object.entries(envMapping)) {
-          const value = credentials.get(credKey);
-          if (value) resolvedEnv[envVar] = value;
-        }
-
-        const mcp = await connectToMcpServer({
-          name: mcpConfig.name,
-          command: mcpConfig.command,
-          args: (mcpConfig.args ?? []) as string[],
-          env: resolvedEnv,
-          writeTools: (mcpConfig.writeTools ?? []) as string[],
-        });
-        allTools = [...allTools, ...mcp.tools];
-        mcpCleanups.push(mcp.cleanup);
-        logger.info({ server: mcpConfig.name, mcpToolCount: mcp.tools.length }, 'MCP tools loaded');
-      } catch (mcpErr) {
-        logger.warn({ server: mcpConfig.name, error: mcpErr }, 'Failed to connect to MCP server, skipping');
-      }
-    }
-
-    // 3.1.5 Render agent's mcp.json.template (Jinja2) and spawn MCP servers from it
-    if (agent.mcpJsonTemplate) {
-      try {
-        const renderedMcpJson = renderTemplate(agent.mcpJsonTemplate, templateContext);
-        const mcpJson = JSON.parse(renderedMcpJson) as {
-          mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
-        };
-        if (mcpJson.mcpServers) {
-          for (const [serverName, serverConfig] of Object.entries(mcpJson.mcpServers)) {
-            try {
-              const mcp = await connectToMcpServer({
-                name: serverName,
-                command: serverConfig.command,
-                args: serverConfig.args ?? [],
-                env: serverConfig.env ?? {},
-              });
-              allTools = [...allTools, ...mcp.tools];
-              mcpCleanups.push(mcp.cleanup);
-              logger.info({ server: serverName, mcpToolCount: mcp.tools.length }, 'MCP tools loaded from mcp.json.template');
-            } catch (err) {
-              logger.warn({ server: serverName, error: err }, 'Failed to connect MCP server from template, skipping');
-            }
-          }
-        }
-      } catch (err) {
-        logger.warn({ error: err }, 'Failed to render/parse mcp.json.template, skipping');
-      }
-    }
-
-    const tools = allTools;
+    const tools = [...builtInTools, ...mcpTools];
 
     // 4. Initialize Copilot client + session
     if (copilotTokenOverride) {

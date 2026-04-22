@@ -17,6 +17,7 @@ erDiagram
 
     users ||--o{ agents : "creates"
     users ||--o{ workflows : "creates"
+    users ||--o{ conversations : "starts"
     users ||--o{ user_variables : "has variables"
     users ||--o{ variable_versions : "changes"
     users ||--o{ credit_usage : "tracks usage"
@@ -29,12 +30,14 @@ erDiagram
     agents ||--o{ webhook_registrations : "has webhooks"
     agents ||--o{ agent_decisions : "has decisions"
     agents ||--o{ agent_memories : "has memories"
+    agents ||--o{ conversations : "powers chats"
 
     step_executions ||--o| agent_instances : "runs on"
 
     workflows ||--o{ workflow_steps : "has steps"
     workflows ||--o{ triggers : "has triggers"
     workflows ||--o{ workflow_executions : "has executions"
+    conversations ||--o{ conversation_messages : "stores turns"
 
     workflow_executions ||--o{ step_executions : "has step results"
 ```
@@ -53,6 +56,9 @@ erDiagram
 | `variable_scope` | `agent`, `user`, `workspace` |
 | `reasoning_effort` | `low`, `medium`, `high` |
 | `worker_runtime` | `static`, `ephemeral` |
+| `conversation_status` | `active`, `archived` |
+| `conversation_message_role` | `user`, `assistant` |
+| `conversation_message_status` | `pending`, `completed`, `failed` |
 | `resource_scope` | `user`, `workspace` |
 | `auth_provider_type` | `database`, `ldap` |
 | `event_scope` | `workspace`, `user` |

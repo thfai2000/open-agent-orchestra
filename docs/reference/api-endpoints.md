@@ -318,6 +318,78 @@ curl -X POST http://localhost:4002/api/agent-files/$AGENT_ID \
 
 ---
 
+## Conversations
+
+Interactive user-to-agent chat threads. Conversations are private to the creating user within a workspace.
+
+### `GET /api/conversations`
+
+List the current user's conversations. **Auth**: JWT/PAT
+
+| Query | Type | Description |
+|-------|------|-------------|
+| `page`, `limit` | integer | Pagination |
+| `agentId` | uuid | Optional filter by selected agent |
+
+### `POST /api/conversations`
+
+Create a new conversation for an active agent. **Auth**: JWT/PAT
+
+```bash
+curl -X POST http://localhost:4002/api/conversations \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agentId": "agent-uuid",
+    "title": "Research Partner"
+  }'
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `agentId` | uuid | Yes | Active agent to chat with |
+| `title` | string | No | Optional title (1–200 chars) |
+
+### `GET /api/conversations/:id`
+
+Get conversation metadata plus the full ordered message transcript. **Auth**: JWT/PAT
+
+### `POST /api/conversations/:id/messages`
+
+Append a user turn and wait for the assistant response. **Auth**: JWT/PAT
+
+```bash
+curl -X POST http://localhost:4002/api/conversations/$CONVERSATION_ID/messages \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Summarize the latest deployment risks for this workspace."
+  }'
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `content` | string | Yes | User message (1–20,000 chars) |
+
+Responses:
+
+- `201` User message stored and assistant reply completed
+- `400` Invalid input, archived conversation, inactive/missing agent, or assistant turn failure
+- `409` Agent session lock still held by another active Copilot session
+
+### `GET /api/conversations/:id/stream`
+
+SSE stream for live assistant updates. **Auth**: JWT/PAT (query token supported for `EventSource` clients)
+
+Event types:
+
+- `conversation.message.started`
+- `conversation.message.delta`
+- `conversation.message.completed`
+- `conversation.message.failed`
+
+---
+
 ## Workflows
 
 ### `GET /api/workflows`
@@ -720,6 +792,14 @@ curl -X POST http://localhost:4002/api/triggers \
 
 Update trigger. **Auth**: JWT/PAT · **Role**: `creator_user`+
 
+### `POST /api/triggers/:id/test`
+
+Run a saved trigger connectivity test. **Auth**: JWT/PAT
+
+- Jira Changes Notification: attempts a temporary Jira webhook registration, removes it, and probes the hosted callback URL.
+- Jira Polling: executes the configured Jira search with saved credentials.
+- Schedule, webhook, exact datetime, and system event triggers: validates that the saved configuration is structurally valid.
+
 ### `DELETE /api/triggers/:id`
 
 Delete trigger. **Auth**: JWT/PAT · **Role**: `creator_user`+
@@ -772,6 +852,12 @@ Receive a Jira dynamic webhook callback for a `jira_changes_notification` trigge
 
 **Response**: `202 Accepted` on first delivery, `200` with `{"status":"already_processed"}` for duplicate deliveries
 
+### `GET /api/jira-webhooks/:triggerId?token=...`
+
+Probe the hosted Jira callback URL without firing the workflow. This is used by trigger connectivity checks to confirm that the public callback endpoint is reachable with the generated token.
+
+**Response**: `200 OK` with `{"status":"reachable"}` when the callback URL and token are valid
+
 ---
 
 ## MCP Servers
@@ -780,10 +866,10 @@ Manage Model Context Protocol server configurations per agent.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/mcp-servers?agentId=...` | List MCP configs for agent |
+| `GET` | `/api/mcp-servers?agentId=...` | List MCP configs for agent, including the default OAO Platform record |
 | `POST` | `/api/mcp-servers` | Create MCP server config |
-| `PUT` | `/api/mcp-servers/:id` | Update config |
-| `DELETE` | `/api/mcp-servers/:id` | Delete config |
+| `PUT` | `/api/mcp-servers/:id` | Update config (`oao_platform` can only be enabled/disabled) |
+| `DELETE` | `/api/mcp-servers/:id` | Delete config (`oao_platform` cannot be deleted) |
 
 ```bash
 curl -X POST http://localhost:4002/api/mcp-servers \
@@ -807,9 +893,11 @@ curl -X POST http://localhost:4002/api/mcp-servers \
 | `name` | string | — | Display name (required) |
 | `command` | string | — | MCP server command (required) |
 | `args` | string[] | `[]` | Command arguments |
-| `envMapping` | object | `{}` | `{ ENV_VAR: "CREDENTIAL_KEY" }` — maps env vars to credential variables |
+| `envMapping` | object | `{}` | `{ "CREDENTIAL_KEY": "ENV_VAR" }` — maps credential keys to child-process env vars |
 | `writeTools` | string[] | `[]` | Tools that require human approval |
 | `isEnabled` | boolean | `true` | Enable/disable |
+
+The default system-managed OAO Platform row uses `serverType: "oao_platform"` internally, is created automatically for every new agent, and is also synthesized at runtime for older agents that do not yet have the row persisted.
 
 ---
 

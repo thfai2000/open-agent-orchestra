@@ -78,6 +78,7 @@ export default withMermaid(
             text: 'Basic',
             items: [
               { text: 'Agents', link: '/concepts/agents' },
+              { text: 'Conversations', link: '/concepts/conversations' },
               { text: 'Variables', link: '/concepts/variables' },
             ],
           },

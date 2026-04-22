@@ -136,7 +136,7 @@
               </div>
 
               <div class="mt-4">
-                <WorkflowTriggerFields :trigger="trigger" />
+                <WorkflowTriggerFields :trigger="trigger" :credential-options="workflowCredentialOptions" />
               </div>
             </div>
           </div>
@@ -182,9 +182,16 @@ const form = reactive({
 const { data: agentsData } = await useFetch('/api/agents', { headers });
 const { data: modelsData } = await useFetch('/api/admin/models', { headers });
 const { data: triggerTypesData } = await useFetch('/api/triggers/types', { headers });
+const { data: userVarsData } = await useFetch('/api/variables?scope=user', { headers });
+const { data: wsVarsData } = await useFetch('/api/variables?scope=workspace', { headers });
 const agentOptions = computed(() => (agentsData.value as any)?.agents ?? []);
 const modelOptions = computed(() => (modelsData.value as any)?.models ?? []);
 const triggerTypes = computed(() => (triggerTypesData.value as any)?.types ?? []);
+const { buildCredentialOptions } = useAgentCredentialOptions();
+const workflowCredentialOptions = computed(() => buildCredentialOptions([
+  { scope: 'user', scopeLabel: 'User', variables: (userVarsData.value as any)?.variables ?? [] },
+  { scope: 'workspace', scopeLabel: 'Workspace', variables: (wsVarsData.value as any)?.variables ?? [] },
+]));
 
 function addStep() {
   form.steps.push({ name: `Step ${form.steps.length + 1}`, promptTemplate: '', agentId: null, model: null, reasoningEffort: null, workerRuntime: null, timeoutSeconds: 300 });
