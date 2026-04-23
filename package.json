@@ -1,6 +1,6 @@
 {
   "name": "open-agent-orchestra",
-  "version": "1.30.13",
+  "version": "1.30.14",
   "private": true,
   "description": "Open Agent Orchestra (OAO) — Autonomous AI workflow engine powered by GitHub Copilot SDK",
   "workspaces": [
