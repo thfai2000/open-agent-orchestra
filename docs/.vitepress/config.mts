@@ -6,6 +6,7 @@ import { DOC_VERSIONS } from './versions.js';
 // DOCS_BASE env var overrides the base path for versioned builds.
 // DOCS_OUTDIR env var overrides the output directory.
 const SITE_BASE = '/open-agent-orchestra';
+const SITE_URL = 'https://thfai2000.github.io/open-agent-orchestra';
 const base = process.env.DOCS_BASE || `${SITE_BASE}/`;
 const outDir = process.env.DOCS_OUTDIR || '../docs-dist';
 
@@ -16,8 +17,8 @@ const currentLabel = DOC_VERSIONS.find(v =>
 
 // Build version dropdown items (absolute paths so links work across bases)
 const versionDropdown = DOC_VERSIONS.map(v => ({
-  text: v.latest ? `${v.version} (latest)` : v.version,
-  link: v.latest ? `${SITE_BASE}/` : `${SITE_BASE}/${v.version}/`,
+  text: v.latest ? `Latest (${v.version})` : v.version,
+  link: v.latest ? `${SITE_URL}/` : `${SITE_URL}/${v.version}/`,
 }));
 
 export default withMermaid(

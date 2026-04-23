@@ -118,17 +118,14 @@ function listTaggedVersions() {
 
 function buildDocVersions(currentVersion, taggedVersions) {
   const hasExplicitList = Boolean((process.env.DOCS_TAGS ?? '').trim());
-  const includeCurrentTag = taggedVersions.some((entry) => entry.version === currentVersion);
   const effectiveLimit = hasExplicitList
-    ? Math.max(taggedVersions.length + 1, 1)
+    ? taggedVersions.length
     : Math.max(versionLimit - 1, 0);
-  const retainedTags = taggedVersions
-    .filter((entry) => entry.version !== currentVersion)
-    .slice(0, effectiveLimit);
-  const displayVersions = [{ version: currentVersion, latest: true }, ...retainedTags.map((entry) => ({ version: entry.version }))];
-  const taggedSnapshots = includeCurrentTag
-    ? [taggedVersions.find((entry) => entry.version === currentVersion), ...retainedTags]
-    : retainedTags;
+  const taggedSnapshots = taggedVersions.slice(0, effectiveLimit);
+  const displayVersions = [
+    { version: currentVersion, latest: true },
+    ...taggedSnapshots.map((entry) => ({ version: entry.version })),
+  ];
 
   return {
     displayVersions,
