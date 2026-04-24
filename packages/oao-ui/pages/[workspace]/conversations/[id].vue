@@ -113,7 +113,7 @@
 
               <div class="rounded-xl border border-surface-200 bg-surface-50 px-3 py-3">
                 <div class="flex flex-wrap items-end gap-3">
-                  <div class="min-w-[12rem] flex-1 lg:flex-none lg:w-48">
+                  <div class="w-full sm:w-36">
                     <label class="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-surface-500">Agent</label>
                     <Select
                       v-model="settingsForm.agentId"
@@ -127,7 +127,7 @@
                     />
                   </div>
 
-                  <div class="min-w-[11rem] flex-1 lg:flex-none lg:w-44">
+                  <div class="w-full sm:w-32">
                     <label class="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-surface-500">Model</label>
                     <Select
                       v-model="settingsForm.model"
@@ -140,7 +140,7 @@
                     />
                   </div>
 
-                  <div class="min-w-[9rem] flex-1 lg:flex-none lg:w-36">
+                  <div class="w-full sm:w-28">
                     <label class="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-surface-500">Effort</label>
                     <Select
                       v-model="settingsForm.reasoningEffort"

@@ -9,6 +9,8 @@ import {
   models,
   workspaceQuotaSettings,
   creditUsage,
+  systemSettings,
+  workspaces,
 } from '../database/schema.js';
 import { authMiddleware, uuidSchema, emailSchema, passwordSchema } from '@oao/shared';
 
@@ -413,6 +415,66 @@ adminRouter.get('/usage/summary', async (c) => {
     .groupBy(creditUsage.userId, users.name, users.email);
 
   return c.json({ dailyUsage, modelUsage, userUsage, days });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// Mail Settings (super_admin only)
+// ═══════════════════════════════════════════════════════════════════════
+
+async function requireSuperAdmin(c: Context, next: Next): Promise<Response | void> {
+  const user = c.get('user');
+  if (user.role !== 'super_admin') return c.json({ error: 'Super admin access required' }, 403);
+  await next();
+}
+
+const mailSettingsSchema = z.object({
+  host: z.string().min(1).max(255),
+  port: z.number().int().min(1).max(65535),
+  secure: z.boolean().default(false),
+  user: z.string().max(255).optional(),
+  password: z.string().max(500).optional(),
+  fromAddress: z.string().email(),
+  fromName: z.string().max(100).optional(),
+});
+
+// GET /admin/mail-settings
+adminRouter.get('/mail-settings', requireSuperAdmin, async (c) => {
+  const setting = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, 'mail') });
+  const value = (setting?.value as Record<string, unknown>) ?? {};
+  // Strip password from response
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { password: _pw, ...safeValue } = value as Record<string, unknown>;
+  return c.json({ mailSettings: safeValue, configured: !!setting });
+});
+
+// PUT /admin/mail-settings
+adminRouter.put('/mail-settings', requireSuperAdmin, async (c) => {
+  const body = mailSettingsSchema.parse(await c.req.json());
+  const userId = c.get('user').userId;
+  await db.insert(systemSettings)
+    .values({ key: 'mail', value: body as Record<string, unknown>, updatedBy: userId })
+    .onConflictDoUpdate({ target: systemSettings.key, set: { value: body as Record<string, unknown>, updatedBy: userId, updatedAt: new Date() } });
+  return c.json({ message: 'Mail settings saved' });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// Workspace Security Settings (workspace_admin only)
+// ═══════════════════════════════════════════════════════════════════════
+
+// GET /admin/security
+adminRouter.get('/security', async (c) => {
+  const user = c.get('user');
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, user.workspaceId!) });
+  if (!workspace) return c.json({ error: 'Workspace not found' }, 404);
+  return c.json({ allowRegistration: workspace.allowRegistration });
+});
+
+// PUT /admin/security
+adminRouter.put('/security', async (c) => {
+  const user = c.get('user');
+  const body = z.object({ allowRegistration: z.boolean() }).parse(await c.req.json());
+  await db.update(workspaces).set({ allowRegistration: body.allowRegistration, updatedAt: new Date() }).where(eq(workspaces.id, user.workspaceId!));
+  return c.json({ message: 'Security settings updated', allowRegistration: body.allowRegistration });
 });
 
 export default adminRouter;

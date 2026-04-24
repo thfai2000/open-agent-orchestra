@@ -47,6 +47,17 @@ spec:
               done
               echo "Running Drizzle schema push..."
               cd /app/packages/oao-api && npx drizzle-kit push --force
+              echo "Running data migrations..."
+              node -e "
+                const { Client } = require('pg');
+                const client = new Client({ connectionString: process.env.AGENT_DATABASE_URL });
+                client.connect()
+                  .then(() => client.query(\"DELETE FROM models WHERE name = 'claude-opus-4-6'\"))
+                  .then(r => { console.log('Deleted', r.rowCount, 'claude-opus-4-6 model(s)'); })
+                  .then(() => client.query(\"UPDATE auth_providers SET name = 'Built-in Database' WHERE name = 'Email & Password' AND provider_type = 'database'\"))
+                  .then(r => { console.log('Renamed', r.rowCount, 'auth provider(s) to Built-in Database'); client.end(); })
+                  .catch(e => { console.error(e); client.end(); });
+              "
               echo "Running database seed..."
               cd /app/packages/oao-api && npx tsx src/database/seed.ts
           envFrom:

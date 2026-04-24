@@ -122,7 +122,9 @@ const adminNav = computed(() => [
   { to: `/${ws.value}/admin/users`, icon: 'pi pi-users', label: 'Users' },
   { to: `/${ws.value}/admin/models`, icon: 'pi pi-box', label: 'Models' },
   { to: `/${ws.value}/admin/auth-providers`, icon: 'pi pi-lock', label: 'Auth Providers' },
+  { to: `/${ws.value}/admin/security`, icon: 'pi pi-shield', label: 'Security' },
   { to: `/${ws.value}/admin/rate-limits`, icon: 'pi pi-gauge', label: 'Rate Limits' },
+  ...(user.value?.role === 'super_admin' ? [{ to: `/${ws.value}/admin/mail-settings`, icon: 'pi pi-envelope', label: 'Mail Settings' }] : []),
 ]);
 
 const userMenuItems = computed(() => [

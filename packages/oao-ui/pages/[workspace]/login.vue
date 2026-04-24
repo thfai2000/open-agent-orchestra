@@ -31,11 +31,14 @@
             <div class="flex flex-col gap-2">
               <label for="password" class="text-sm font-medium">Password</label>
               <Password id="password" v-model="form.password" :feedback="false" required placeholder="••••••••" toggleMask fluid />
+              <div v-if="showForgotPassword" class="text-right">
+                <NuxtLink :to="`/${workspaceSlug}/forgot-password`" class="text-xs text-primary hover:underline">Forgot password?</NuxtLink>
+              </div>
             </div>
             <Button type="submit" :label="loading ? 'Signing in...' : 'Sign In'" :loading="loading" class="w-full" />
           </form>
 
-          <p class="text-sm text-surface-500 text-center mt-6">
+          <p v-if="allowRegistration" class="text-sm text-surface-500 text-center mt-6">
             Don't have an account?
             <NuxtLink :to="`/${workspaceSlug}/register`" class="text-primary font-medium hover:underline">Create one</NuxtLink>
           </p>
@@ -56,21 +59,24 @@ const error = ref('');
 const loading = ref(false);
 const selectedProvider = ref('database');
 const providers = ref<Array<{ type: string; name: string; label: string }>>([]);
+const allowRegistration = ref(true);
 
 const identifierLabel = computed(() => selectedProvider.value === 'ldap' ? 'Username or Email' : 'Email');
 const identifierPlaceholder = computed(() => selectedProvider.value === 'ldap' ? 'username or email' : 'you@example.com');
 const identifierInputType = computed(() => selectedProvider.value === 'ldap' ? 'text' : 'email');
+const showForgotPassword = computed(() => selectedProvider.value === 'database');
 
 onMounted(async () => {
   try {
-    const res = await $fetch<{ providers: Array<{ type: string; name: string }> }>(`/api/auth/providers?workspace=${workspaceSlug.value}`);
+    const res = await $fetch<{ providers: Array<{ type: string; name: string }>; allowRegistration: boolean }>(`/api/auth/providers?workspace=${workspaceSlug.value}`);
     providers.value = res.providers.map(p => ({
       ...p,
-      label: p.type === 'ldap' ? 'Active Directory' : 'Email & Password',
+      label: p.type === 'ldap' ? 'Active Directory' : 'Built-in Database',
     }));
+    allowRegistration.value = res.allowRegistration ?? true;
     if (providers.value.length > 0) selectedProvider.value = providers.value[0].type;
   } catch {
-    providers.value = [{ type: 'database', name: 'Database', label: 'Email & Password' }];
+    providers.value = [{ type: 'database', name: 'Database', label: 'Built-in Database' }];
   }
 });
 

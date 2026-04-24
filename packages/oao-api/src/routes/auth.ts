@@ -2,12 +2,14 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import { eq, and, desc } from 'drizzle-orm';
+import { randomBytes } from 'crypto';
+import { eq, and, desc, gt } from 'drizzle-orm';
 import { db } from '../database/index.js';
-import { users, workspaces, authProviders } from '../database/schema.js';
+import { users, workspaces, authProviders, passwordResetTokens } from '../database/schema.js';
 import { createJwt, authMiddleware, emailSchema, passwordSchema } from '@oao/shared';
 import { authenticateLdap } from '../services/ldap-auth.js';
 import type { LdapConfig } from '../services/ldap-auth.js';
+import { sendPasswordResetEmail } from '../services/mailer.js';
 
 const auth = new Hono();
 
@@ -35,6 +37,11 @@ auth.post('/register', async (c) => {
   });
   if (!workspace) {
     return c.json({ error: 'Workspace not found' }, 404);
+  }
+
+  // Check if registration is allowed
+  if (!workspace.allowRegistration) {
+    return c.json({ error: 'Registration is not allowed for this workspace' }, 403);
   }
 
   const passwordHash = await bcrypt.hash(body.password, 12);
@@ -261,7 +268,7 @@ auth.get('/providers', async (c) => {
   const providers: Array<{ type: string; name: string }> = [];
 
   const displayName = (type: string, rawName?: string): string => {
-    const fallback = type === 'ldap' ? 'Active Directory' : 'Email & Password';
+    const fallback = type === 'ldap' ? 'Active Directory' : 'Built-in Database';
     if (!rawName || !rawName.trim()) return fallback;
     // Ignore generic seed names so users don't see "Database"
     const generic = new Set(['database', 'ldap']);
@@ -287,10 +294,10 @@ auth.get('/providers', async (c) => {
 
   // Ensure database fallback is always available (for login with local users)
   if (!seen.has('database')) {
-    providers.unshift({ type: 'database', name: 'Email & Password' });
+    providers.unshift({ type: 'database', name: 'Built-in Database' });
   }
 
-  return c.json({ providers });
+  return c.json({ providers, allowRegistration: workspace?.allowRegistration ?? true });
 });
 
 auth.get('/me', authMiddleware, async (c) => {
@@ -353,6 +360,55 @@ auth.put('/change-password', authMiddleware, async (c) => {
   await db.update(users).set({ passwordHash: newHash, updatedAt: new Date() }).where(eq(users.id, userId));
 
   return c.json({ message: 'Password changed successfully' });
+});
+
+// ── Forgot password (database auth only) ─────────────────────────────
+
+auth.post('/forgot-password', async (c) => {
+  const body = z.object({ email: emailSchema, workspace: z.string().min(1).max(50).optional() }).parse(await c.req.json());
+  const slug = body.workspace || 'default';
+
+  // Always return 200 to avoid user enumeration
+  const user = await db.query.users.findFirst({ where: eq(users.email, body.email) });
+  if (!user || user.authProvider !== 'database' || !user.workspaceId) {
+    return c.json({ message: 'If that email exists, a reset link has been sent.' });
+  }
+
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.slug, slug) });
+  if (!workspace || user.workspaceId !== workspace.id) {
+    return c.json({ message: 'If that email exists, a reset link has been sent.' });
+  }
+
+  // Invalidate old tokens
+  await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, user.id));
+
+  const token = randomBytes(48).toString('hex'); // 96-char hex token
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+  await db.insert(passwordResetTokens).values({ userId: user.id, token, expiresAt });
+
+  await sendPasswordResetEmail({ to: user.email, name: user.name, token, workspaceSlug: slug });
+
+  return c.json({ message: 'If that email exists, a reset link has been sent.' });
+});
+
+// ── Reset password (using token) ──────────────────────────────────────
+
+auth.post('/reset-password', async (c) => {
+  const body = z.object({ token: z.string().min(1), password: passwordSchema }).parse(await c.req.json());
+
+  const record = await db.query.passwordResetTokens.findFirst({
+    where: and(eq(passwordResetTokens.token, body.token), gt(passwordResetTokens.expiresAt, new Date())),
+  });
+
+  if (!record || record.usedAt) {
+    return c.json({ error: 'Invalid or expired reset token' }, 400);
+  }
+
+  const newHash = await bcrypt.hash(body.password, 12);
+  await db.update(users).set({ passwordHash: newHash, updatedAt: new Date() }).where(eq(users.id, record.userId));
+  await db.update(passwordResetTokens).set({ usedAt: new Date() }).where(eq(passwordResetTokens.id, record.id));
+
+  return c.json({ message: 'Password has been reset successfully.' });
 });
 
 export default auth;

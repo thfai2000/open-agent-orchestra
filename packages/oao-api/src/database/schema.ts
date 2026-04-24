@@ -77,6 +77,7 @@ export const workspaces = pgTable('workspaces', {
   slug: varchar('slug', { length: 50 }).notNull().unique(), // URL segment: /slug/...
   description: text('description'),
   isDefault: boolean('is_default').notNull().default(false), // Default Workspace cannot be deleted
+  allowRegistration: boolean('allow_registration').notNull().default(true), // Allow public self-registration
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -726,3 +727,24 @@ export const agentInstances = pgTable(
     instanceStatusIdx: index('agent_instances_status_idx').on(table.status),
   }),
 );
+
+// ─── System Settings (global, super_admin managed) ───────────────────
+
+export const systemSettings = pgTable('system_settings', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  key: varchar('key', { length: 100 }).notNull().unique(),
+  value: jsonb('value').notNull().default({}),
+  updatedBy: uuid('updated_by').references(() => users.id),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ─── Password Reset Tokens ───────────────────────────────────────────
+
+export const passwordResetTokens = pgTable('password_reset_tokens', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  token: varchar('token', { length: 128 }).notNull().unique(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});

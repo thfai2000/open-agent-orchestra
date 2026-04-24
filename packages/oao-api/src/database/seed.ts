@@ -35,7 +35,6 @@ async function seed() {
     if (!existingModels) {
       const defaultModels = [
         { name: 'claude-sonnet-4-6', provider: 'anthropic', description: 'Claude Sonnet 4.6 — fast, balanced model' },
-        { name: 'claude-opus-4-6', provider: 'anthropic', description: 'Claude Opus 4.6 — most capable model' },
         { name: 'gpt-5.4', provider: 'openai', description: 'GPT-5.4 — advanced reasoning model' },
         { name: 'gpt-5-mini', provider: 'openai', description: 'GPT-5 Mini — fast and cost-effective' },
         { name: 'gpt-5.4-mini', provider: 'openai', description: 'GPT-5.4 Mini — balanced speed and capability' },
@@ -82,7 +81,7 @@ async function seed() {
       await db.insert(authProviders).values({
         workspaceId: resolvedWsId,
         providerType: 'database',
-        name: 'Email & Password',
+        name: 'Built-in Database',
         isEnabled: true,
         priority: 0,
         config: {},

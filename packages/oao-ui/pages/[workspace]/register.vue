@@ -10,6 +10,10 @@
           </div>
         </template>
         <template #content>
+          <Message v-if="registrationDisabled" severity="error" :closable="false" class="mb-4">
+            Registration is not allowed for this workspace. Please contact your administrator.
+          </Message>
+          <template v-else>
           <Message v-if="error" severity="error" :closable="false" class="mb-4">{{ error }}</Message>
           <Message v-if="success" severity="success" :closable="false" class="mb-4">{{ success }}</Message>
 
@@ -33,6 +37,7 @@
             Already have an account?
             <NuxtLink :to="`/${workspaceSlug}/login`" class="text-primary font-medium hover:underline">Sign in</NuxtLink>
           </p>
+          </template>
         </template>
       </Card>
     </div>
@@ -49,6 +54,16 @@ const form = reactive({ name: '', email: '', password: '' });
 const error = ref('');
 const success = ref('');
 const loading = ref(false);
+const registrationDisabled = ref(false);
+
+onMounted(async () => {
+  try {
+    const res = await $fetch<{ allowRegistration: boolean }>(`/api/auth/providers?workspace=${workspaceSlug.value}`);
+    if (!res.allowRegistration) {
+      registrationDisabled.value = true;
+    }
+  } catch { /* ignore */ }
+});
 
 async function handleRegister() {
   error.value = '';
