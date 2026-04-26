@@ -32,19 +32,19 @@
       @update:rows="onRowsChange">
       <template #empty><div class="text-center py-8 text-surface-400">No events found.</div></template>
       <Column header="Event Name" style="min-width: 160px">
-        <template #body="{ data }"><Tag :value="data.eventName" /></template>
+        <template #body="{ data }"><Tag :value="data.eventName" :title="data.eventName" /></template>
       </Column>
       <Column header="Scope" style="width: 100px">
-        <template #body="{ data }"><Tag :value="data.eventScope || '\u2014'" severity="secondary" /></template>
+        <template #body="{ data }"><Tag :value="data.eventScope || '—'" :title="data.eventScope || ''" severity="secondary" /></template>
       </Column>
       <Column header="Data" style="min-width: 200px">
-        <template #body="{ data }"><span class="text-xs font-mono text-surface-500">{{ truncPayload(data.eventData) }}</span></template>
+        <template #body="{ data }"><span :title="typeof data.eventData === 'string' ? data.eventData : JSON.stringify(data.eventData)" class="text-xs font-mono text-surface-500">{{ truncPayload(data.eventData) }}</span></template>
       </Column>
       <Column header="Actor" style="width: 130px">
         <template #body="{ data }"><span class="text-sm text-surface-500">{{ data.actorId ? data.actorId.substring(0, 8) + '\u2026' : '\u2014' }}</span></template>
       </Column>
       <Column header="Time" style="width: 170px">
-        <template #body="{ data }"><span class="text-sm text-surface-500">{{ new Date(data.createdAt).toLocaleString() }}</span></template>
+        <template #body="{ data }"><span :title="new Date(data.createdAt).toString()" class="text-sm text-surface-500">{{ new Date(data.createdAt).toLocaleString() }}</span></template>
       </Column>
     </DataTable>
   </div>

@@ -14,10 +14,13 @@
       </div>
     </div>
 
+    <Message v-if="loadError" severity="error" :closable="false" class="mb-4">{{ loadError }}</Message>
     <Message v-if="saveError" severity="error" :closable="false" class="mb-4">{{ saveError }}</Message>
     <Message v-if="saveSuccess" severity="success" :closable="false" class="mb-4">Settings saved successfully.</Message>
 
-    <div class="max-w-lg">
+    <div v-if="loading" class="py-8 text-sm text-surface-400">Loading security settings...</div>
+
+    <div v-else class="max-w-2xl">
       <div class="rounded-lg border border-surface-200 bg-white p-5 flex flex-col gap-4">
         <div class="flex items-start justify-between gap-4">
           <div>
@@ -25,6 +28,16 @@
             <p class="text-surface-500 text-xs mt-0.5">When enabled, users can create their own accounts from the login page.</p>
           </div>
           <ToggleSwitch v-model="allowRegistration" :disabled="saving" />
+        </div>
+
+        <Divider />
+
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <p class="font-medium text-sm">Allow Forgot Password</p>
+            <p class="text-surface-500 text-xs mt-0.5">When enabled, database-authenticated users can request password reset emails.</p>
+          </div>
+          <ToggleSwitch v-model="allowPasswordReset" :disabled="saving" />
         </div>
       </div>
 
@@ -36,20 +49,28 @@
 </template>
 
 <script setup lang="ts">
-const { user } = useAuth();
+const { user, authHeaders } = useAuth();
 const ws = computed(() => user.value?.workspaceSlug || 'default');
 const headers = authHeaders();
 
 const allowRegistration = ref(true);
+const allowPasswordReset = ref(true);
+const loading = ref(true);
+const loadError = ref('');
 const saving = ref(false);
 const saveError = ref('');
 const saveSuccess = ref(false);
 
 onMounted(async () => {
   try {
-    const res = await $fetch<{ allowRegistration: boolean }>('/api/admin/security', { headers });
+    const res = await $fetch<{ allowRegistration: boolean; allowPasswordReset: boolean }>('/api/admin/security', { headers });
     allowRegistration.value = res.allowRegistration;
-  } catch { /* ignore */ }
+    allowPasswordReset.value = res.allowPasswordReset ?? true;
+  } catch (e: any) {
+    loadError.value = e?.data?.error || 'Failed to load security settings.';
+  } finally {
+    loading.value = false;
+  }
 });
 
 async function handleSave() {
@@ -60,7 +81,10 @@ async function handleSave() {
     await $fetch('/api/admin/security', {
       method: 'PUT',
       headers,
-      body: { allowRegistration: allowRegistration.value },
+      body: {
+        allowRegistration: allowRegistration.value,
+        allowPasswordReset: allowPasswordReset.value,
+      },
     });
     saveSuccess.value = true;
   } catch (e: any) {

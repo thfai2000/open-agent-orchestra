@@ -15,6 +15,8 @@ Tenant isolation boundary. All entities reference a workspace.
 | slug | varchar(100) | Unique, URL-safe identifier |
 | description | text | |
 | isDefault | boolean | Default workspace cannot be deleted |
+| allowRegistration | boolean | Controls self-service account registration |
+| allowPasswordReset | boolean | Controls forgot-password/reset email requests |
 | createdAt, updatedAt | timestamp | |
 
 ### users

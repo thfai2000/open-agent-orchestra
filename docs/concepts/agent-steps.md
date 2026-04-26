@@ -6,7 +6,11 @@ An **agent step** is the atomic unit of execution in a workflow. Each step runs 
 
 ```mermaid
 graph TB
-    START[Agent Worker picks up step] --> LOAD[1. Load step config from DB]
+    START[Workflow engine prepares step] --> QUOTA[0. Check LLM credit quota]
+    QUOTA -->|enough credit| PICKUP[Agent Worker picks up step]
+    QUOTA -->|quota exhausted| WAIT[Keep step pending<br/>quota wait event + delayed resume]
+    WAIT --> QUOTA
+    PICKUP --> LOAD[1. Load step config from DB]
     LOAD --> VARS[2. Resolve 3-tier variables]
     VARS --> WORKSPACE[3. Prepare agent workspace<br/>Git clone or DB read]
     WORKSPACE --> RENDER[4. Render prompt template<br/>Jinja2 / Nunjucks]
@@ -17,6 +21,8 @@ graph TB
     WRITE --> CLEANUP[9. Cleanup: MCP,<br/>workspace, lock]
 
     style START fill:#FF9800,color:#fff
+    style QUOTA fill:#FFC107,color:#111
+    style WAIT fill:#795548,color:#fff
     style SESSION fill:#9C27B0,color:#fff
     style WRITE fill:#4CAF50,color:#fff
 ```
@@ -36,6 +42,20 @@ The worker reads from the database:
 The agent for the step is resolved in order:
 1. Step-level agent override (if set)
 2. Workflow's default agent
+
+## Quota-Gated Pending
+
+Before a step is dispatched to a static worker or ephemeral pod, the workflow engine resolves the model that would be used and checks its `creditCost` against both user and workspace quota settings. Daily, weekly, and monthly limits are all considered.
+
+If running the step would exceed a limit, the step stays in `pending` instead of failing. The workflow execution remains `running`, and the engine records a `quota_wait` event in `step_executions.liveOutput` with the model, credit cost, blocking limits, next retry time, and quota reset time. A delayed workflow job is queued to resume from the same step, so the step starts automatically after quota is raised or the limit window resets.
+
+The UI surfaces this as **Waiting for quota** on the execution detail page and in the executions table. The Process Logs tab also shows the `quota_wait` event for auditability.
+
+## Allocation-Gated Pending
+
+After quota is available, the step can still remain `pending` while OAO waits for runtime capacity. Static steps wait for an available static agent worker to pick up the queued job. Ephemeral steps wait for a dynamic agent slot and retry Kubernetes pod creation until the workflow's allocation timeout expires.
+
+During this phase the Process Logs tab shows an `allocation_wait` event with the runtime, reason, and allocation timeout. The step only fails once `stepAllocationTimeoutSeconds` is exceeded, which avoids premature failures when workers are briefly busy, rate-limited, restarting, or when a dynamic runtime is temporarily unavailable.
 
 ## 2. Variable Resolution (3-Tier Override)
 

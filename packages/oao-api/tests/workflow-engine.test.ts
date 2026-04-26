@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
 // ─── Mock BullMQ ────────────────────────────────────────────────────
 const mockQueueAdd = vi.fn().mockResolvedValue({ id: 'job-1' });
@@ -35,6 +35,9 @@ const mockDb = {
     workspaceVariables: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
     mcpServerConfigs: { findMany: vi.fn().mockResolvedValue([]) },
     models: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+    userQuotaSettings: { findFirst: vi.fn().mockResolvedValue(null) },
+    workspaceQuotaSettings: { findFirst: vi.fn().mockResolvedValue(null) },
+    creditUsage: { findMany: vi.fn().mockResolvedValue([]) },
   },
   insert: vi.fn().mockReturnValue({
     values: vi.fn().mockReturnValue({
@@ -119,10 +122,20 @@ vi.mock('../src/services/mcp-client.js', () => ({
 const mockCreateAgentPod = vi.fn().mockResolvedValue('oao-agent-step-001');
 const mockWaitForPodCompletion = vi.fn().mockResolvedValue('Succeeded');
 const mockDeleteAgentPod = vi.fn().mockResolvedValue(undefined);
+const mockAcquireAgentSlot = vi.fn().mockResolvedValue(true);
+const mockReleaseAgentSlot = vi.fn().mockResolvedValue(undefined);
 vi.mock('../src/services/k8s-provisioner.js', () => ({
+  acquireAgentSlot: (...args: unknown[]) => mockAcquireAgentSlot(...args),
   createAgentPod: (...args: unknown[]) => mockCreateAgentPod(...args),
-  waitForPodCompletion: (...args: unknown[]) => mockWaitForPodCompletion(...args),
   deleteAgentPod: (...args: unknown[]) => mockDeleteAgentPod(...args),
+  releaseAgentSlot: (...args: unknown[]) => mockReleaseAgentSlot(...args),
+  waitForPodCompletion: (...args: unknown[]) => mockWaitForPodCompletion(...args),
+}));
+
+// ─── Mock realtime bus ──────────────────────────────────────────────
+const mockPublishRealtimeEvent = vi.fn().mockResolvedValue(undefined);
+vi.mock('../src/services/realtime-bus.js', () => ({
+  publishRealtimeEvent: (...args: unknown[]) => mockPublishRealtimeEvent(...args),
 }));
 
 // ─── Mock agent-instance-registry ───────────────────────────────────
@@ -139,6 +152,10 @@ vi.mock('../src/workers/agent-worker.js', () => ({
 beforeAll(() => {
   process.env.JWT_SECRET = 'test-secret-key-must-be-at-least-32-chars-long!!';
   process.env.ENCRYPTION_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+  // Provide a fallback Copilot/LLM token so the pre-flight auth check in executeCopilotSession
+  // passes for tests that don't configure a per-agent credential. The Copilot SDK itself is
+  // mocked, so the actual value is never sent to GitHub.
+  process.env.GITHUB_TOKEN = process.env.GITHUB_TOKEN || 'test-github-token';
 });
 
 beforeEach(() => {
@@ -149,6 +166,9 @@ beforeEach(() => {
   mockDb.query.agentVariables.findFirst.mockResolvedValue(null);
   mockDb.query.userVariables.findFirst.mockResolvedValue(null);
   mockDb.query.workspaceVariables.findFirst.mockResolvedValue(null);
+  mockDb.query.userQuotaSettings.findFirst.mockResolvedValue(null);
+  mockDb.query.workspaceQuotaSettings.findFirst.mockResolvedValue(null);
+  mockDb.query.creditUsage.findMany.mockResolvedValue([]);
   mockDb.query.models.findMany.mockResolvedValue([
     {
       id: 'model-001',
@@ -173,6 +193,8 @@ beforeEach(() => {
   mockSessionSendAndWait.mockResolvedValue({ data: { content: 'AI response output' } });
   mockSessionDisconnect.mockResolvedValue(undefined);
   mockClientStop.mockResolvedValue(undefined);
+  mockAcquireAgentSlot.mockResolvedValue(true);
+  mockReleaseAgentSlot.mockResolvedValue(undefined);
   mockCreateAgentPod.mockResolvedValue('oao-agent-step-001');
   mockWaitForPodCompletion.mockResolvedValue('Succeeded');
   mockDeleteAgentPod.mockResolvedValue(undefined);
@@ -190,6 +212,10 @@ beforeEach(() => {
     config: null,
     cleanup: vi.fn(),
   });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('enqueueWorkflowExecution', () => {
@@ -555,12 +581,12 @@ describe('executeWorkflow', () => {
       githubTokenCredentialId: null,
       builtinToolsEnabled: [],
     });
-    // Static path: after enqueue, poll returns completed
-    mockDb.query.stepExecutions.findFirst.mockResolvedValueOnce({
-      id: 'se-1',
-      status: 'completed',
-      output: 'AI response output',
-    });
+    // Static path: allocation log sees pending, then allocation/completion returns completed.
+    mockDb.query.stepExecutions.findFirst = vi
+      .fn()
+      .mockResolvedValueOnce({ id: 'se-1', status: 'pending', liveOutput: [] })
+      .mockResolvedValueOnce({ id: 'se-1', status: 'completed', output: 'AI response output' })
+      .mockResolvedValueOnce({ id: 'se-1', status: 'completed', output: 'AI response output' });
 
     await executeWorkflow('exec-001');
 
@@ -605,9 +631,10 @@ describe('executeWorkflow', () => {
       userId: 'user-001',
       sourceType: 'database',
     });
-    // Static path: allocation detects failure, then post-dispatch check confirms it.
+    // Static path: allocation log sees pending, then allocation detects failure and post-dispatch confirms it.
     mockDb.query.stepExecutions.findFirst = vi
       .fn()
+      .mockResolvedValueOnce({ id: 'se-1', status: 'pending', liveOutput: [] })
       .mockResolvedValueOnce({
         id: 'se-1',
         status: 'failed',
@@ -713,6 +740,7 @@ describe('executeWorkflow', () => {
     });
     mockDb.query.stepExecutions.findFirst = vi
       .fn()
+      .mockResolvedValueOnce({ id: 'se-1', status: 'pending', liveOutput: [] })
       .mockResolvedValueOnce({ id: 'se-1', status: 'completed', output: 'AI response output' })
       .mockResolvedValueOnce({ id: 'se-1', status: 'completed', output: 'AI response output' });
 
@@ -722,6 +750,71 @@ describe('executeWorkflow', () => {
       stepExecutionId: 'se-1',
       executionId: 'exec-static-override-001',
     });
+    expect(mockCreateAgentPod).not.toHaveBeenCalled();
+  });
+
+  it('keeps a pending step and reschedules the workflow when LLM credit quota is exhausted', async () => {
+    const { executeWorkflow } = await import('../src/services/workflow-engine.js');
+
+    mockDb.query.workflowExecutions.findFirst.mockResolvedValueOnce({
+      id: 'exec-quota-001',
+      workflowId: 'wf-001',
+      status: 'pending',
+      startedAt: null,
+      triggerMetadata: null,
+      workflowSnapshot: { workflow: { stepAllocationTimeoutSeconds: 300 } },
+    });
+    mockDb.query.workflows.findFirst.mockResolvedValueOnce({
+      id: 'wf-001',
+      name: 'Quota WF',
+      userId: 'user-001',
+      defaultAgentId: 'agent-001',
+      workspaceId: 'ws-001',
+      defaultModel: null,
+      defaultReasoningEffort: null,
+      workerRuntime: 'static',
+      stepAllocationTimeoutSeconds: 300,
+    });
+    mockDb.query.workflowSteps.findMany.mockResolvedValueOnce([
+      { id: 'ws-1', name: 'Step 1', promptTemplate: 'Do X', stepOrder: 1, agentId: null, model: null, reasoningEffort: null, workerRuntime: null, timeoutSeconds: 60 },
+    ]);
+    mockDb.query.stepExecutions.findMany.mockResolvedValueOnce([
+      { id: 'se-1', stepOrder: 1, status: 'pending', liveOutput: [] },
+    ]);
+    mockDb.query.agents.findFirst.mockResolvedValueOnce({
+      id: 'agent-001',
+      name: 'Test Agent',
+      userId: 'user-001',
+      sourceType: 'database',
+      version: 1,
+    });
+    mockDb.query.userQuotaSettings.findFirst.mockResolvedValueOnce({
+      dailyCreditLimit: '1.00',
+      weeklyCreditLimit: null,
+      monthlyCreditLimit: null,
+    });
+    mockDb.query.creditUsage.findMany.mockResolvedValueOnce([
+      {
+        workspaceId: 'ws-001',
+        userId: 'user-001',
+        date: new Date().toISOString().slice(0, 10),
+        creditsConsumed: '1.00',
+      },
+    ]);
+    mockDb.query.stepExecutions.findFirst.mockResolvedValueOnce({
+      id: 'se-1',
+      status: 'pending',
+      liveOutput: [],
+    });
+
+    await executeWorkflow('exec-quota-001');
+
+    expect(mockQueueAdd).not.toHaveBeenCalledWith('step-execution', expect.anything());
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      'execute-workflow',
+      expect.objectContaining({ executionId: 'exec-quota-001', workflowId: 'wf-001', startFromStep: 0 }),
+      expect.objectContaining({ delay: expect.any(Number), jobId: expect.stringContaining('quota') }),
+    );
     expect(mockCreateAgentPod).not.toHaveBeenCalled();
   });
 
@@ -775,6 +868,119 @@ describe('executeWorkflow', () => {
     // Step was enqueued but timed out waiting for allocation
     expect(mockQueueAdd).toHaveBeenCalled();
     // Execution should be marked as failed due to allocation timeout
+    expect(mockDb.update).toHaveBeenCalled();
+  });
+
+  it('keeps an ephemeral step pending until allocation timeout when dynamic capacity is full', async () => {
+    const { executeWorkflow } = await import('../src/services/workflow-engine.js');
+
+    mockAcquireAgentSlot.mockResolvedValue(false);
+    mockDb.query.workflowExecutions.findFirst.mockResolvedValueOnce({
+      id: 'exec-capacity-001',
+      workflowId: 'wf-001',
+      triggerMetadata: null,
+      workflowSnapshot: { workflow: { workerRuntime: 'ephemeral', stepAllocationTimeoutSeconds: 3 } },
+    });
+    mockDb.query.workflows.findFirst.mockResolvedValueOnce({
+      id: 'wf-001',
+      name: 'Ephemeral Capacity WF',
+      userId: 'user-001',
+      defaultAgentId: 'agent-001',
+      workspaceId: 'ws-001',
+      defaultModel: null,
+      defaultReasoningEffort: null,
+      workerRuntime: 'ephemeral',
+      stepAllocationTimeoutSeconds: 3,
+    });
+    mockDb.query.workflowSteps.findMany.mockResolvedValueOnce([
+      { id: 'ws-1', name: 'Step 1', promptTemplate: 'Do X', stepOrder: 1, agentId: null, model: null, reasoningEffort: null, workerRuntime: null, timeoutSeconds: 60 },
+    ]);
+    mockDb.query.stepExecutions.findMany.mockResolvedValueOnce([
+      { id: 'se-1', stepOrder: 1, status: 'pending' },
+    ]);
+    mockDb.query.agents.findFirst.mockResolvedValueOnce({
+      id: 'agent-001',
+      name: 'Test Agent',
+      userId: 'user-001',
+      sourceType: 'database',
+    });
+    mockDb.query.stepExecutions.findFirst = vi.fn().mockResolvedValue({
+      id: 'se-1',
+      status: 'pending',
+      liveOutput: [],
+    });
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const promise = executeWorkflow('exec-capacity-001');
+    await vi.advanceTimersByTimeAsync(3_500);
+    await promise;
+
+    expect(mockAcquireAgentSlot).toHaveBeenCalled();
+    expect(mockCreateAgentPod).not.toHaveBeenCalled();
+    expect(mockPublishRealtimeEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'step.allocation_waiting',
+      data: expect.objectContaining({
+        allocationWait: expect.objectContaining({ reason: 'rate_limited' }),
+      }),
+    }));
+    expect(mockDb.update).toHaveBeenCalled();
+  });
+
+  it('retries ephemeral pod provisioning until allocation timeout when Kubernetes is unavailable', async () => {
+    const { executeWorkflow } = await import('../src/services/workflow-engine.js');
+
+    mockCreateAgentPod.mockRejectedValue(new Error('Kubernetes API unavailable'));
+    mockDb.query.workflowExecutions.findFirst.mockResolvedValueOnce({
+      id: 'exec-k8s-001',
+      workflowId: 'wf-001',
+      triggerMetadata: null,
+      workflowSnapshot: { workflow: { workerRuntime: 'ephemeral', stepAllocationTimeoutSeconds: 3 } },
+    });
+    mockDb.query.workflows.findFirst.mockResolvedValueOnce({
+      id: 'wf-001',
+      name: 'Ephemeral K8s WF',
+      userId: 'user-001',
+      defaultAgentId: 'agent-001',
+      workspaceId: 'ws-001',
+      defaultModel: null,
+      defaultReasoningEffort: null,
+      workerRuntime: 'ephemeral',
+      stepAllocationTimeoutSeconds: 3,
+    });
+    mockDb.query.workflowSteps.findMany.mockResolvedValueOnce([
+      { id: 'ws-1', name: 'Step 1', promptTemplate: 'Do X', stepOrder: 1, agentId: null, model: null, reasoningEffort: null, workerRuntime: null, timeoutSeconds: 60 },
+    ]);
+    mockDb.query.stepExecutions.findMany.mockResolvedValueOnce([
+      { id: 'se-1', stepOrder: 1, status: 'pending' },
+    ]);
+    mockDb.query.agents.findFirst.mockResolvedValueOnce({
+      id: 'agent-001',
+      name: 'Test Agent',
+      userId: 'user-001',
+      sourceType: 'database',
+    });
+    mockDb.query.stepExecutions.findFirst = vi.fn().mockResolvedValue({
+      id: 'se-1',
+      status: 'pending',
+      liveOutput: [],
+    });
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const promise = executeWorkflow('exec-k8s-001');
+    await vi.advanceTimersByTimeAsync(3_500);
+    await promise;
+
+    expect(mockCreateAgentPod).toHaveBeenCalled();
+    expect(mockReleaseAgentSlot).toHaveBeenCalled();
+    expect(mockPublishRealtimeEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'step.allocation_waiting',
+      data: expect.objectContaining({
+        allocationWait: expect.objectContaining({
+          reason: 'provisioning_unavailable',
+          lastError: 'Kubernetes API unavailable',
+        }),
+      }),
+    }));
     expect(mockDb.update).toHaveBeenCalled();
   });
 });

@@ -216,7 +216,7 @@
           <InputNumber v-model="configuration.overlapMinutes" :disabled="disabled" :min="1" :max="120" />
         </div>
         <div class="flex flex-col gap-2">
-          <label class="text-sm font-medium">First Poll Behavior</label>
+          <label class="text-sm font-medium">Initial Backfill Policy</label>
           <Select
             v-model="configuration.initialLoadMode"
             :disabled="disabled"
@@ -224,6 +224,16 @@
             optionLabel="label"
             optionValue="value"
           />
+          <small class="text-surface-400 leading-snug">
+            Applies <strong>only on the first poll</strong> after the trigger is saved. Subsequent polls always
+            resume from the stored last-poll timestamp (with the overlap window).
+            <br />
+            <strong>Start From Now</strong> &mdash; ignore issues that already match the JQL today; only fire on
+            issues created or updated <em>after</em> the trigger is saved.
+            <br />
+            <strong>Include Current Matches</strong> &mdash; immediately enqueue the workflow for every issue
+            currently matching the JQL, then continue polling for changes.
+          </small>
         </div>
       </div>
 

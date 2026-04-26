@@ -60,20 +60,22 @@ const loading = ref(false);
 const selectedProvider = ref('database');
 const providers = ref<Array<{ type: string; name: string; label: string }>>([]);
 const allowRegistration = ref(true);
+const allowPasswordReset = ref(true);
 
 const identifierLabel = computed(() => selectedProvider.value === 'ldap' ? 'Username or Email' : 'Email');
 const identifierPlaceholder = computed(() => selectedProvider.value === 'ldap' ? 'username or email' : 'you@example.com');
 const identifierInputType = computed(() => selectedProvider.value === 'ldap' ? 'text' : 'email');
-const showForgotPassword = computed(() => selectedProvider.value === 'database');
+const showForgotPassword = computed(() => selectedProvider.value === 'database' && allowPasswordReset.value);
 
 onMounted(async () => {
   try {
-    const res = await $fetch<{ providers: Array<{ type: string; name: string }>; allowRegistration: boolean }>(`/api/auth/providers?workspace=${workspaceSlug.value}`);
+    const res = await $fetch<{ providers: Array<{ type: string; name: string }>; allowRegistration: boolean; allowPasswordReset: boolean }>(`/api/auth/providers?workspace=${workspaceSlug.value}`);
     providers.value = res.providers.map(p => ({
       ...p,
       label: p.type === 'ldap' ? 'Active Directory' : 'Built-in Database',
     }));
     allowRegistration.value = res.allowRegistration ?? true;
+    allowPasswordReset.value = res.allowPasswordReset ?? true;
     if (providers.value.length > 0) selectedProvider.value = providers.value[0].type;
   } catch {
     providers.value = [{ type: 'database', name: 'Database', label: 'Built-in Database' }];

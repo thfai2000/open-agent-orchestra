@@ -23,6 +23,8 @@ OAO emits **system events** for every significant action in the platform. These 
 | | `execution.cancelled` | A workflow execution was cancelled |
 | **Step** | `step.completed` | A workflow step completed successfully |
 | | `step.failed` | A workflow step failed |
+| | `step.allocation_waiting` | Realtime SSE event emitted when a pending step is waiting for static or ephemeral agent runtime allocation |
+| | `step.quota_waiting` | Realtime SSE event emitted when a pending step is waiting for enough LLM credit quota |
 | **Trigger** | `trigger.fired` | A trigger fired (cron, datetime, or event match) |
 | **Webhook** | `webhook.received` | A webhook-style trigger input was received (generic webhook, Jira callback, or Manual Run) |
 | **User** | `user.login` | A user logged in |

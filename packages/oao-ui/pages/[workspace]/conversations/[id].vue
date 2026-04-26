@@ -111,9 +111,9 @@
                 No active models are configured for this workspace. Add one in Admin &gt; Models before sending a new turn.
               </Message>
 
-              <div class="rounded-xl border border-surface-200 bg-surface-50 px-3 py-3">
+              <div class="rounded-xl border border-surface-200 bg-surface-50 px-3 py-3 turn-settings-panel">
                 <div class="flex flex-wrap items-end gap-3">
-                  <div class="w-full sm:w-36">
+                  <div class="w-full sm:w-44">
                     <label class="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-surface-500">Agent</label>
                     <Select
                       v-model="settingsForm.agentId"
@@ -123,6 +123,9 @@
                       optionDisabled="disabled"
                       :disabled="!canChangeAgent"
                       placeholder="Select an agent"
+                      size="small"
+                      class="w-full text-xs"
+                      :pt="{ label: { title: agentSelectionTitle } }"
                       @change="handleAgentChange"
                     />
                   </div>
@@ -137,6 +140,8 @@
                       :disabled="!canAdjustTurnSettings || modelOptions.length === 0"
                       showClear
                       placeholder="Workspace default"
+                      size="small"
+                      class="w-full text-xs"
                     />
                   </div>
 
@@ -150,6 +155,8 @@
                       :disabled="!canAdjustTurnSettings"
                       showClear
                       placeholder="Model default"
+                      size="small"
+                      class="w-full text-xs"
                     />
                   </div>
 
@@ -496,6 +503,10 @@ const modelOptions = computed<ModelOption[]>(() => (((modelsData.value?.models ?
   provider: model.provider || null,
 }))));
 const availableModelNames = computed(() => modelOptions.value.map((model) => model.value));
+const agentSelectionTitle = computed(() => {
+  const selected = agentOptions.value.find((entry: any) => entry.id === settingsForm.agentId);
+  return selected?.name || '';
+});
 const toolButtonLabel = computed(() => toolCatalogPending.value ? 'Loading Tools' : `Tools (${settingsForm.selectedToolNames.length})`);
 const nextTurnModelSummary = computed(() => {
   if (settingsForm.model) return `Model: ${settingsForm.model}`;
@@ -1145,3 +1156,26 @@ async function sendMessage() {
   }
 }
 </script>
+
+<style scoped>
+/* Compact the per-turn settings panel: shrink dropdown text and force the */
+/* selected label to truncate with an ellipsis when content overflows the field. */
+.turn-settings-panel :deep(.p-select) {
+  font-size: 0.75rem;
+  min-height: 2rem;
+}
+.turn-settings-panel :deep(.p-select-label),
+.turn-settings-panel :deep(.p-select-label-empty) {
+  font-size: 0.75rem;
+  line-height: 1.1rem;
+  padding: 0.35rem 0.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+  min-width: 0;
+}
+.turn-settings-panel :deep(.p-select-dropdown) {
+  width: 1.75rem;
+}
+</style>

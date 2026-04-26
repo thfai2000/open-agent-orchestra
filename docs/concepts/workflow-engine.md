@@ -214,7 +214,10 @@ When the BullMQ worker picks up a job, it orchestrates the workflow by **dispatc
 graph TB
     START[Worker picks up job] --> MARK[Mark execution as running]
     MARK --> LOOP{Next step?}
-    LOOP -->|yes| DISPATCH[Resolve step runtime<br/>static queue or ephemeral pod]
+    LOOP -->|yes| QUOTA{Enough LLM credit?}
+    QUOTA -->|yes| DISPATCH[Resolve step runtime<br/>static queue or ephemeral pod]
+    QUOTA -->|no| HOLD[Record quota_wait<br/>keep step pending<br/>delay resume job]
+    HOLD --> LOOP
     DISPATCH --> ALLOCATE[Wait for allocation<br/>step stays pending]
     ALLOCATE -->|allocated| WAIT[Wait for execution<br/>poll status every 3s]
     WAIT -->|succeeded| LOOP
@@ -224,6 +227,8 @@ graph TB
     LOOP -->|no more steps| DONE[Mark execution completed]
 
     style START fill:#FF9800,color:#fff
+    style QUOTA fill:#FFC107,color:#111
+    style HOLD fill:#795548,color:#fff
     style DISPATCH fill:#9C27B0,color:#fff
     style ALLOCATE fill:#607D8B,color:#fff
     style DONE fill:#4CAF50,color:#fff
@@ -253,9 +258,18 @@ When a step reaches an agent that is already busy, the worker waits for the sess
 
 ### Allocation Semantics
 
+After quota checks pass, a step stays `pending` while the controller tries to allocate runtime capacity. Capacity problems are treated as allocation waits, not immediate step failures.
+
+Static runtime steps are enqueued on the `agent-step-execution` queue and remain pending until a static agent worker picks up the job. If all workers are busy, stopped, or unavailable, the step waits until `stepAllocationTimeoutSeconds` and then fails with an allocation timeout. A late worker that later receives the orphaned job skips it because the parent execution is already terminal.
+
+Ephemeral runtime steps first wait for dynamic agent capacity under `MAX_CONCURRENT_AGENTS`, then retry Kubernetes pod creation until the same allocation timeout expires. This covers transient capacity limits and non-Kubernetes or temporarily unavailable Kubernetes environments where pod provisioning cannot start immediately. In both cases, the step remains pending and records an `allocation_wait` process-log event until it starts or times out.
+
+The allocation retry cadence is controlled by `AGENT_ALLOCATION_RETRY_MS` (default: 3000ms). The default allocation timeout fallback is `DEFAULT_STEP_ALLOCATION_TIMEOUT_SECONDS` (default: 300s), but workflow snapshots preserve the workflow's own `stepAllocationTimeoutSeconds` for each execution.
+
+- **Quota wait**: before allocation, the engine checks the selected model's `creditCost` against user and workspace daily, weekly, and monthly limits. If quota is exhausted, the step remains `pending`, a `quota_wait` live event is written, and a delayed workflow job resumes from the same step. Configure the recheck cadence with `QUOTA_WAIT_RECHECK_SECONDS` (default: 60 seconds).
 - **Static runtime**: the step is queued on `agent-step-execution` and remains `pending` until a static worker transitions it to `running`.
 - **Ephemeral runtime**: the controller creates a dedicated pod immediately and the step remains `pending` until that pod is ready enough to start the step.
-- **Allocation timeout**: if a step does not leave `pending` before `stepAllocationTimeoutSeconds`, the engine marks the step and workflow execution as failed.
+- **Allocation timeout**: after quota is available and a step has been dispatched, if it does not leave `pending` before `stepAllocationTimeoutSeconds`, the engine marks the step and workflow execution as failed.
 - **Execution timeout**: once the step is `running`, the normal step timeout applies.
 
 ### Runtime Selection

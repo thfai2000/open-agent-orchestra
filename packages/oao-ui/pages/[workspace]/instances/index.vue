@@ -39,10 +39,10 @@
         </template>
       </Column>
       <Column header="Last Heartbeat" style="width: 170px">
-        <template #body="{ data }"><span class="text-sm text-surface-500">{{ data.lastHeartbeatAt ? new Date(data.lastHeartbeatAt).toLocaleString() : '—' }}</span></template>
+        <template #body="{ data }"><span :title="data.lastHeartbeatAt ? new Date(data.lastHeartbeatAt).toString() : ''" class="text-sm text-surface-500">{{ data.lastHeartbeatAt ? new Date(data.lastHeartbeatAt).toLocaleString() : '—' }}</span></template>
       </Column>
       <Column header="Created" style="width: 170px">
-        <template #body="{ data }"><span class="text-sm text-surface-500">{{ new Date(data.createdAt).toLocaleString() }}</span></template>
+        <template #body="{ data }"><span :title="new Date(data.createdAt).toString()" class="text-sm text-surface-500">{{ new Date(data.createdAt).toLocaleString() }}</span></template>
       </Column>
       <Column header="" style="width: 60px">
         <template #body="{ data }">

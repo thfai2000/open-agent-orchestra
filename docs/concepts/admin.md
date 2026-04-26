@@ -10,7 +10,8 @@ Workspace administrators have access to management features for models, users, r
 | Models | `/{workspace}/admin/models` | Configure available AI models and credit costs |
 | Auth Providers | `/{workspace}/admin/auth-providers` | Configure authentication providers (Database, LDAP). See [Auth Providers](/concepts/auth-providers) |
 | Rate Limits | `/{workspace}/admin/rate-limits` | Set workspace defaults and per-user credit limits |
-| Security | `/{workspace}/admin/security` | Configure credential approval and view access logs. See [AI Security](/concepts/security) |
+| Security | `/{workspace}/admin/security` | Configure workspace self-service registration and forgot-password access |
+| Mail Settings | `/{workspace}/admin/mail-settings` | Configure global SMTP settings for password reset and system emails (`super_admin` only) |
 | Workspaces | `/{workspace}/workspaces` | Manage workspaces (`super_admin` only) |
 
 ## Model Management
@@ -65,6 +66,21 @@ graph LR
 - New users register as `creator_user` by default
 - Admins can promote/demote users via **Admin → Users**
 - `super_admin` can move users between workspaces
+
+## Workspace Security
+
+The **Admin → Security** page controls self-service account features at the workspace boundary:
+
+| Setting | Effect |
+|---|---|
+| Allow User Registration | Shows the registration link on the login page and allows `POST /api/auth/register` for the workspace |
+| Allow Forgot Password | Shows the forgot-password link for database users and allows password reset email requests |
+
+Both settings are stored on the workspace record. Existing authenticated users can still sign in when registration is disabled, and LDAP users continue to manage passwords through their external directory.
+
+## Mail Settings
+
+The **Admin → Mail Settings** page is available to `super_admin` users and stores the platform SMTP configuration. Forgot-password email delivery uses this configuration; if SMTP is not configured, reset requests are accepted but no email is sent.
 
 ## System Events
 

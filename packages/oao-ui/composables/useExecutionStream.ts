@@ -44,7 +44,7 @@ export function useExecutionStream(executionId: Ref<string>, options?: { enabled
     const eventTypes = [
       'execution.started', 'execution.status', 'execution.completed',
       'execution.failed', 'execution.cancelled',
-      'step.started', 'step.progress', 'step.completed', 'step.failed',
+      'step.started', 'step.progress', 'step.allocation_waiting', 'step.quota_waiting', 'step.completed', 'step.failed',
     ];
 
     for (const type of eventTypes) {
@@ -133,7 +133,7 @@ export function useExecutionListStream() {
     const eventTypes = [
       'execution.created', 'execution.started', 'execution.status',
       'execution.completed', 'execution.failed', 'execution.cancelled',
-      'step.started', 'step.progress', 'step.completed', 'step.failed',
+      'step.started', 'step.progress', 'step.allocation_waiting', 'step.quota_waiting', 'step.completed', 'step.failed',
     ];
 
     for (const type of eventTypes) {

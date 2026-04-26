@@ -21,6 +21,8 @@ import { TriggerServiceError } from '../services/trigger-errors.js';
 import {
   testJiraChangesNotificationTriggerConnectivity,
   testJiraPollingTriggerConnectivity,
+  forcePollSingleJiraTrigger,
+  simulateJiraChangesNotificationFire,
 } from '../services/jira-integration.js';
 
 const triggersRouter = new Hono();
@@ -228,6 +230,48 @@ triggersRouter.post('/:id/test', async (c) => {
   } catch (error) {
     if (error instanceof TriggerServiceError) {
       return c.json({ ok: false, summary: error.message, issues: error.issues }, error.status);
+    }
+    throw error;
+  }
+});
+
+// POST /:id/fire — force-fire a Jira trigger for testing purposes
+// For jira_polling: polls Jira immediately and enqueues an execution if issues are found.
+// For jira_changes_notification: accepts a mock payload and enqueues an execution.
+const fireTriggerSchema = z.object({
+  payload: z.record(z.unknown()).optional(),
+});
+
+triggersRouter.post('/:id/fire', async (c) => {
+  const user = c.get('user');
+  const id = uuidSchema.parse(c.req.param('id'));
+
+  const access = await verifyTriggerAccess(id, user.workspaceId, user.userId, user.role);
+  if (!access) return c.json({ error: 'Trigger not found' }, 404);
+
+  // Only admins can force-fire triggers
+  if (user.role !== 'workspace_admin' && user.role !== 'super_admin') {
+    return c.json({ error: 'Only admins can force-fire triggers' }, 403);
+  }
+
+  const body = fireTriggerSchema.parse(await c.req.json().catch(() => ({})));
+
+  try {
+    if (access.trigger.triggerType === 'jira_polling') {
+      const result = await forcePollSingleJiraTrigger(id);
+      return c.json({ fired: result.fired, executionId: result.executionId, issueCount: result.issueCount });
+    }
+
+    if (access.trigger.triggerType === 'jira_changes_notification') {
+      const mockPayload = body.payload ?? {};
+      const result = await simulateJiraChangesNotificationFire(access.workflow.id, id, mockPayload);
+      return c.json({ fired: true, executionId: result.executionId });
+    }
+
+    return c.json({ error: `Trigger type ${access.trigger.triggerType} does not support force-fire` }, 400);
+  } catch (error) {
+    if (error instanceof TriggerServiceError) {
+      return c.json({ error: error.message, issues: error.issues }, error.status);
     }
     throw error;
   }

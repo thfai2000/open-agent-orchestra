@@ -75,7 +75,7 @@
           </template>
           <Column header="Workflow" style="min-width: 200px">
             <template #body="{ data }">
-              <span class="font-medium">{{ data.workflowName || data.workflowId?.substring(0, 8) + '…' }}</span>
+              <span :title="data.workflowName || data.workflowId" class="font-medium">{{ data.workflowName || data.workflowId?.substring(0, 8) + '…' }}</span>
             </template>
           </Column>
           <Column field="status" header="Status">
@@ -85,7 +85,7 @@
           </Column>
           <Column header="Started">
             <template #body="{ data }">
-              <span class="text-sm">{{ data.startedAt ? new Date(data.startedAt).toLocaleString() : '—' }}</span>
+              <span :title="data.startedAt ? new Date(data.startedAt).toString() : ''" class="text-sm">{{ data.startedAt ? new Date(data.startedAt).toLocaleString() : '—' }}</span>
             </template>
           </Column>
           <Column header="">

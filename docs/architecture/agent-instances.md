@@ -10,6 +10,7 @@ Pre-provisioned, long-running worker processes. Each static instance connects to
 
 - Registered in the `agent_instances` database table on startup
 - Send periodic heartbeats (15s interval); marked offline if stale (60s threshold)
+- Cleaned up by the controller when the last heartbeat is older than 24 hours by default
 - Scale horizontally by running more worker containers/processes
 - Managed via the Instances page in the UI
 - Selected by workflows whose `workerRuntime` is `static`
@@ -76,6 +77,8 @@ Agent instances (both static and ephemeral) **do not expose any inbound network 
 |---|---|
 | **Static Worker** | Writes `lastHeartbeatAt` to `agent_instances` table every 15s. Marked offline if stale (>60s). The API reads this table for the Instances UI page. |
 | **Ephemeral Instance** | Controller polls the Kubernetes API (`GET /api/v1/namespaces/.../pods/{name}`) to check pod phase (`Running` → `Succeeded` / `Failed`). Pods are deleted after results are written. |
+
+The controller also performs background maintenance while it holds the leader lock. Static instances whose heartbeat has been absent for more than `STALE_STATIC_INSTANCE_CLEANUP_MS` (default: 24 hours) are removed from `agent_instances`, so old worker rows do not accumulate after VM, Docker, or Kubernetes restarts. Live workers refresh `lastHeartbeatAt` every 15 seconds, and graceful shutdown marks the instance offline before the cleanup window starts.
 
 > **Firewall note:** Agent instances only need **outbound** access to PostgreSQL, Redis, and `api.githubcopilot.com`. No inbound ports need to be opened.
 

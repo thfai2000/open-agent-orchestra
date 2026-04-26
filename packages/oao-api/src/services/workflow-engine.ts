@@ -24,8 +24,15 @@ import { resolveAgentToolSelection } from './agent-tool-selection.js';
 import { renderTemplate, buildTemplateContext } from './jinja-renderer.js';
 import { loadConfiguredMcpTools } from './platform-mcp.js';
 import { resolveWorkspaceModelSession } from './workspace-models.js';
+import { checkLlmCreditQuota, type BlockedQuotaCheck } from './quota-enforcement.js';
 
-import { createAgentPod, waitForPodCompletion, deleteAgentPod } from './k8s-provisioner.js';
+import {
+  acquireAgentSlot,
+  createAgentPod,
+  deleteAgentPod,
+  releaseAgentSlot,
+  waitForPodCompletion,
+} from './k8s-provisioner.js';
 import { registerEphemeralInstance, terminateEphemeralInstance } from './agent-instance-registry.js';
 import { AGENT_STEP_QUEUE } from '../workers/agent-worker.js';
 import { publishRealtimeEvent } from './realtime-bus.js';
@@ -41,6 +48,11 @@ const SESSION_LOCK_POLL_MS = 1000;
 const STEP_COMPLETION_GRACE_SECONDS = parseInt(process.env.STEP_COMPLETION_GRACE_SECONDS || '30', 10);
 const DEFAULT_STEP_ALLOCATION_TIMEOUT_SECONDS = parseInt(process.env.DEFAULT_STEP_ALLOCATION_TIMEOUT_SECONDS || '300', 10);
 const STEP_STATUS_POLL_MS = 3000;
+const AGENT_ALLOCATION_RETRY_MS = Math.max(parseInt(process.env.AGENT_ALLOCATION_RETRY_MS || '3000', 10), 1000);
+const parsedQuotaWaitRecheckSeconds = parseInt(process.env.QUOTA_WAIT_RECHECK_SECONDS || '60', 10);
+const QUOTA_WAIT_RECHECK_SECONDS = Number.isFinite(parsedQuotaWaitRecheckSeconds)
+  ? Math.max(parsedQuotaWaitRecheckSeconds, 10)
+  : 60;
 
 interface SessionLockInfo {
   agentId: string;
@@ -51,6 +63,27 @@ interface SessionLockInfo {
   workerRuntime: 'static' | 'ephemeral';
   stepName: string;
   acquiredAt: string;
+}
+
+interface QuotaWaitLiveEvent extends Record<string, unknown> {
+  type: 'quota_wait';
+  timestamp: string;
+  message: string;
+  model: string;
+  creditCost: string;
+  nextRetryAt: string;
+  quotaResetAt: string;
+  blockingLimits: BlockedQuotaCheck['blockingLimits'];
+}
+
+interface AllocationWaitLiveEvent extends Record<string, unknown> {
+  type: 'allocation_wait';
+  timestamp: string;
+  message: string;
+  runtime: 'static' | 'ephemeral';
+  reason: 'queued' | 'rate_limited' | 'provisioning_unavailable';
+  allocationTimeoutAt: string;
+  lastError?: string;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -79,6 +112,18 @@ async function getSessionLockInfo(agentId: string): Promise<SessionLockInfo | nu
 
 function getStepExecutionBudgetSeconds(timeoutSeconds: number | null): number {
   return (timeoutSeconds ?? 600) + SESSION_LOCK_WAIT_SECONDS + STEP_COMPLETION_GRACE_SECONDS;
+}
+
+function getQuotaWaitDelayMs(quotaCheck: BlockedQuotaCheck): number {
+  const resetDelayMs = new Date(quotaCheck.nextResetAt).getTime() - Date.now();
+  const recheckDelayMs = QUOTA_WAIT_RECHECK_SECONDS * 1000;
+  return Math.max(1000, Math.min(recheckDelayMs, Math.max(resetDelayMs, 1000)));
+}
+
+function normalizeLiveOutput(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((event): event is Record<string, unknown> => !!event && typeof event === 'object')
+    : [];
 }
 
 function parseWorkerRuntime(value: unknown): 'static' | 'ephemeral' | null {
@@ -341,6 +386,162 @@ function getStepQueue(): Queue {
   return stepQueue;
 }
 
+async function pauseWorkflowForQuota(params: {
+  executionId: string;
+  workflowId: string;
+  workspaceId: string | null;
+  stepExecutionId: string;
+  stepOrder: number;
+  stepIndex: number;
+  quotaCheck: BlockedQuotaCheck;
+}): Promise<void> {
+  const currentStep = await getStepExecutionRecord(params.stepExecutionId);
+  if (!currentStep || currentStep.status !== 'pending') {
+    logger.info(
+      { executionId: params.executionId, stepExecutionId: params.stepExecutionId, status: currentStep?.status },
+      'Quota pause skipped because the step is no longer pending',
+    );
+    return;
+  }
+
+  const delayMs = getQuotaWaitDelayMs(params.quotaCheck);
+  const now = new Date();
+  const quotaWait: QuotaWaitLiveEvent = {
+    type: 'quota_wait',
+    timestamp: now.toISOString(),
+    message: params.quotaCheck.message,
+    model: params.quotaCheck.modelName,
+    creditCost: params.quotaCheck.creditCost,
+    nextRetryAt: new Date(now.getTime() + delayMs).toISOString(),
+    quotaResetAt: params.quotaCheck.nextResetAt,
+    blockingLimits: params.quotaCheck.blockingLimits,
+  };
+
+  const liveOutput = normalizeLiveOutput(currentStep.liveOutput);
+  const nextLiveOutput = [
+    ...liveOutput.filter((event) => event.type !== 'quota_wait'),
+    quotaWait,
+  ];
+
+  await db
+    .update(stepExecutions)
+    .set({ liveOutput: nextLiveOutput })
+    .where(and(eq(stepExecutions.id, params.stepExecutionId), eq(stepExecutions.status, 'pending')));
+
+  publishRealtimeEvent({
+    type: 'step.quota_waiting',
+    executionId: params.executionId,
+    workflowId: params.workflowId,
+    workspaceId: params.workspaceId ?? undefined,
+    stepExecutionId: params.stepExecutionId,
+    stepOrder: params.stepOrder,
+    data: { quotaWait },
+    timestamp: quotaWait.timestamp,
+  });
+
+  publishRealtimeEvent({
+    type: 'step.progress',
+    executionId: params.executionId,
+    workflowId: params.workflowId,
+    workspaceId: params.workspaceId ?? undefined,
+    stepExecutionId: params.stepExecutionId,
+    stepOrder: params.stepOrder,
+    data: { events: [quotaWait] },
+    timestamp: quotaWait.timestamp,
+  });
+
+  publishRealtimeEvent({
+    type: 'execution.status',
+    executionId: params.executionId,
+    workflowId: params.workflowId,
+    workspaceId: params.workspaceId ?? undefined,
+    data: { status: 'running', quotaWait },
+    timestamp: quotaWait.timestamp,
+  });
+
+  await getQueue().add(
+    'execute-workflow',
+    {
+      executionId: params.executionId,
+      workflowId: params.workflowId,
+      startFromStep: params.stepIndex,
+    },
+    {
+      delay: delayMs,
+      jobId: `exec-${params.executionId}-quota-${params.stepExecutionId}-${Date.now()}`,
+    },
+  );
+
+  logger.info(
+    {
+      executionId: params.executionId,
+      stepExecutionId: params.stepExecutionId,
+      modelName: params.quotaCheck.modelName,
+      nextRetryAt: quotaWait.nextRetryAt,
+      quotaResetAt: quotaWait.quotaResetAt,
+    },
+    'Step kept pending while waiting for LLM credit quota',
+  );
+}
+
+async function recordStepAllocationWait(params: {
+  executionId: string;
+  workflowId: string;
+  workspaceId?: string | null;
+  stepExecutionId: string;
+  stepOrder: number;
+  runtime: 'static' | 'ephemeral';
+  reason: AllocationWaitLiveEvent['reason'];
+  allocationTimeoutAt: Date;
+  message: string;
+  lastError?: string;
+}): Promise<void> {
+  const currentStep = await getStepExecutionRecord(params.stepExecutionId);
+  if (!currentStep || currentStep.status !== 'pending') return;
+
+  const allocationWait: AllocationWaitLiveEvent = {
+    type: 'allocation_wait',
+    timestamp: new Date().toISOString(),
+    message: params.message,
+    runtime: params.runtime,
+    reason: params.reason,
+    allocationTimeoutAt: params.allocationTimeoutAt.toISOString(),
+    ...(params.lastError ? { lastError: params.lastError } : {}),
+  };
+  const liveOutput = normalizeLiveOutput(currentStep.liveOutput);
+  const nextLiveOutput = [
+    ...liveOutput.filter((event) => event.type !== 'allocation_wait'),
+    allocationWait,
+  ];
+
+  await db
+    .update(stepExecutions)
+    .set({ liveOutput: nextLiveOutput })
+    .where(and(eq(stepExecutions.id, params.stepExecutionId), eq(stepExecutions.status, 'pending')));
+
+  publishRealtimeEvent({
+    type: 'step.allocation_waiting',
+    executionId: params.executionId,
+    workflowId: params.workflowId,
+    workspaceId: params.workspaceId ?? undefined,
+    stepExecutionId: params.stepExecutionId,
+    stepOrder: params.stepOrder,
+    data: { allocationWait },
+    timestamp: allocationWait.timestamp,
+  });
+
+  publishRealtimeEvent({
+    type: 'step.progress',
+    executionId: params.executionId,
+    workflowId: params.workflowId,
+    workspaceId: params.workspaceId ?? undefined,
+    stepExecutionId: params.stepExecutionId,
+    stepOrder: params.stepOrder,
+    data: { events: [allocationWait] },
+    timestamp: allocationWait.timestamp,
+  });
+}
+
 /** Create an execution record and enqueue a BullMQ job. */
 export async function enqueueWorkflowExecution(
   workflowId: string,
@@ -547,6 +748,10 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
     where: eq(workflowExecutions.id, executionId),
   });
   if (!execution) throw new Error(`Execution ${executionId} not found`);
+  if (execution.status === 'completed' || execution.status === 'failed' || execution.status === 'cancelled') {
+    logger.info({ executionId, status: execution.status }, 'Workflow execution is already terminal, skipping');
+    return;
+  }
 
   const workflow = await db.query.workflows.findFirst({
     where: eq(workflows.id, execution.workflowId),
@@ -568,7 +773,7 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
   // Mark execution as running
   await db
     .update(workflowExecutions)
-    .set({ status: 'running', startedAt: new Date(), currentStep: startFromStep + 1 })
+    .set({ status: 'running', startedAt: execution.startedAt ?? new Date(), currentStep: startFromStep + 1 })
     .where(eq(workflowExecutions.id, executionId));
 
   publishRealtimeEvent({
@@ -584,6 +789,33 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
   for (let i = startFromStep; i < steps.length; i++) {
     const step = steps[i];
     const stepExec = stepExecs[i];
+
+    if (!stepExec) {
+      const errorMsg = `Missing step execution record for step ${i + 1}`;
+      await db
+        .update(workflowExecutions)
+        .set({ status: 'failed', error: errorMsg, completedAt: new Date() })
+        .where(eq(workflowExecutions.id, executionId));
+      logger.error({ executionId, stepIndex: i, error: errorMsg }, 'Step execution record missing');
+      return;
+    }
+
+    if (stepExec.status === 'completed') {
+      logger.info({ executionId, stepOrder: step.stepOrder }, 'Step already completed, skipping');
+      continue;
+    }
+
+    if (stepExec.status === 'failed') {
+      const errorMsg = stepExec.error || 'Step execution failed';
+      await markStepAndExecutionFailed(stepExec.id, executionId, stepExecs, i, errorMsg);
+      logger.error({ executionId, stepOrder: step.stepOrder, error: errorMsg }, 'Step already failed');
+      return;
+    }
+
+    if (stepExec.status === 'skipped') {
+      logger.info({ executionId, stepOrder: step.stepOrder }, 'Step already skipped, stopping workflow execution');
+      return;
+    }
 
     await db
       .update(workflowExecutions)
@@ -631,6 +863,26 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
       .where(eq(stepExecutions.id, stepExec.id));
 
     try {
+      const quotaCheck = await checkLlmCreditQuota({
+        workspaceId: workflow.workspaceId,
+        userId: workflow.userId,
+        requestedModel: step.model ?? workflow.defaultModel,
+        envDefaultModel: process.env.DEFAULT_MODEL,
+      });
+
+      if (!quotaCheck.allowed) {
+        await pauseWorkflowForQuota({
+          executionId,
+          workflowId: workflow.id,
+          workspaceId: workflow.workspaceId,
+          stepExecutionId: stepExec.id,
+          stepOrder: step.stepOrder,
+          stepIndex: i,
+          quotaCheck,
+        });
+        return;
+      }
+
       const stepWorkerRuntime = resolveStepWorkerRuntime(execution, workflow, step);
 
       if (stepWorkerRuntime === 'ephemeral') {
@@ -640,12 +892,13 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
           stepAgent,
           executionId,
           workflow.id,
+          workflow.workspaceId,
           allocationTimeoutSeconds,
           stepExecs,
           i,
         );
       } else {
-        await executeStepStatic(stepExec, step, executionId, allocationTimeoutSeconds, stepExecs, i);
+        await executeStepStatic(stepExec, step, executionId, workflow.id, workflow.workspaceId, allocationTimeoutSeconds, stepExecs, i);
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
@@ -720,14 +973,17 @@ export async function executeWorkflow(executionId: string, startFromStep = 0) {
  */
 async function executeStepStatic(
   stepExec: { id: string },
-  step: { timeoutSeconds: number | null },
+  step: { stepOrder: number; timeoutSeconds: number | null },
   executionId: string,
+  workflowId: string,
+  workspaceId: string | null,
   allocationTimeoutSeconds: number,
   _stepExecs: Array<{ id: string }>,
   _stepIndex: number,
 ): Promise<void> {
   const queue = getStepQueue();
   const allocationTimeoutMs = allocationTimeoutSeconds * 1000;
+  const allocationTimeoutAt = new Date(Date.now() + allocationTimeoutMs);
   const executionTimeoutMs = getStepExecutionBudgetSeconds(step.timeoutSeconds) * 1000;
 
   // Enqueue the step execution job for a static agent worker to pick up
@@ -740,6 +996,18 @@ async function executeStepStatic(
     { stepExecutionId: stepExec.id, executionId, allocationTimeoutSeconds },
     'Step enqueued for static agent allocation',
   );
+
+  await recordStepAllocationWait({
+    executionId,
+    workflowId,
+    workspaceId,
+    stepExecutionId: stepExec.id,
+    stepOrder: step.stepOrder,
+    runtime: 'static',
+    reason: 'queued',
+    allocationTimeoutAt,
+    message: `Waiting up to ${allocationTimeoutSeconds}s for an available static agent worker to pick up this step.`,
+  });
 
   const allocatedStep = await waitForStepAllocation(
     stepExec.id,
@@ -771,23 +1039,73 @@ async function executeStepEphemeral(
   stepAgent: { id: string; name: string },
   executionId: string,
   workflowId: string,
+  workspaceId: string | null,
   allocationTimeoutSeconds: number,
   _stepExecs: Array<{ id: string }>,
   _stepIndex: number,
 ): Promise<void> {
   let podName: string | null = null;
+  let slotAcquired = false;
+  let lastProvisioningError: string | undefined;
+  const allocationTimeoutMs = allocationTimeoutSeconds * 1000;
+  const allocationDeadline = Date.now() + allocationTimeoutMs;
+  const allocationTimeoutAt = new Date(allocationDeadline);
   const executionBudgetSeconds = getStepExecutionBudgetSeconds(step.timeoutSeconds);
   try {
-    // Create a dedicated K8s pod for this step
-    podName = await createAgentPod({
-      stepExecutionId: stepExec.id,
-      executionId,
-      workflowId,
-      stepOrder: step.stepOrder,
-      agentId: stepAgent.id,
-      agentName: stepAgent.name,
-      timeoutSeconds: allocationTimeoutSeconds + executionBudgetSeconds,
-    });
+    while (Date.now() < allocationDeadline) {
+      slotAcquired = await acquireAgentSlot();
+      if (!slotAcquired) {
+        await recordStepAllocationWait({
+          executionId,
+          workflowId,
+          workspaceId,
+          stepExecutionId: stepExec.id,
+          stepOrder: step.stepOrder,
+          runtime: 'ephemeral',
+          reason: 'rate_limited',
+          allocationTimeoutAt,
+          message: `Waiting up to ${allocationTimeoutSeconds}s for dynamic agent capacity. The configured MAX_CONCURRENT_AGENTS limit is currently full.`,
+        });
+        await sleep(Math.min(AGENT_ALLOCATION_RETRY_MS, Math.max(allocationDeadline - Date.now(), 0)));
+        continue;
+      }
+
+      try {
+        // Create a dedicated K8s pod for this step
+        podName = await createAgentPod({
+          stepExecutionId: stepExec.id,
+          executionId,
+          workflowId,
+          stepOrder: step.stepOrder,
+          agentId: stepAgent.id,
+          agentName: stepAgent.name,
+          timeoutSeconds: allocationTimeoutSeconds + executionBudgetSeconds,
+        });
+        break;
+      } catch (error) {
+        lastProvisioningError = error instanceof Error ? error.message : 'Unknown pod provisioning error';
+        await releaseAgentSlot().catch(() => {});
+        slotAcquired = false;
+        await recordStepAllocationWait({
+          executionId,
+          workflowId,
+          workspaceId,
+          stepExecutionId: stepExec.id,
+          stepOrder: step.stepOrder,
+          runtime: 'ephemeral',
+          reason: 'provisioning_unavailable',
+          allocationTimeoutAt,
+          message: `Waiting up to ${allocationTimeoutSeconds}s for a dynamic agent runtime to become available.`,
+          lastError: lastProvisioningError,
+        });
+        await sleep(Math.min(AGENT_ALLOCATION_RETRY_MS, Math.max(allocationDeadline - Date.now(), 0)));
+      }
+    }
+
+    if (!podName) {
+      const suffix = lastProvisioningError ? ` Last provisioning error: ${lastProvisioningError}` : '';
+      throw new Error(`Timed out waiting ${allocationTimeoutSeconds}s to start an ephemeral agent instance.${suffix}`);
+    }
 
     // Register in instance registry
     await registerEphemeralInstance(podName, stepExec.id, { executionId, workflowId });
@@ -850,6 +1168,9 @@ async function executeStepEphemeral(
     if (podName) {
       await deleteAgentPod(podName).catch(() => {});
       await terminateEphemeralInstance(podName).catch(() => {});
+    }
+    if (slotAcquired) {
+      await releaseAgentSlot().catch(() => {});
     }
   }
 }
@@ -1077,9 +1398,35 @@ export async function executeCopilotSession(params: {
       envDefaultModel: process.env.DEFAULT_AGENT_MODEL,
       authToken: copilotTokenOverride ?? process.env.DEFAULT_LLM_API_KEY ?? process.env.GITHUB_TOKEN ?? null,
     });
+
+    // Pre-flight auth check — fail fast with an actionable message instead of letting the
+    // Copilot SDK throw the opaque "Session was not created with authentication info or
+    // custom provider" error from runAgenticLoop on first prompt.
+    if (!resolvedModelSession.provider) {
+      const fallbackToken = process.env.DEFAULT_LLM_API_KEY || process.env.GITHUB_TOKEN || '';
+      const hasOverride = typeof copilotTokenOverride === 'string' && copilotTokenOverride.length > 0;
+      if (!hasOverride && !fallbackToken) {
+        logger.error({
+          agentId: agent.id,
+          agentName: agent.name,
+          model: resolvedModelSession.modelName,
+          providerType: 'github',
+          hasCopilotTokenOverride: hasOverride,
+          hasDefaultLlmApiKey: !!process.env.DEFAULT_LLM_API_KEY,
+          hasGithubTokenEnv: !!process.env.GITHUB_TOKEN,
+          copilotTokenCredentialId: agent.copilotTokenCredentialId ?? null,
+        }, 'No Copilot/LLM auth source resolved for workflow step');
+        throw new Error(
+          `No Copilot / LLM authentication is available for model "${resolvedModelSession.modelName}". ` +
+          `Configure a GitHub Copilot Token / LLM API Key credential on agent "${agent.name}" ` +
+          `(or set DEFAULT_LLM_API_KEY / GITHUB_TOKEN on the OAO server).`,
+        );
+      }
+    }
+
     const client = resolvedModelSession.provider
       ? new CopilotClient()
-      : new CopilotClient(copilotTokenOverride ? { githubToken: copilotTokenOverride } : undefined);
+      : new CopilotClient(copilotTokenOverride ? { githubToken: copilotTokenOverride } : (process.env.DEFAULT_LLM_API_KEY || process.env.GITHUB_TOKEN ? { githubToken: (process.env.DEFAULT_LLM_API_KEY || process.env.GITHUB_TOKEN)! } : undefined));
     const model = resolvedModelSession.modelName;
 
     const sessionOptions: Record<string, unknown> = {

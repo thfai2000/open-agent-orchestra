@@ -297,7 +297,11 @@ auth.get('/providers', async (c) => {
     providers.unshift({ type: 'database', name: 'Built-in Database' });
   }
 
-  return c.json({ providers, allowRegistration: workspace?.allowRegistration ?? true });
+  return c.json({
+    providers,
+    allowRegistration: workspace?.allowRegistration ?? true,
+    allowPasswordReset: workspace?.allowPasswordReset ?? true,
+  });
 });
 
 auth.get('/me', authMiddleware, async (c) => {
@@ -368,13 +372,17 @@ auth.post('/forgot-password', async (c) => {
   const body = z.object({ email: emailSchema, workspace: z.string().min(1).max(50).optional() }).parse(await c.req.json());
   const slug = body.workspace || 'default';
 
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.slug, slug) });
+  if (workspace && (workspace.allowPasswordReset ?? true) === false) {
+    return c.json({ error: 'Password reset is not allowed for this workspace' }, 403);
+  }
+
   // Always return 200 to avoid user enumeration
   const user = await db.query.users.findFirst({ where: eq(users.email, body.email) });
   if (!user || user.authProvider !== 'database' || !user.workspaceId) {
     return c.json({ message: 'If that email exists, a reset link has been sent.' });
   }
 
-  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.slug, slug) });
   if (!workspace || user.workspaceId !== workspace.id) {
     return c.json({ message: 'If that email exists, a reset link has been sent.' });
   }
@@ -402,6 +410,18 @@ auth.post('/reset-password', async (c) => {
 
   if (!record || record.usedAt) {
     return c.json({ error: 'Invalid or expired reset token' }, 400);
+  }
+
+  const user = await db.query.users.findFirst({ where: eq(users.id, record.userId) });
+  if (!user) {
+    return c.json({ error: 'Invalid or expired reset token' }, 400);
+  }
+
+  if (user.workspaceId) {
+    const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, user.workspaceId) });
+    if (workspace && (workspace.allowPasswordReset ?? true) === false) {
+      return c.json({ error: 'Password reset is not allowed for this workspace' }, 403);
+    }
   }
 
   const newHash = await bcrypt.hash(body.password, 12);

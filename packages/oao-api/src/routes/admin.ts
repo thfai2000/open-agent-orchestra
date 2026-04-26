@@ -466,15 +466,29 @@ adminRouter.get('/security', async (c) => {
   const user = c.get('user');
   const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, user.workspaceId!) });
   if (!workspace) return c.json({ error: 'Workspace not found' }, 404);
-  return c.json({ allowRegistration: workspace.allowRegistration });
+  return c.json({
+    allowRegistration: workspace.allowRegistration,
+    allowPasswordReset: workspace.allowPasswordReset,
+  });
 });
 
 // PUT /admin/security
 adminRouter.put('/security', async (c) => {
   const user = c.get('user');
-  const body = z.object({ allowRegistration: z.boolean() }).parse(await c.req.json());
-  await db.update(workspaces).set({ allowRegistration: body.allowRegistration, updatedAt: new Date() }).where(eq(workspaces.id, user.workspaceId!));
-  return c.json({ message: 'Security settings updated', allowRegistration: body.allowRegistration });
+  const body = z.object({
+    allowRegistration: z.boolean(),
+    allowPasswordReset: z.boolean(),
+  }).parse(await c.req.json());
+  await db.update(workspaces).set({
+    allowRegistration: body.allowRegistration,
+    allowPasswordReset: body.allowPasswordReset,
+    updatedAt: new Date(),
+  }).where(eq(workspaces.id, user.workspaceId!));
+  return c.json({
+    message: 'Security settings updated',
+    allowRegistration: body.allowRegistration,
+    allowPasswordReset: body.allowPasswordReset,
+  });
 });
 
 export default adminRouter;

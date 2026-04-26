@@ -14,10 +14,13 @@
       </div>
     </div>
 
+    <Message v-if="loadError" severity="error" :closable="false" class="mb-4">{{ loadError }}</Message>
     <Message v-if="saveError" severity="error" :closable="false" class="mb-4">{{ saveError }}</Message>
     <Message v-if="saveSuccess" severity="success" :closable="false" class="mb-4">Mail settings saved successfully.</Message>
 
-    <div class="max-w-lg flex flex-col gap-4">
+    <div v-if="loading" class="py-8 text-sm text-surface-400">Loading mail settings...</div>
+
+    <div v-else class="max-w-2xl flex flex-col gap-4">
       <div class="rounded-lg border border-surface-200 bg-white p-5 flex flex-col gap-4">
         <p class="text-sm font-semibold text-surface-600">SMTP Server</p>
         <div class="flex gap-3">
@@ -68,7 +71,7 @@
 </template>
 
 <script setup lang="ts">
-const { user } = useAuth();
+const { user, authHeaders } = useAuth();
 const ws = computed(() => user.value?.workspaceSlug || 'default');
 const headers = authHeaders();
 
@@ -83,6 +86,8 @@ const form = reactive({
 });
 
 const saving = ref(false);
+const loading = ref(true);
+const loadError = ref('');
 const saveError = ref('');
 const saveSuccess = ref(false);
 
@@ -98,7 +103,11 @@ onMounted(async () => {
       form.fromAddress = (s.fromAddress as string) || '';
       form.fromName = (s.fromName as string) || 'OAO Platform';
     }
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    loadError.value = e?.data?.error || 'Failed to load mail settings.';
+  } finally {
+    loading.value = false;
+  }
 });
 
 async function handleSave() {

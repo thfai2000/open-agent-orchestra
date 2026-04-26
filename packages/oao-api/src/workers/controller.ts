@@ -8,6 +8,10 @@ import {
   maintainJiraChangesNotificationTriggers,
   pollJiraPollingTriggers,
 } from '../services/jira-integration.js';
+import {
+  cleanupStaleStaticInstances,
+  markStaleInstancesOffline,
+} from '../services/agent-instance-registry.js';
 import { startWorker, stopWorker } from './workflow-worker.js';
 
 const logger = createLogger('controller');
@@ -15,6 +19,9 @@ const POLL_INTERVAL = parseInt(process.env.CONTROLLER_POLL_INTERVAL || '30000', 
 const LEADER_LOCK_KEY = 'controller:leader';
 const LEADER_LOCK_TTL = 60; // seconds
 const LAST_EVENT_CURSOR_KEY = 'controller:last-event-cursor';
+const AGENT_INSTANCE_MAINTENANCE_INTERVAL_MS = parseInt(process.env.AGENT_INSTANCE_MAINTENANCE_INTERVAL_MS || '3600000', 10);
+const STALE_STATIC_INSTANCE_CLEANUP_MS = parseInt(process.env.STALE_STATIC_INSTANCE_CLEANUP_MS || String(24 * 60 * 60 * 1000), 10);
+let lastAgentInstanceCleanupAt = 0;
 
 /**
  * Simple cron parser: checks if a cron expression matches the current time.
@@ -361,6 +368,25 @@ async function processWebhookEvent(event: { id: string; eventData: unknown }) {
   }
 }
 
+async function maintainAgentInstances() {
+  try {
+    const offlineCount = await markStaleInstancesOffline();
+    const now = Date.now();
+    let removedCount = 0;
+
+    if (now - lastAgentInstanceCleanupAt >= AGENT_INSTANCE_MAINTENANCE_INTERVAL_MS) {
+      removedCount = await cleanupStaleStaticInstances(STALE_STATIC_INSTANCE_CLEANUP_MS);
+      lastAgentInstanceCleanupAt = now;
+    }
+
+    if (offlineCount > 0 || removedCount > 0) {
+      logger.info({ offlineCount, removedCount }, 'Agent instance maintenance completed');
+    }
+  } catch (error) {
+    logger.error({ error }, 'Error maintaining agent instances');
+  }
+}
+
 async function run() {
   logger.info('Controller starting...');
 
@@ -382,6 +408,7 @@ async function run() {
       pollEventTriggers(),
       pollJiraPollingTriggers(),
       maintainJiraChangesNotificationTriggers(),
+      maintainAgentInstances(),
     ]);
   };
 

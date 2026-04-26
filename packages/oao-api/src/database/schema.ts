@@ -78,6 +78,7 @@ export const workspaces = pgTable('workspaces', {
   description: text('description'),
   isDefault: boolean('is_default').notNull().default(false), // Default Workspace cannot be deleted
   allowRegistration: boolean('allow_registration').notNull().default(true), // Allow public self-registration
+  allowPasswordReset: boolean('allow_password_reset').notNull().default(true), // Allow database users to request password reset emails
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

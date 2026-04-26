@@ -126,6 +126,9 @@
               <span v-else-if="step.status === 'skipped'" class="flex items-center justify-center w-6 h-6 rounded-full bg-surface-200 text-surface-500">
                 <i class="pi pi-forward text-xs"></i>
               </span>
+              <span v-else-if="getQuotaWait(step)" class="flex items-center justify-center w-6 h-6 rounded-full bg-yellow-100 text-yellow-700">
+                <i class="pi pi-clock text-xs"></i>
+              </span>
               <span v-else class="flex items-center justify-center w-6 h-6 rounded-full bg-surface-100 text-surface-400">
                 <i class="pi pi-circle text-xs"></i>
               </span>
@@ -147,7 +150,8 @@
 
             <!-- Duration + status -->
             <div class="flex items-center gap-3 flex-shrink-0">
-              <span v-if="step.status === 'running'" class="text-xs text-yellow-600 font-medium">Running…</span>
+              <span v-if="getQuotaWait(step)" class="text-xs text-yellow-700 font-medium">Waiting for quota</span>
+              <span v-else-if="step.status === 'running'" class="text-xs text-yellow-600 font-medium">Running…</span>
               <span v-if="stepDuration(step)" class="text-xs text-surface-400 font-mono">{{ stepDuration(step) }}</span>
               <Tag :value="step.status" :severity="statusSeverity(step.status)" class="text-xs" />
               <i :class="selectedStepId === step.id ? 'pi pi-chevron-down' : 'pi pi-chevron-right'" class="text-surface-400 text-sm"></i>
@@ -161,6 +165,18 @@
               <span>Agent: <strong class="text-slate-100">{{ step.agentSnapshot.name }}</strong></span>
               <span>Version: <strong class="text-slate-100">v{{ step.agentSnapshot.version || step.agentVersion || '?' }}</strong></span>
               <span v-if="step.agentSnapshot.sourceType">Source: <strong class="text-slate-100">{{ step.agentSnapshot.sourceType }}</strong></span>
+            </div>
+            <div v-if="getQuotaWait(step)" class="border-b border-amber-700/40 bg-amber-950/40 px-4 py-3 text-xs text-amber-100">
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span class="inline-flex items-center gap-1 font-semibold"><i class="pi pi-clock"></i>Waiting for quota</span>
+                <span>{{ getQuotaWait(step)?.message || 'Waiting for LLM credit quota.' }}</span>
+              </div>
+              <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-amber-200/80">
+                <span v-if="getQuotaWait(step)?.model">Model: <strong class="text-amber-100">{{ getQuotaWait(step)?.model }}</strong></span>
+                <span v-if="getQuotaWait(step)?.creditCost">Cost: <strong class="text-amber-100">{{ getQuotaWait(step)?.creditCost }} credits</strong></span>
+                <span v-if="getQuotaWait(step)?.nextRetryAt">Next check: <strong class="text-amber-100">{{ formatQuotaTime(getQuotaWait(step)?.nextRetryAt) }}</strong></span>
+                <span v-if="getQuotaWait(step)?.quotaResetAt">Quota reset: <strong class="text-amber-100">{{ formatQuotaTime(getQuotaWait(step)?.quotaResetAt) }}</strong></span>
+              </div>
             </div>
             <!-- Step detail tabs -->
             <div class="flex flex-wrap gap-2 border-b border-slate-800 bg-slate-900/80 px-3 pt-3">
@@ -179,7 +195,7 @@
             <!-- Tab: Output -->
             <div v-if="activeTab === 'output'" class="max-h-[500px] overflow-y-auto p-4">
               <div v-if="!step.output" class="text-xs text-slate-500">
-                {{ step.status === 'running' ? 'Step in progress…' : step.status === 'pending' ? 'Waiting…' : 'No output.' }}
+                {{ getQuotaWait(step) ? 'Waiting for quota before the prompt is sent.' : step.status === 'running' ? 'Step in progress…' : step.status === 'pending' ? 'Waiting…' : 'No output.' }}
               </div>
               <div v-else class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
                 <MarkdownRenderer :content="step.output" theme="dark" />
@@ -214,6 +230,14 @@
                   </span>
                   <span v-else-if="log.type === 'info'" class="text-slate-300">
                     <i class="pi pi-info-circle mr-1"></i>{{ log.message }}
+                  </span>
+                  <span v-else-if="log.type === 'quota_wait'" class="text-amber-300">
+                    <i class="pi pi-clock mr-1"></i>{{ log.message }}
+                    <span v-if="log.nextRetryAt" class="ml-2 text-amber-200/70">Next check: {{ formatQuotaTime(log.nextRetryAt) }}</span>
+                  </span>
+                  <span v-else-if="log.type === 'allocation_wait'" class="text-cyan-300">
+                    <i class="pi pi-clock mr-1"></i>{{ log.message }}
+                    <span v-if="log.allocationTimeoutAt" class="ml-2 text-cyan-200/70">Timeout: {{ formatQuotaTime(log.allocationTimeoutAt) }}</span>
                   </span>
                   <span v-else class="text-slate-400">{{ log.type }}: {{ log.message || log.content }}</span>
                 </div>
@@ -351,6 +375,10 @@ onStreamEvent('step.progress', (data: any) => {
   liveEventsMap.value[stepId].push(...newEvents);
 });
 
+onStreamEvent('step.quota_waiting', () => {
+  refreshExec();
+});
+
 onStreamEvent('step.completed', () => {
   refreshExec();
 });
@@ -424,6 +452,19 @@ function getStepLogs(step: any): any[] {
   return merged;
 }
 
+function getQuotaWait(step: any): any | null {
+  const dbEvents = (step.liveOutput || []).filter((event: any) => event?.type === 'quota_wait');
+  const streamedEvents = (liveEventsMap.value[step.id] || []).filter((event: any) => event?.type === 'quota_wait');
+  const events = [...dbEvents, ...streamedEvents];
+  if (events.length === 0) return null;
+
+  return events.reduce((latest: any, event: any) => {
+    const latestTime = latest?.timestamp ? Date.parse(latest.timestamp) : 0;
+    const eventTime = event?.timestamp ? Date.parse(event.timestamp) : 0;
+    return eventTime >= latestTime ? event : latest;
+  }, events[0]);
+}
+
 function getReasoningText(step: any): string {
   const dbDeltas = (step.liveOutput || []).filter((e: any) => e.type === 'message_delta');
   const streamedDeltas = (liveEventsMap.value[step.id] || []).filter((e: any) => e.type === 'message_delta');
@@ -487,6 +528,13 @@ function formatLogTime(ts: string): string {
   } catch { return ts; }
 }
 
+function formatQuotaTime(value: any): string {
+  if (!value) return '';
+  try {
+    return new Date(value).toLocaleString();
+  } catch { return String(value); }
+}
+
 function formatArgs(args: any): string {
   if (!args) return '';
   try {
@@ -535,7 +583,9 @@ async function handleCancel() {
 watch(steps, (newSteps) => {
   if (!selectedStepId.value) {
     const running = newSteps.find((s: any) => s.status === 'running');
+    const quotaWaiting = newSteps.find((s: any) => s.status === 'pending' && getQuotaWait(s));
     if (running) selectedStepId.value = running.id;
+    else if (quotaWaiting) selectedStepId.value = quotaWaiting.id;
   }
 }, { immediate: true });
 </script>

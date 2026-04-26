@@ -93,6 +93,7 @@ On subsequent logins, the user's name and email are updated from LDAP to stay in
 ## Password Management
 
 - **Database users**: Can change passwords via Settings → Change Password
+- **Forgot password**: Workspace admins can enable or disable self-service reset emails from **Admin → Security**. When disabled, the login page hides the forgot-password link and the API rejects reset requests for that workspace.
 - **LDAP users**: Password changes are managed by the external LDAP directory. The Change Password page shows an informational message instead of the form.
 
 ## Provider Priority

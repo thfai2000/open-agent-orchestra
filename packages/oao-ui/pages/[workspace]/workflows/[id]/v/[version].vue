@@ -155,7 +155,12 @@ const breadcrumbs = computed(() => [
 
 function navigateToVersion(version?: number) {
   if (!version) return;
-  router.push(`/${ws.value}/workflows/${workflowId.value}/v/${version}`);
+  const target = versions.value.find((entry: any) => entry.version === version);
+  if (target?.isLatest) {
+    router.push(latestPath.value);
+  } else {
+    router.push(`/${ws.value}/workflows/${workflowId.value}/v/${version}`);
+  }
 }
 
 function formatDateTime(value?: string | Date | null) {

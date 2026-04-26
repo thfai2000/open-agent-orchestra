@@ -53,6 +53,15 @@ For Docker Desktop Kubernetes with ingress, set `PUBLIC_API_BASE_URL=http://oao.
 
 For Kubernetes or Docker Compose workers, set `OAO_PLATFORM_API_URL` to an internal service URL such as `http://oao-api:4002` so spawned MCP subprocesses can reach the API from worker/controller containers.
 
+Agent runtime allocation and stale static instance cleanup can be tuned with these optional values:
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `DEFAULT_STEP_ALLOCATION_TIMEOUT_SECONDS` | `300` | Fallback seconds a step can stay pending while waiting for static worker pickup or ephemeral pod readiness. |
+| `AGENT_ALLOCATION_RETRY_MS` | `3000` | Retry interval for dynamic agent capacity and pod provisioning checks. |
+| `AGENT_INSTANCE_MAINTENANCE_INTERVAL_MS` | `3600000` | How often the controller runs stale instance cleanup while it is leader. |
+| `STALE_STATIC_INSTANCE_CLEANUP_MS` | `86400000` | Removes static agent instance rows whose last heartbeat is older than this age. |
+
 ## 3. Pre-Build Checks
 
 Before **any** Docker build, always run these checks and fix all errors:
@@ -77,6 +86,21 @@ If you plan to run Playwright end-to-end tests after a Docker Desktop reset, cac
 ```bash
 npx playwright install chromium
 ```
+
+Jira integration E2E coverage includes local-safe credential/trigger configuration checks by default. The live Jira polling case is opt-in because it creates and deletes a real Jira issue with the description `Get a Weekly Weather Report`. To enable it, add these values to `.env` or export them before `npm run test:e2e`:
+
+```ini
+RUN_LIVE_JIRA_E2E=1
+JIRA_BASE_URL=https://your-domain.atlassian.net
+JIRA_EMAIL=jira-bot@example.com
+JIRA_API_TOKEN=your-jira-api-token
+JIRA_PROJECT_KEY=OAO
+JIRA_ISSUE_TYPE=Task
+```
+
+You can also use `TESTING_JIRA_BASE_URL`, `TESTING_JIRA_EMAIL`, `TESTING_JIRA_API_TOKEN`, `TESTING_JIRA_PROJECT_KEY`, and `TESTING_JIRA_ISSUE_TYPE` when you want live-test settings to stay separate from runtime Jira settings.
+
+The live test stores the Jira API token as an OAO workspace credential variable, creates a Jira polling workflow filtered by a unique JQL label, creates the Jira issue, and waits for the controller to enqueue a workflow execution containing that issue payload.
 
 ## 4. Build Docker Images
 

@@ -18,13 +18,16 @@ export function startWorker(): Worker {
   worker = new Worker(
     'workflow-execution',
     async (job) => {
-      const { executionId, workflowId, agentId } = job.data;
+      const { executionId, workflowId, agentId, startFromStep } = job.data;
+      const stepIndex = typeof startFromStep === 'number' && Number.isInteger(startFromStep) && startFromStep >= 0
+        ? startFromStep
+        : 0;
       logger.info(
-        { executionId, workflowId, agentId, jobId: job.id },
+        { executionId, workflowId, agentId, startFromStep: stepIndex, jobId: job.id },
         'Processing workflow execution',
       );
 
-      await executeWorkflow(executionId);
+      await executeWorkflow(executionId, stepIndex);
     },
     {
       connection: getRedisConnectionOpts(),

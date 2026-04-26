@@ -257,6 +257,10 @@ The business scenarios above become release criteria only when they are validate
 | `E2E-05` | Manual Run with required inputs | Workflow author or admin | Workflow has an active webhook trigger with declared parameters | Missing required inputs return `400` with the missing parameter names, while a valid payload is accepted and routed through the same workflow event pipeline as a webhook |
 | `E2E-06` | Admin user and auth-provider operations | Super admin or workspace admin | Admin pages are reachable | Admin can create users, change roles, configure LDAP, test connectivity, and authenticate through the configured provider |
 | `E2E-07` | Workflow cleanup and reversibility | Workflow author | Workflow and triggers already exist | Operator can deactivate or delete the workflow without leaving orphaned triggers, stale runtime instance pointers, or broken detail views |
+| `E2E-08` | Jira credential and trigger configuration | Workflow author or admin | Workspace credential variables can be created | Jira API/OAuth credentials are saved as encrypted variables, trigger configuration stores only variable keys, and Jira JQL/webhook settings remain visible on the workflow trigger card without exposing secrets |
+| `E2E-09` | Live Jira ticket polling | Workflow author or admin | `RUN_LIVE_JIRA_E2E=1` plus Jira site, email, token, project key, and optional issue type are configured | A Jira ticket with description `Get a Weekly Weather Report` is created, the Jira polling trigger matches it by JQL, and OAO records a workflow execution with the matched issue payload |
+| `E2E-10` | Copilot token variable assignment | Workspace admin | Workspace credential variables and database agents can be created | A `github_token` credential can be selected as an agent's GitHub Copilot Token / LLM API Key, while API and UI responses keep the raw token hidden |
+| `E2E-11` | External webhook plus HTTP tool setup | Workflow author or admin | A credential variable and agent with explicit network tools exist | A webhook workflow can reference an external HTTP credential by variable key, persist required inputs, and show the trigger summary without exposing the secret webhook URL |
 
 ### Detailed Operator Notes
 
@@ -264,6 +268,9 @@ The business scenarios above become release criteria only when they are validate
 |------|------------------|----------------|
 | Agent creation | Name, instructions, source type, and saved version | Agents are the root unit of execution; if authoring is flaky, every higher-level workflow becomes unreliable |
 | Trigger summaries | Webhook path, parameter count, cron text, or exact datetime value | Operators need to verify saved automation intent without reopening edit forms |
+| Jira integration | Credential variable redaction, Jira trigger credential references, JQL persistence, connectivity checks, and live polling execution | External workflow automation is only trustworthy if secrets stay masked while ticket changes still produce auditable executions |
+| Copilot token setup | Workspace/user credential creation, agent model-auth selection, and secret redaction | A shared token should be reusable across agents without copying raw credentials into prompts or workflow definitions |
+| External HTTP workflows | Webhook input contract, credential variable reference, and explicit `simple_http_request` tool selection | Network-capable agents need a clear boundary between trusted workflow inputs, stored secrets, and outbound calls |
 | Manual Run | Required parameters, optional parameters, and accepted payload path | This is the fastest way to prove a workflow contract before exposing a public webhook |
 | Conversation resilience | Pending assistant rows, refresh recovery, and visible error states | AI calls fail in real systems; the UI must degrade into a diagnosable state instead of hiding or duplicating messages |
 | Cleanup paths | Delete confirmation, redirect, and follow-up list state | Regression here leaves hidden debris: stale triggers, orphaned agents, or broken navigation |

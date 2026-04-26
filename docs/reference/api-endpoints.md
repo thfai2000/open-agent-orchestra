@@ -8,7 +8,7 @@ The live OpenAPI spec is available at [`/api/openapi.json`](http://localhost:400
 
 ## Authentication
 
-All endpoints (except `POST /api/auth/login`, `POST /api/auth/register`, and `GET /api/auth/providers`) require a Bearer token:
+All endpoints (except `POST /api/auth/login`, `POST /api/auth/register`, `GET /api/auth/providers`, `POST /api/auth/forgot-password`, and `POST /api/auth/reset-password`) require a Bearer token:
 
 ```http
 Authorization: Bearer <token>
@@ -111,7 +111,7 @@ curl -X POST http://localhost:4002/api/auth/register \
 | `name` | string | Yes | 1–100 chars |
 | `workspaceSlug` | string | No | Target workspace (default: `"default"`) |
 
-**Responses**: `201` User created + JWT · `404` Workspace not found · `409` Email already registered
+**Responses**: `201` User created + JWT · `403` Registration disabled · `404` Workspace not found · `409` Email already registered
 
 ---
 
@@ -164,13 +164,35 @@ Change password (database users only; LDAP users receive HTTP 400). **Auth**: JW
 | `currentPassword` | string | Yes |
 | `newPassword` | string (8–100) | Yes |
 
+### `POST /api/auth/forgot-password`
+
+Request a password reset email for a database user. **Auth**: None
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `email` | string (email) | Yes | Account email |
+| `workspace` | string | No | Workspace slug (default: `default`) |
+
+Returns a generic success message for unknown users. Returns `403` when password reset is disabled for the workspace.
+
+### `POST /api/auth/reset-password`
+
+Set a new database password using a reset token. **Auth**: None
+
+| Field | Type | Required |
+|-------|------|----------|
+| `token` | string | Yes |
+| `password` | string (8–100) | Yes |
+
 ### `GET /api/auth/providers`
 
-List enabled auth providers for a workspace. **Auth**: None
+List enabled auth providers and self-service auth policy for a workspace. **Auth**: None
 
 | Query | Type | Description |
 |-------|------|-------------|
 | `workspace` | string | Workspace slug |
+
+Response includes `providers`, `allowRegistration`, and `allowPasswordReset`.
 
 ---
 
@@ -1119,6 +1141,22 @@ Custom provider fields:
 | `customWireApi` | `completions` \| `responses` | Optional OpenAI/Azure wire API override |
 | `customAzureApiVersion` | string | Required for Azure custom providers |
 
+### Security
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/admin/security` | Get workspace security settings |
+| `PUT` | `/api/admin/security` | Update `allowRegistration` and `allowPasswordReset` |
+
+### Mail Settings
+
+Requires `super_admin` role.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/admin/mail-settings` | Get global SMTP settings status/configuration |
+| `PUT` | `/api/admin/mail-settings` | Save global SMTP settings used for password reset emails |
+
 ### Quotas
 
 | Method | Path | Description |
@@ -1136,7 +1174,7 @@ Requires `super_admin` role.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/workspaces` | List all workspaces (with member counts) |
-| `POST` | `/api/workspaces` | Create workspace (`name`, `slug`, `description`) |
+| `POST` | `/api/workspaces` | Create workspace (`name`, `slug`, `description`, optional security flags) |
 | `GET` | `/api/workspaces/:id` | Get workspace + members |
 | `PUT` | `/api/workspaces/:id` | Update workspace |
 | `DELETE` | `/api/workspaces/:id` | Delete (non-default, 0 members only) |

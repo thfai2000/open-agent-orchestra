@@ -25,6 +25,8 @@ export interface RealtimeEvent {
     | 'execution.cancelled'
     | 'step.started'
     | 'step.progress'
+    | 'step.allocation_waiting'
+    | 'step.quota_waiting'
     | 'step.completed'
     | 'step.failed'
     | 'conversation.message.started'

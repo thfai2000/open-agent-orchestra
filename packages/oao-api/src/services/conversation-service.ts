@@ -672,9 +672,40 @@ async function runConversationSession(params: {
       envDefaultModel: process.env.DEFAULT_AGENT_MODEL,
       authToken: copilotTokenOverride ?? process.env.DEFAULT_LLM_API_KEY ?? process.env.GITHUB_TOKEN ?? null,
     });
+
+    // Pre-flight auth check — fail fast with an actionable message instead of letting the
+    // Copilot SDK throw the opaque "Session was not created with authentication info or
+    // custom provider" runtime error during the first prompt.
+    if (!resolvedModelSession.provider) {
+      const fallbackToken = process.env.DEFAULT_LLM_API_KEY || process.env.GITHUB_TOKEN || '';
+      const hasOverride = typeof copilotTokenOverride === 'string' && copilotTokenOverride.length > 0;
+      if (!hasOverride && !fallbackToken) {
+        logger.error({
+          agentId: agent.id,
+          agentName: agent.name,
+          model: resolvedModelSession.modelName,
+          providerType: 'github',
+          hasCopilotTokenOverride: hasOverride,
+          hasDefaultLlmApiKey: !!process.env.DEFAULT_LLM_API_KEY,
+          hasGithubTokenEnv: !!process.env.GITHUB_TOKEN,
+          copilotTokenCredentialId: agent.copilotTokenCredentialId ?? null,
+        }, 'No Copilot/LLM auth source resolved for conversation turn');
+        throw new Error(
+          `No Copilot / LLM authentication is available for model "${resolvedModelSession.modelName}". ` +
+          `Configure a GitHub Copilot Token / LLM API Key credential on agent "${agent.name}" ` +
+          `(or set DEFAULT_LLM_API_KEY / GITHUB_TOKEN on the OAO server).`,
+        );
+      }
+      logger.info({
+        agentId: agent.id,
+        model: resolvedModelSession.modelName,
+        authSource: hasOverride ? 'agent_credential' : (process.env.DEFAULT_LLM_API_KEY ? 'env_default_llm_api_key' : 'env_github_token'),
+      }, 'Resolved Copilot SDK auth source for conversation turn');
+    }
+
     const client = resolvedModelSession.provider
       ? new CopilotClient()
-      : new CopilotClient(copilotTokenOverride ? { githubToken: copilotTokenOverride } : undefined);
+      : new CopilotClient(copilotTokenOverride ? { githubToken: copilotTokenOverride } : (process.env.DEFAULT_LLM_API_KEY || process.env.GITHUB_TOKEN ? { githubToken: (process.env.DEFAULT_LLM_API_KEY || process.env.GITHUB_TOKEN)! } : undefined));
     const model = resolvedModelSession.modelName;
     const sessionOptions: Record<string, unknown> = {
       model,

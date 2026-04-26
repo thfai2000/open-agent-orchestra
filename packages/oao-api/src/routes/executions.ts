@@ -32,6 +32,21 @@ function getWorkflowNameFromSnapshot(snapshot: unknown): string | null {
   return typeof name === 'string' && name.trim().length > 0 ? name : null;
 }
 
+function getLatestQuotaWait(liveOutput: unknown): Record<string, unknown> | null {
+  if (!Array.isArray(liveOutput)) return null;
+
+  return liveOutput.reduce<Record<string, unknown> | null>((latest, event) => {
+    if (!event || typeof event !== 'object') return latest;
+    const typedEvent = event as Record<string, unknown>;
+    if (typedEvent.type !== 'quota_wait') return latest;
+
+    if (!latest) return typedEvent;
+    const latestTime = typeof latest.timestamp === 'string' ? Date.parse(latest.timestamp) : 0;
+    const eventTime = typeof typedEvent.timestamp === 'string' ? Date.parse(typedEvent.timestamp) : 0;
+    return eventTime >= latestTime ? typedEvent : latest;
+  }, null);
+}
+
 /** Helper: verify execution belongs to user's workspace */
 async function verifyExecutionAccess(
   executionId: string,
@@ -57,7 +72,14 @@ async function verifyExecutionAccess(
 // GET / — list executions (workspace-scoped)
 const listExecutionsSchema = paginationSchema.extend({
   workflowId: z.string().uuid().optional(),
-  status: z.enum(['pending', 'running', 'completed', 'failed', 'cancelled']).optional(),
+  // Accept a single status, comma-separated list, or repeated query params; downstream coerces to array
+  status: z
+    .union([
+      z.enum(['pending', 'running', 'completed', 'failed', 'cancelled']),
+      z.string(),
+      z.array(z.string()),
+    ])
+    .optional(),
 });
 
 executionsRouter.get('/', async (c) => {
@@ -72,7 +94,16 @@ executionsRouter.get('/', async (c) => {
 
   const conditions = [inArray(workflowExecutions.workflowId, visibleIds)];
   if (query.workflowId) conditions.push(eq(workflowExecutions.workflowId, query.workflowId));
-  if (query.status) conditions.push(eq(workflowExecutions.status, query.status));
+  if (query.status) {
+    const allowed = new Set(['pending', 'running', 'completed', 'failed', 'cancelled']);
+    const raw = Array.isArray(query.status) ? query.status : String(query.status).split(',');
+    const statuses = raw.map((s) => s.trim()).filter((s) => s.length > 0 && allowed.has(s));
+    if (statuses.length === 1) {
+      conditions.push(eq(workflowExecutions.status, statuses[0] as 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'));
+    } else if (statuses.length > 1) {
+      conditions.push(inArray(workflowExecutions.status, statuses as ('pending' | 'running' | 'completed' | 'failed' | 'cancelled')[]));
+    }
+  }
 
   const where = and(...conditions);
 
@@ -102,9 +133,34 @@ executionsRouter.get('/', async (c) => {
     : [];
 
   const workflowNameMap = new Map(workflowNameRows.map((workflow) => [workflow.id, workflow.name]));
+  const executionIds = executions.map((execution) => execution.id);
+  const quotaWaitByExecutionId = new Map<string, Record<string, unknown>>();
+
+  if (executionIds.length > 0) {
+    const pendingSteps = await db.query.stepExecutions.findMany({
+      where: and(
+        inArray(stepExecutions.workflowExecutionId, executionIds),
+        eq(stepExecutions.status, 'pending'),
+      ),
+    });
+
+    for (const step of pendingSteps) {
+      const quotaWait = getLatestQuotaWait(step.liveOutput);
+      if (!quotaWait) continue;
+
+      const previous = quotaWaitByExecutionId.get(step.workflowExecutionId);
+      const previousTime = typeof previous?.timestamp === 'string' ? Date.parse(previous.timestamp) : 0;
+      const quotaWaitTime = typeof quotaWait.timestamp === 'string' ? Date.parse(quotaWait.timestamp) : 0;
+      if (!previous || quotaWaitTime >= previousTime) {
+        quotaWaitByExecutionId.set(step.workflowExecutionId, quotaWait);
+      }
+    }
+  }
+
   const serializedExecutions = executions.map((execution) => ({
     ...execution,
     workflowName: getWorkflowNameFromSnapshot(execution.workflowSnapshot) ?? workflowNameMap.get(execution.workflowId) ?? null,
+    quotaWait: quotaWaitByExecutionId.get(execution.id) ?? null,
   }));
 
   return c.json({

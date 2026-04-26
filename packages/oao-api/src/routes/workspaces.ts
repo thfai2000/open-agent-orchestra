@@ -45,6 +45,7 @@ const createWorkspaceSchema = z.object({
   slug: z.string().min(1).max(50).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/, 'Slug must be lowercase alphanumeric with hyphens'),
   description: z.string().max(500).optional(),
   allowRegistration: z.boolean().optional().default(true),
+  allowPasswordReset: z.boolean().optional().default(true),
 });
 
 workspacesRouter.post('/', requireSuperAdmin, async (c) => {
@@ -64,6 +65,7 @@ workspacesRouter.post('/', requireSuperAdmin, async (c) => {
       slug: body.slug,
       description: body.description,
       allowRegistration: body.allowRegistration,
+      allowPasswordReset: body.allowPasswordReset,
     })
     .returning();
 
@@ -91,6 +93,7 @@ const updateWorkspaceSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(500).optional(),
   allowRegistration: z.boolean().optional(),
+  allowPasswordReset: z.boolean().optional(),
 });
 
 workspacesRouter.put('/:id', requireSuperAdmin, async (c) => {

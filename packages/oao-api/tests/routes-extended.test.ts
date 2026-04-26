@@ -8,6 +8,7 @@ import { createHmac } from 'crypto';
 import type { Hono } from 'hono';
 
 const mockAuthenticateLdap = vi.fn();
+const mockSendPasswordResetEmail = vi.fn();
 
 // ─── Mock database ──────────────────────────────────────────────────
 const mockFindFirst = vi.fn();
@@ -62,6 +63,7 @@ function buildChainableMock() {
       workspaceVariables: { findFirst: mockFindFirst, findMany: mockFindMany },
       users: { findFirst: mockFindFirst, findMany: mockFindMany },
       workspaces: { findFirst: mockFindFirst, findMany: mockFindMany },
+      passwordResetTokens: { findFirst: mockFindFirst },
       agentFiles: { findFirst: mockFindFirst, findMany: mockFindMany },
       models: { findFirst: mockFindFirst, findMany: mockFindMany },
       authProviders: { findFirst: mockFindFirst, findMany: mockFindMany },
@@ -85,6 +87,10 @@ vi.mock('../src/database/index.js', () => ({
 
 vi.mock('../src/services/ldap-auth.js', () => ({
   authenticateLdap: mockAuthenticateLdap,
+}));
+
+vi.mock('../src/services/mailer.js', () => ({
+  sendPasswordResetEmail: mockSendPasswordResetEmail,
 }));
 
 vi.mock('../src/services/redis.js', () => ({
@@ -158,6 +164,7 @@ beforeEach(() => {
   mockUpdateReturning.mockReset();
   mockDeleteWhere.mockReset();
   mockAuthenticateLdap.mockReset();
+  mockSendPasswordResetEmail.mockReset();
 
   // Restore defaults
   mockFindFirst.mockResolvedValue(null);
@@ -166,6 +173,7 @@ beforeEach(() => {
   mockUpdateReturning.mockResolvedValue([{ id: 'updated-id-001' }]);
   mockDeleteWhere.mockResolvedValue([]);
   mockAuthenticateLdap.mockResolvedValue(null);
+  mockSendPasswordResetEmail.mockResolvedValue(undefined);
 });
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -825,6 +833,59 @@ describe('Auth routes — login flow', () => {
     expect(json.token).toBeDefined();
     expect(json.user.email).toBe('fresh@test.com');
   });
+
+  it('POST /api/auth/register rejects when workspace registration is disabled', async () => {
+    mockFindFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: TEST_WORKSPACE_ID, slug: 'default', allowRegistration: false });
+
+    const res = await app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: 'blocked@test.com',
+        password: 'ValidPass123!',
+        name: 'Blocked User',
+      }),
+    });
+
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error).toMatch(/registration/i);
+  });
+
+  it('GET /api/auth/providers returns workspace password reset policy', async () => {
+    mockFindFirst.mockResolvedValueOnce({
+      id: TEST_WORKSPACE_ID,
+      slug: 'default',
+      allowRegistration: true,
+      allowPasswordReset: false,
+    });
+
+    const res = await app.request('/api/auth/providers?workspace=default');
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.allowRegistration).toBe(true);
+    expect(json.allowPasswordReset).toBe(false);
+  });
+
+  it('POST /api/auth/forgot-password rejects when password reset is disabled', async () => {
+    mockFindFirst.mockResolvedValueOnce({
+      id: TEST_WORKSPACE_ID,
+      slug: 'default',
+      allowPasswordReset: false,
+    });
+
+    const res = await app.request('/api/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'user@test.com', workspace: 'default' }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(mockSendPasswordResetEmail).not.toHaveBeenCalled();
+  });
 });
 
 describe('Auth routes — change password', () => {
@@ -1175,6 +1236,42 @@ describe('Admin routes — model management', () => {
       headers: authHeaders(token),
     });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('Admin routes — security settings', () => {
+  it('GET /api/admin/security returns workspace registration and reset settings', async () => {
+    const token = await getToken('workspace_admin');
+    mockFindFirst.mockResolvedValueOnce({
+      id: TEST_WORKSPACE_ID,
+      allowRegistration: false,
+      allowPasswordReset: true,
+    });
+
+    const res = await app.request('/api/admin/security', { headers: authHeaders(token) });
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.allowRegistration).toBe(false);
+    expect(json.allowPasswordReset).toBe(true);
+  });
+
+  it('PUT /api/admin/security updates workspace registration and reset settings', async () => {
+    const token = await getToken('workspace_admin');
+
+    const res = await app.request('/api/admin/security', {
+      method: 'PUT',
+      headers: authHeaders(token),
+      body: JSON.stringify({ allowRegistration: true, allowPasswordReset: false }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({
+      allowRegistration: true,
+      allowPasswordReset: false,
+    }));
+    const json = await res.json();
+    expect(json.allowPasswordReset).toBe(false);
   });
 });
 

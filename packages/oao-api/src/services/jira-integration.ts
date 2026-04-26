@@ -964,3 +964,130 @@ export async function pollJiraPollingTriggers() {
     }
   }
 }
+
+/**
+ * Force-poll a single jira_polling trigger immediately, bypassing the polling interval check
+ * and the "from_now" initial-load skip. Used by the trigger fire endpoint for testing.
+ *
+ * Returns the enqueued execution or null if no matching issues were found.
+ */
+export async function forcePollSingleJiraTrigger(triggerId: string): Promise<{
+  fired: boolean;
+  executionId: string | null;
+  issueCount: number;
+}> {
+  const trigger = await db.query.triggers.findFirst({
+    where: and(eq(triggers.id, triggerId), eq(triggers.triggerType, 'jira_polling')),
+  });
+
+  if (!trigger) {
+    throw new TriggerServiceError('Trigger not found or is not a jira_polling trigger', 404);
+  }
+
+  const workflow = await db.query.workflows.findFirst({ where: eq(workflows.id, trigger.workflowId) });
+  if (!workflow) {
+    throw new TriggerServiceError('Workflow not found', 404);
+  }
+
+  const parsedConfiguration = safeParseTriggerConfiguration('jira_polling', trigger.configuration);
+  if (!parsedConfiguration.success) {
+    throw new TriggerServiceError('Jira polling configuration is invalid', 400, parsedConfiguration.error.issues);
+  }
+
+  const configuration = parsedConfiguration.data as Record<string, unknown>;
+  const maxResults = Number(configuration.maxResults || 50);
+  const now = new Date();
+  const runtimeState = cloneRuntimeState(trigger.runtimeState);
+  const nextState = cloneRuntimeState(runtimeState);
+  nextState.lastPolledAt = now.toISOString();
+
+  const { issues, windowMinutes } = await fetchJiraPollingIssues(workflow, configuration, nextState, now);
+
+  const previousIssueMap = asRecord(nextState.recentIssueMap) as Record<string, string>;
+  // Force-fire: treat all returned issues as changed (bypass dedup for the forced test run)
+  const changedIssues = issues.filter((issue) => issue.updated && previousIssueMap[issue.id] !== issue.updated);
+  const nextIssueMap = trimRecentIssueMap({
+    ...previousIssueMap,
+    ...Object.fromEntries(
+      issues
+        .filter((issue) => issue.updated)
+        .map((issue) => [issue.id, issue.updated as string]),
+    ),
+  });
+  nextState.recentIssueMap = nextIssueMap;
+
+  if (changedIssues.length === 0) {
+    clearRuntimeError(nextState);
+    nextState.lastSuccessfulPollAt = now.toISOString();
+    if (runtimeStateChanged(nextState, trigger.runtimeState)) {
+      await persistTriggerRuntimeState(trigger.id, nextState);
+    }
+    return { fired: false, executionId: null, issueCount: 0 };
+  }
+
+  const executionIssues = changedIssues.slice(0, maxResults);
+  const inputs = {
+    jiraSiteUrl: asString(configuration.jiraSiteUrl) || '',
+    jiraJql: asString(configuration.jql) || '',
+    jiraIssueKeys: executionIssues.map((issue) => issue.key),
+    jiraIssues: executionIssues,
+    polledAt: now.toISOString(),
+    pollingWindowMinutes: windowMinutes,
+  };
+
+  const execution = await enqueueWorkflowExecution(trigger.workflowId, trigger.id, {
+    type: 'jira_polling',
+    forceFired: true,
+    jiraSiteUrl: inputs.jiraSiteUrl,
+    jiraJql: inputs.jiraJql,
+    polledAt: inputs.polledAt,
+    pollingWindowMinutes: windowMinutes,
+    resultCount: changedIssues.length,
+    truncatedResultCount: changedIssues.length > executionIssues.length ? changedIssues.length - executionIssues.length : 0,
+    inputs,
+  });
+
+  nextState.lastSuccessfulPollAt = now.toISOString();
+  clearRuntimeError(nextState);
+  await persistTriggerRuntimeState(trigger.id, nextState, { lastFiredAt: now });
+
+  return { fired: true, executionId: execution.id, issueCount: changedIssues.length };
+}
+
+/**
+ * Simulate a Jira changes-notification webhook payload for a trigger.
+ * Builds the standard webhook inputs from the mock payload and enqueues a workflow execution.
+ * Used by the trigger fire endpoint for testing. Does NOT require the trigger to be active.
+ */
+export async function simulateJiraChangesNotificationFire(
+  workflowId: string,
+  triggerId: string,
+  mockPayload: Record<string, unknown>,
+): Promise<{ executionId: string }> {
+  const trigger = await db.query.triggers.findFirst({
+    where: and(eq(triggers.id, triggerId), eq(triggers.triggerType, 'jira_changes_notification')),
+  });
+
+  if (!trigger) {
+    throw new TriggerServiceError('Trigger not found or is not a jira_changes_notification trigger', 404);
+  }
+
+  const workflow = await db.query.workflows.findFirst({ where: eq(workflows.id, workflowId) });
+  if (!workflow) {
+    throw new TriggerServiceError('Workflow not found', 404);
+  }
+
+  const webhookInputs = buildJiraWebhookInputs(trigger, mockPayload);
+  const execution = await enqueueWorkflowExecution(workflowId, triggerId, {
+    type: 'jira_changes_notification',
+    simulated: true,
+    webhookEvent: webhookInputs.jiraWebhookEvent,
+    jiraSiteUrl: webhookInputs.jiraSiteUrl,
+    jiraJql: webhookInputs.jiraJql,
+    jiraIssueKeys: webhookInputs.jiraIssueKeys,
+    receivedAt: webhookInputs.receivedAt,
+    inputs: webhookInputs,
+  });
+
+  return { executionId: execution.id };
+}

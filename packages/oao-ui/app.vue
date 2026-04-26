@@ -1,5 +1,6 @@
 <template>
   <div class="min-h-screen bg-surface-50">
+    <NuxtLoadingIndicator color="repeating-linear-gradient(to right,#7c3aed 0%,#a78bfa 50%,#7c3aed 100%)" :height="3" :throttle="0" :duration="3000" />
     <Toast />
     <ConfirmDialog />
 
@@ -83,8 +84,8 @@
       </aside>
 
       <!-- Main content -->
-      <main :class="['flex-1 min-h-[calc(100vh-3.5rem)] transition-all duration-200', isAuthenticated ? 'lg:ml-60' : '']">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main :class="['flex-1 min-w-0 min-h-[calc(100vh-3.5rem)] overflow-hidden transition-all duration-200', isAuthenticated ? 'lg:ml-60' : '']">
+        <div class="max-w-7xl min-w-0 mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <NuxtPage />
         </div>
       </main>
@@ -141,3 +142,56 @@ function toggleUserMenu(event: Event) { userMenu.value.toggle(event); }
 function isActiveRoute(path: string) { return path === `/${ws.value}` ? route.path === path : route.path.startsWith(path); }
 function closeMobileSidebar() { if (typeof window !== 'undefined' && window.innerWidth < 1024) sidebarOpen.value = false; }
 </script>
+
+<style>
+.p-datatable,
+.p-datatable-wrapper {
+  max-width: 100%;
+}
+
+.p-datatable-wrapper {
+  overflow-x: hidden;
+}
+
+.p-datatable table,
+.p-datatable-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.p-datatable .p-datatable-thead > tr > th,
+.p-datatable .p-datatable-tbody > tr > td {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.p-datatable .p-datatable-tbody > tr > td > *,
+.p-datatable .p-datatable-tbody > tr > td a,
+.p-datatable .p-datatable-tbody > tr > td span,
+.p-datatable .p-datatable-tbody > tr > td p {
+  max-width: 100%;
+}
+
+.p-datatable .p-datatable-tbody > tr > td a,
+.p-datatable .p-datatable-tbody > tr > td span:not(.p-tag):not(.p-button-icon),
+.p-datatable .p-datatable-tbody > tr > td p {
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.p-datatable .p-tag {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.p-datatable .p-tag-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

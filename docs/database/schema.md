@@ -12,7 +12,6 @@ erDiagram
     workspaces ||--o{ workspace_variables : "has variables"
     workspaces ||--o{ variable_versions : "scopes variable history"
     workspaces ||--o{ models : "has models"
-    workspaces ||--o| workspace_security_settings : "has security settings"
     workspaces ||--o{ auth_providers : "has auth providers"
 
     users ||--o{ agents : "creates"
@@ -22,6 +21,7 @@ erDiagram
     users ||--o{ variable_versions : "changes"
     users ||--o{ credit_usage : "tracks usage"
     users ||--o{ personal_access_tokens : "has PATs"
+    users ||--o{ password_reset_tokens : "has reset tokens"
 
     agents ||--o{ agent_variables : "has variables"
     agents ||--o{ mcp_server_configs : "has MCP configs"

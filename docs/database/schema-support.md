@@ -210,6 +210,21 @@ Workspace-scoped authentication provider configurations. See [Auth Providers](/c
 | createdAt, updatedAt | timestamp | |
 | | | UNIQUE(workspaceId, providerType, name) |
 
+### password_reset_tokens
+
+Short-lived reset tokens for database-authenticated users.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| userId | UUID FK → users | Cascade delete |
+| token | varchar(128) | Random hex token, unique |
+| expiresAt | timestamp | Reset link expiry |
+| usedAt | timestamp | Set after successful reset |
+| createdAt | timestamp | |
+
+Workspace-level password reset enablement is stored on `workspaces.allowPasswordReset`.
+
 ### personal_access_tokens
 
 Fine-grained PATs for webhook triggers and API access.

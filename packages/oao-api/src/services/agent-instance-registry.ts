@@ -5,7 +5,7 @@
  * offline when heartbeats stop. Ephemeral instances are registered when K8s pods are
  * created and removed when pods are deleted.
  */
-import { eq, and, lt } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, or } from 'drizzle-orm';
 import { createLogger } from '@oao/shared';
 import { db } from '../database/index.js';
 import { agentInstances } from '../database/schema.js';
@@ -183,12 +183,15 @@ export async function markStaleInstancesOffline(): Promise<number> {
 
   const result = await db
     .update(agentInstances)
-    .set({ status: 'offline', updatedAt: new Date() })
+    .set({ status: 'offline', currentStepExecutionId: null, updatedAt: new Date() })
     .where(
       and(
         eq(agentInstances.instanceType, 'static'),
-        eq(agentInstances.status, 'idle'),
-        lt(agentInstances.lastHeartbeatAt, threshold),
+        inArray(agentInstances.status, ['idle', 'busy']),
+        or(
+          lt(agentInstances.lastHeartbeatAt, threshold),
+          and(isNull(agentInstances.lastHeartbeatAt), lt(agentInstances.updatedAt, threshold)),
+        ),
       ),
     )
     .returning();
@@ -200,22 +203,34 @@ export async function markStaleInstancesOffline(): Promise<number> {
 }
 
 /**
- * Remove terminated/offline instances older than a given age (cleanup).
+ * Remove static instances whose last heartbeat is older than a given age.
  */
-export async function cleanupOldInstances(maxAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
-  const threshold = new Date(Date.now() - maxAgeMs);
+export async function cleanupOldInstances(maxHeartbeatAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
+  return cleanupStaleStaticInstances(maxHeartbeatAgeMs);
+}
+
+/**
+ * Remove stale static instances after their heartbeat has been absent long
+ * enough that no live worker should be able to recover the record.
+ */
+export async function cleanupStaleStaticInstances(maxHeartbeatAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
+  const threshold = new Date(Date.now() - maxHeartbeatAgeMs);
 
   const result = await db
     .delete(agentInstances)
     .where(
       and(
-        lt(agentInstances.updatedAt, threshold),
+        eq(agentInstances.instanceType, 'static'),
+        or(
+          lt(agentInstances.lastHeartbeatAt, threshold),
+          and(isNull(agentInstances.lastHeartbeatAt), lt(agentInstances.updatedAt, threshold)),
+        ),
       ),
     )
     .returning();
 
   if (result.length > 0) {
-    logger.info({ count: result.length }, 'Cleaned up old agent instances');
+    logger.info({ count: result.length }, 'Cleaned up stale static agent instances');
   }
   return result.length;
 }

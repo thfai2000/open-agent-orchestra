@@ -55,13 +55,13 @@
 
       <Column header="Last Message" style="width: 180px">
         <template #body="{ data }">
-          <span class="text-sm text-surface-500">{{ data.lastMessageAt ? new Date(data.lastMessageAt).toLocaleString() : 'No messages yet' }}</span>
+          <span :title="data.lastMessageAt ? new Date(data.lastMessageAt).toString() : ''" class="text-sm text-surface-500">{{ data.lastMessageAt ? new Date(data.lastMessageAt).toLocaleString() : 'No messages yet' }}</span>
         </template>
       </Column>
 
       <Column header="Created" style="width: 180px">
         <template #body="{ data }">
-          <span class="text-sm text-surface-500">{{ new Date(data.createdAt).toLocaleString() }}</span>
+          <span :title="new Date(data.createdAt).toString()" class="text-sm text-surface-500">{{ new Date(data.createdAt).toLocaleString() }}</span>
         </template>
       </Column>
 
