@@ -26,7 +26,6 @@
       <Column field="name" header="Name" style="min-width: 200px">
         <template #body="{ data }">
           <NuxtLink :to="`/${ws}/agents/${data.id}`" class="text-primary font-medium hover:underline">{{ data.name }}</NuxtLink>
-          <p v-if="data.description" class="text-xs text-surface-400 mt-0.5 truncate max-w-[300px]">{{ data.description }}</p>
         </template>
       </Column>
       <Column field="status" header="Status" style="width: 100px">

@@ -743,9 +743,11 @@ export const authProviders = pgTable(
 
 // ─── User Groups (workspace-scoped collections of users) ─────────────
 //
-// Groups are organizational only. They do not grant roles by themselves —
-// the canonical role lives on `users.role`. Admins use groups to bulk-edit
-// roles or to scope sharing logic in future features.
+// Groups are the canonical RBAC subject as of v2.0.0. Roles are bound
+// to groups (not users), so a user inherits permissions through their
+// group memberships. The legacy `users.role` column is retained for
+// backward compatibility during the v2 transition; see `services/rbac.ts`
+// `resolveEffectiveFunctionalities` for the precedence rules.
 
 export const userGroups = pgTable(
   'user_groups',
@@ -756,6 +758,12 @@ export const userGroups = pgTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     name: varchar('name', { length: 100 }).notNull(),
     description: text('description'),
+    // v2.0.0: list of AD/LDAP group DNs whose `memberOf` membership grants
+    // automatic membership in this user-group. Empty array means manual-only.
+    adGroupDns: text('ad_group_dns').array().notNull().default(sql`ARRAY[]::text[]`),
+    // v2.0.0: marks groups created by the migration to mirror legacy
+    // `users.role` assignments — surfaced read-only in admin UI.
+    isLegacy: boolean('is_legacy').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -775,6 +783,81 @@ export const userGroupMembers = pgTable(
   (table) => ({
     pk: primaryKey({ columns: [table.groupId, table.userId] }),
     userGroupMembersUserIdx: index('user_group_members_user_idx').on(table.userId),
+  }),
+);
+
+// ─── Roles & Functionalities (v2.0.0) ────────────────────────────────
+//
+// A Role is a bag of functionality flags. Functionalities use the
+// `<resource>:<action>` convention and are seeded by the platform —
+// administrators cannot create new flag *keys*, only assemble them
+// into roles. Four "system" roles ship with the platform and cannot
+// be deleted (super_admin, workspace_admin, creator, viewer); their
+// functionality bindings can be customized.
+
+export const roles = pgTable(
+  'roles',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+    // System roles (workspaceId IS NULL) are global and cannot be edited
+    // structurally (name / isSystem); their functionality bindings can
+    // be tuned per-deployment.
+    name: varchar('name', { length: 100 }).notNull(),
+    description: text('description'),
+    isSystem: boolean('is_system').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    rolesNameIdx: uniqueIndex('roles_ws_name_idx').on(table.workspaceId, table.name),
+  }),
+);
+
+export const functionalities = pgTable(
+  'functionalities',
+  {
+    // Stable string key — e.g. 'agents:create', '*' for super-flag.
+    key: varchar('key', { length: 120 }).primaryKey(),
+    resource: varchar('resource', { length: 60 }).notNull(),
+    action: varchar('action', { length: 60 }).notNull(),
+    label: varchar('label', { length: 200 }).notNull(),
+    description: text('description'),
+    // Higher-level grouping for UI presentation.
+    category: varchar('category', { length: 60 }).notNull().default('general'),
+    isSystem: boolean('is_system').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    functionalitiesResourceIdx: index('functionalities_resource_idx').on(table.resource),
+  }),
+);
+
+export const roleFunctionalities = pgTable(
+  'role_functionalities',
+  {
+    roleId: uuid('role_id').notNull().references(() => roles.id, { onDelete: 'cascade' }),
+    functionalityKey: varchar('functionality_key', { length: 120 })
+      .notNull()
+      .references(() => functionalities.key, { onDelete: 'cascade' }),
+    grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.roleId, table.functionalityKey] }),
+    roleFunctionalitiesFnIdx: index('role_functionalities_fn_idx').on(table.functionalityKey),
+  }),
+);
+
+export const userGroupRoles = pgTable(
+  'user_group_roles',
+  {
+    groupId: uuid('group_id').notNull().references(() => userGroups.id, { onDelete: 'cascade' }),
+    roleId: uuid('role_id').notNull().references(() => roles.id, { onDelete: 'cascade' }),
+    grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.groupId, table.roleId] }),
+    userGroupRolesRoleIdx: index('user_group_roles_role_idx').on(table.roleId),
   }),
 );
 

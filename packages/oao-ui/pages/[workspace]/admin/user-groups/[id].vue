@@ -32,6 +32,22 @@
               <InputText v-model="groupForm.name" />
               <label class="text-sm font-medium mt-2">Description</label>
               <Textarea v-model="groupForm.description" rows="3" />
+              <label class="text-sm font-medium mt-2">Roles
+                <span class="text-xs text-surface-400 font-normal block mt-0.5">Functionality flags inherited by every member.</span>
+              </label>
+              <MultiSelect
+                v-model="groupForm.roleIds"
+                :options="availableRoles"
+                option-label="name"
+                option-value="id"
+                placeholder="Select roles"
+                display="chip"
+                filter
+              />
+              <label class="text-sm font-medium mt-2">AD Group DNs
+                <span class="text-xs text-surface-400 font-normal block mt-0.5">On LDAP login, users with any of these DNs in <code>memberOf</code> are auto-added.</span>
+              </label>
+              <Chips v-model="groupForm.adGroupDns" placeholder="CN=Engineers,OU=..." :allow-duplicate="false" />
             </div>
           </template>
         </Card>
@@ -95,7 +111,10 @@ const loadError = ref('');
 const saving = ref(false);
 const group = ref<any>(null);
 const members = ref<any[]>([]);
-const groupForm = reactive({ name: '', description: '' });
+const groupForm = reactive<{ name: string; description: string; roleIds: string[]; adGroupDns: string[] }>({
+  name: '', description: '', roleIds: [], adGroupDns: [],
+});
+const availableRoles = ref<any[]>([]);
 const addUserId = ref<string | null>(null);
 
 const breadcrumbs = computed(() => [
@@ -114,23 +133,44 @@ const addableUsers = computed(() =>
     .map((u) => ({ id: u.id, label: `${u.name || u.email} <${u.email}>` })),
 );
 
+const initialRoleIds = ref<string[]>([]);
+
 async function loadGroup() {
   try {
-    const res = await $fetch<{ group: any; members: any[] }>(`/api/user-groups/${groupId.value}`, { headers });
+    const res = await $fetch<{ group: any; members: any[]; roles?: any[] }>(`/api/user-groups/${groupId.value}`, { headers });
     group.value = res.group;
     members.value = res.members;
     groupForm.name = res.group.name;
     groupForm.description = res.group.description || '';
+    groupForm.adGroupDns = Array.isArray(res.group.adGroupDns) ? [...res.group.adGroupDns] : [];
+    groupForm.roleIds = (res.roles ?? []).map((r: any) => r.id);
+    initialRoleIds.value = [...groupForm.roleIds];
   } catch (e: any) {
     loadError.value = e?.data?.error || 'Failed to load group';
   }
 }
 
-await loadGroup();
+async function loadRoles() {
+  try {
+    const res = await $fetch<{ roles: any[] }>('/api/roles', { headers });
+    availableRoles.value = res.roles;
+  } catch { /* user may lack admin:rbac:read — leave empty */ }
+}
 
-const isDirty = computed(() =>
-  group.value && (groupForm.name !== group.value.name || (groupForm.description || '') !== (group.value.description || '')),
-);
+await loadGroup();
+await loadRoles();
+
+const isDirty = computed(() => {
+  if (!group.value) return false;
+  if (groupForm.name !== group.value.name) return true;
+  if ((groupForm.description || '') !== (group.value.description || '')) return true;
+  const origDns: string[] = Array.isArray(group.value.adGroupDns) ? group.value.adGroupDns : [];
+  if (groupForm.adGroupDns.length !== origDns.length) return true;
+  if (groupForm.adGroupDns.some((d, i) => d !== origDns[i])) return true;
+  if (groupForm.roleIds.length !== initialRoleIds.value.length) return true;
+  if ([...groupForm.roleIds].sort().join(',') !== [...initialRoleIds.value].sort().join(',')) return true;
+  return false;
+});
 
 async function saveGroup() {
   saving.value = true;
@@ -138,8 +178,24 @@ async function saveGroup() {
     await $fetch(`/api/user-groups/${groupId.value}`, {
       method: 'PUT',
       headers,
-      body: { name: groupForm.name.trim(), description: groupForm.description.trim() || null },
+      body: {
+        name: groupForm.name.trim(),
+        description: groupForm.description.trim() || null,
+        adGroupDns: groupForm.adGroupDns,
+      },
     });
+    // Roles are managed via a separate endpoint so super-admins without the
+    // group-edit perm can still manage role bindings independently.
+    try {
+      await $fetch(`/api/user-groups/${groupId.value}/roles`, {
+        method: 'PUT',
+        headers,
+        body: { roleIds: groupForm.roleIds },
+      });
+    } catch (e: any) {
+      // permission failure is non-fatal here
+      void e;
+    }
     toast.add({ severity: 'success', summary: 'Saved', life: 2000 });
     await loadGroup();
   } catch (e: any) {

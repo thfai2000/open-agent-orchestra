@@ -37,7 +37,6 @@
       <Column field="title" header="Conversation" style="min-width: 240px">
         <template #body="{ data }">
           <NuxtLink :to="`/${ws}/conversations/${data.id}`" class="font-medium text-primary hover:underline">{{ data.title }}</NuxtLink>
-          <p class="mt-0.5 text-xs text-surface-400">{{ data.agentNameSnapshot }}</p>
         </template>
       </Column>
 

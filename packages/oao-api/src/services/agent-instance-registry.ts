@@ -203,10 +203,42 @@ export async function markStaleInstancesOffline(): Promise<number> {
 }
 
 /**
- * Remove static instances whose last heartbeat is older than a given age.
+ * Remove old, no-longer-relevant instances. Cleans up stale static instances
+ * (no heartbeat) AND terminated ephemeral instances (pod completed/deleted),
+ * which would otherwise accumulate indefinitely in the database.
+ *
+ * Returns the total number of rows removed across both categories.
  */
-export async function cleanupOldInstances(maxHeartbeatAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
-  return cleanupStaleStaticInstances(maxHeartbeatAgeMs);
+export async function cleanupOldInstances(maxAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
+  const staticRemoved = await cleanupStaleStaticInstances(maxAgeMs);
+  const ephemeralRemoved = await cleanupTerminatedEphemeralInstances(maxAgeMs);
+  return staticRemoved + ephemeralRemoved;
+}
+
+/**
+ * Delete ephemeral instances that have been in `terminated` status for longer
+ * than the configured age. The agent-worker pod is already gone at this point,
+ * so the row is purely historical metadata; the controller maintenance loop
+ * calls this so terminated ephemeral instances do not accumulate forever.
+ */
+export async function cleanupTerminatedEphemeralInstances(maxAgeMs = 60 * 60 * 1000): Promise<number> {
+  const threshold = new Date(Date.now() - maxAgeMs);
+
+  const result = await db
+    .delete(agentInstances)
+    .where(
+      and(
+        eq(agentInstances.instanceType, 'ephemeral'),
+        eq(agentInstances.status, 'terminated'),
+        lt(agentInstances.updatedAt, threshold),
+      ),
+    )
+    .returning();
+
+  if (result.length > 0) {
+    logger.info({ count: result.length }, 'Cleaned up terminated ephemeral agent instances');
+  }
+  return result.length;
 }
 
 /**

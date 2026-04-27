@@ -10,6 +10,7 @@ import {
 } from '../services/jira-integration.js';
 import {
   cleanupStaleStaticInstances,
+  cleanupTerminatedEphemeralInstances,
   markStaleInstancesOffline,
 } from '../services/agent-instance-registry.js';
 import { startWorker, stopWorker } from './workflow-worker.js';
@@ -21,6 +22,9 @@ const LEADER_LOCK_TTL = 60; // seconds
 const LAST_EVENT_CURSOR_KEY = 'controller:last-event-cursor';
 const AGENT_INSTANCE_MAINTENANCE_INTERVAL_MS = parseInt(process.env.AGENT_INSTANCE_MAINTENANCE_INTERVAL_MS || '3600000', 10);
 const STALE_STATIC_INSTANCE_CLEANUP_MS = parseInt(process.env.STALE_STATIC_INSTANCE_CLEANUP_MS || String(24 * 60 * 60 * 1000), 10);
+// Ephemeral pods are short-lived; once their row is `terminated` the worker
+// process is already gone, so we can prune aggressively (1 hour by default).
+const TERMINATED_EPHEMERAL_CLEANUP_MS = parseInt(process.env.TERMINATED_EPHEMERAL_CLEANUP_MS || String(60 * 60 * 1000), 10);
 let lastAgentInstanceCleanupAt = 0;
 
 /**
@@ -374,13 +378,15 @@ async function maintainAgentInstances() {
     const now = Date.now();
     let removedCount = 0;
 
+    let ephemeralRemovedCount = 0;
     if (now - lastAgentInstanceCleanupAt >= AGENT_INSTANCE_MAINTENANCE_INTERVAL_MS) {
       removedCount = await cleanupStaleStaticInstances(STALE_STATIC_INSTANCE_CLEANUP_MS);
+      ephemeralRemovedCount = await cleanupTerminatedEphemeralInstances(TERMINATED_EPHEMERAL_CLEANUP_MS);
       lastAgentInstanceCleanupAt = now;
     }
 
-    if (offlineCount > 0 || removedCount > 0) {
-      logger.info({ offlineCount, removedCount }, 'Agent instance maintenance completed');
+    if (offlineCount > 0 || removedCount > 0 || ephemeralRemovedCount > 0) {
+      logger.info({ offlineCount, removedCount, ephemeralRemovedCount }, 'Agent instance maintenance completed');
     }
   } catch (error) {
     logger.error({ error }, 'Error maintaining agent instances');

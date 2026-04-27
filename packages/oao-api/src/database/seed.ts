@@ -1,5 +1,6 @@
 import { db } from './index.js';
-import { agents, workflows, workflowSteps, triggers, workspaces, models, users, authProviders } from './schema.js';
+import { agents, workflows, workflowSteps, triggers, workspaces, models, users, authProviders, roles, functionalities, roleFunctionalities, userGroups, userGroupRoles, userGroupMembers } from './schema.js';
+import { FUNCTIONALITY_CATALOG, SYSTEM_ROLES } from '../services/rbac-functionalities.js';
 import { createLogger } from '@oao/shared';
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
@@ -127,6 +128,131 @@ async function seed() {
     }
     logger.info(`Seeded ${defaultModels.length} default models for superadmin (idempotent upsert)`);
   }
+
+  // ─── RBAC v2.0.0 seed: functionalities, system roles, default user-groups ────
+  // Idempotent: re-running this block is safe; it only adds missing rows.
+  logger.info('Seeding RBAC functionalities and system roles...');
+  for (const f of FUNCTIONALITY_CATALOG) {
+    await db.insert(functionalities).values({
+      key: f.key,
+      resource: f.resource,
+      action: f.action,
+      label: f.label,
+      description: f.description,
+      category: f.category,
+      isSystem: true,
+    }).onConflictDoUpdate({
+      target: functionalities.key,
+      set: {
+        resource: f.resource,
+        action: f.action,
+        label: f.label,
+        description: f.description,
+        category: f.category,
+      },
+    });
+  }
+  logger.info(`Upserted ${FUNCTIONALITY_CATALOG.length} functionalities`);
+
+  // Seed the four system roles (workspaceId NULL = global). Functionality bindings are
+  // re-applied so deployment changes to the catalog propagate; manual bindings on
+  // non-system roles are untouched.
+  const systemRoleIds: Record<string, string> = {};
+  for (const r of SYSTEM_ROLES) {
+    let row = await db.query.roles.findFirst({
+      where: (rt, { eq, and: andFn, isNull }) => andFn(eq(rt.name, r.name), isNull(rt.workspaceId)),
+    });
+    if (!row) {
+      const [inserted] = await db.insert(roles).values({
+        name: r.name,
+        description: r.description,
+        isSystem: true,
+        workspaceId: null,
+      }).returning();
+      row = inserted!;
+      logger.info(`Created system role ${r.name}`);
+    } else if (row.description !== r.description || !row.isSystem) {
+      await db.update(roles)
+        .set({ description: r.description, isSystem: true, updatedAt: new Date() })
+        .where(eq(roles.id, row.id));
+    }
+    systemRoleIds[r.name] = row.id;
+
+    // Reset functionality bindings on system roles to match the canonical list.
+    await db.delete(roleFunctionalities).where(eq(roleFunctionalities.roleId, row.id));
+    if (r.functionalities.length) {
+      await db.insert(roleFunctionalities).values(
+        r.functionalities.map((key) => ({ roleId: row!.id, functionalityKey: key })),
+      ).onConflictDoNothing();
+    }
+  }
+  logger.info(`Upserted ${SYSTEM_ROLES.length} system roles with functionality bindings`);
+
+  // Seed one default user-group per system role inside the default workspace.
+  if (resolvedWsId) {
+    for (const r of SYSTEM_ROLES) {
+      const groupName = `${r.name.replace(/_/g, ' ')}s`.replace(/\b\w/g, (c) => c.toUpperCase()); // e.g. "Super Admins"
+      let group = await db.query.userGroups.findFirst({
+        where: (g, { eq, and: andFn }) => andFn(eq(g.workspaceId, resolvedWsId!), eq(g.name, groupName)),
+      });
+      if (!group) {
+        const [inserted] = await db.insert(userGroups).values({
+          workspaceId: resolvedWsId,
+          name: groupName,
+          description: `Default group for the ${r.name} role.`,
+          isLegacy: false,
+        }).returning();
+        group = inserted!;
+        logger.info(`Created default user-group "${groupName}"`);
+      }
+      // Bind the matching role
+      await db.insert(userGroupRoles).values({
+        groupId: group.id,
+        roleId: systemRoleIds[r.name]!,
+      }).onConflictDoNothing();
+
+      // Auto-add the superadmin user to the super_admin group so the v2 flag-based
+      // checks pass without requiring a manual UI step.
+      if (r.name === 'super_admin' && superAdminUser) {
+        await db.insert(userGroupMembers).values({
+          groupId: group.id,
+          userId: superAdminUser.id,
+        }).onConflictDoNothing();
+      }
+    }
+  }
+
+  // ─── v2.0.0 legacy bridge: ensure every existing user has at least the
+  // group-membership matching their legacy `users.role` so flag-based checks
+  // do not regress for pre-v2 users. Only fires for non-superadmin users.
+  if (resolvedWsId) {
+    const legacyRoleToGroupName: Record<string, string> = {
+      super_admin: 'Super Admins',
+      workspace_admin: 'Workspace Admins',
+      creator_user: 'Creators',
+      view_user: 'Viewers',
+    };
+    const allUsers = await db.query.users.findMany({ columns: { id: true, role: true, workspaceId: true } });
+    let bridged = 0;
+    for (const u of allUsers) {
+      const targetGroupName = legacyRoleToGroupName[u.role];
+      if (!targetGroupName) continue;
+      const ws = u.workspaceId ?? resolvedWsId;
+      const group = await db.query.userGroups.findFirst({
+        where: (g, { eq, and: andFn }) => andFn(eq(g.workspaceId, ws!), eq(g.name, targetGroupName)),
+      });
+      if (!group) continue;
+      const existing = await db.query.userGroupMembers.findFirst({
+        where: (m, { eq, and: andFn }) => andFn(eq(m.groupId, group.id), eq(m.userId, u.id)),
+      });
+      if (!existing) {
+        await db.insert(userGroupMembers).values({ groupId: group.id, userId: u.id }).onConflictDoNothing();
+        bridged++;
+      }
+    }
+    if (bridged > 0) logger.info(`Bridged ${bridged} legacy user(s) into default groups`);
+  }
+  logger.info('RBAC v2.0.0 seed complete');
 
   // Create a sample agent (idempotent — skip if any agent already exists)
   const sampleWorkspaceId = workspaceId ?? resolvedWsId ?? '00000000-0000-0000-0000-000000000000';

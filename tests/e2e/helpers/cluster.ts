@@ -279,6 +279,19 @@ export function querySingleValue(sql: string) {
   return runPsql(sql);
 }
 
+/**
+ * Removes the `mail` row from system_settings so the API treats SMTP as
+ * unconfigured. Forgot-password requests will then short-circuit instead
+ * of trying to dial a stale MailHog cluster IP.
+ */
+export function clearMailSettings() {
+  runPsql(`delete from system_settings where key = 'mail';`);
+}
+
+export function deleteLdapAuthProviders() {
+  runPsql(`delete from auth_providers where provider_type = 'ldap';`);
+}
+
 export function getWebhookRegistrationId(triggerId: string) {
   return runPsql(`select id from webhook_registrations where trigger_id = '${triggerId}' order by created_at desc limit 1;`);
 }
@@ -363,6 +376,156 @@ export async function ensureClusterLdap() {
 export function cleanupClusterLdap() {
   runCommand('kubectl', ['-n', NAMESPACE, 'delete', 'svc', LDAP_RESOURCE_NAME, '--ignore-not-found'], true);
   runCommand('kubectl', ['-n', NAMESPACE, 'delete', 'pod', LDAP_RESOURCE_NAME, '--ignore-not-found'], true);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// MailHog (in-cluster fake SMTP server) for forgot-password / mail tests.
+// ─────────────────────────────────────────────────────────────────────────
+
+const MAILHOG_RESOURCE_NAME = process.env.E2E_MAILHOG_NAME ?? 'oao-test-mailhog';
+
+export interface MailhogTarget {
+  host: string;     // cluster-internal SMTP host
+  port: number;     // SMTP port (1025)
+  httpHost: string; // cluster-internal HTTP host for the v2 API
+  httpPort: number; // HTTP port (8025)
+}
+
+export async function ensureClusterMailhog(): Promise<MailhogTarget> {
+  const manifest = `apiVersion: v1
+kind: Pod
+metadata:
+  name: ${MAILHOG_RESOURCE_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: ${MAILHOG_RESOURCE_NAME}
+spec:
+  restartPolicy: Never
+  containers:
+    - name: mailhog
+      image: mailhog/mailhog:latest
+      ports:
+        - name: smtp
+          containerPort: 1025
+          protocol: TCP
+        - name: http
+          containerPort: 8025
+          protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${MAILHOG_RESOURCE_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    app: ${MAILHOG_RESOURCE_NAME}
+  ports:
+    - name: smtp
+      port: 1025
+      targetPort: 1025
+      protocol: TCP
+    - name: http
+      port: 8025
+      targetPort: 8025
+      protocol: TCP
+`;
+  const apply = spawnSync('kubectl', ['apply', '-f', '-'], { input: manifest, encoding: 'utf8' });
+  if (apply.status !== 0) {
+    throw new Error(`Failed to apply MailHog manifest: ${(apply.stderr || apply.stdout || '').trim()}`);
+  }
+  runCommand('kubectl', ['-n', NAMESPACE, 'wait', '--for=condition=Ready', `pod/${MAILHOG_RESOURCE_NAME}`, '--timeout=180s']);
+  await waitForApiPodTcpEndpoint(MAILHOG_RESOURCE_NAME, 1025);
+  return { host: MAILHOG_RESOURCE_NAME, port: 1025, httpHost: MAILHOG_RESOURCE_NAME, httpPort: 8025 };
+}
+
+export function cleanupClusterMailhog() {
+  runCommand('kubectl', ['-n', NAMESPACE, 'delete', 'svc', MAILHOG_RESOURCE_NAME, '--ignore-not-found'], true);
+  runCommand('kubectl', ['-n', NAMESPACE, 'delete', 'pod', MAILHOG_RESOURCE_NAME, '--ignore-not-found'], true);
+}
+
+/**
+ * Query the in-cluster MailHog HTTP API from the host by exec'ing into the
+ * oao-api pod (which has Node available) and using fetch. Returns the raw
+ * v2 response body (deserialized).
+ */
+export async function getMailhogMessages(target: MailhogTarget): Promise<{ items: Array<{ Content: { Headers: Record<string, string[]>; Body: string }; To: Array<{ Mailbox: string; Domain: string }> }> }> {
+  // Find the oao-api pod (label selector is app=oao-api per Helm chart).
+  const podRes = runCommand('kubectl', ['-n', NAMESPACE, 'get', 'pod', '-l', 'app=oao-api', '-o', 'jsonpath={.items[0].metadata.name}'], true);
+  if (!podRes.ok || !podRes.stdout) throw new Error('Could not locate oao-api pod for MailHog query');
+  const pod = podRes.stdout.trim();
+  const url = `http://${target.httpHost}:${target.httpPort}/api/v2/messages`;
+  const result = runCommand('kubectl', ['-n', NAMESPACE, 'exec', pod, '--', 'node', '-e', `fetch(${JSON.stringify(url)}).then(r=>r.text()).then(t=>process.stdout.write(t))`], true);
+  if (!result.ok) {
+    // eslint-disable-next-line no-console
+    console.warn(`[getMailhogMessages] kubectl exec failed: ${result.stderr || result.stdout}`);
+    return { items: [] };
+  }
+  try {
+    return JSON.parse(result.stdout) as { items: Array<{ Content: { Headers: Record<string, string[]>; Body: string }; To: Array<{ Mailbox: string; Domain: string }> }> };
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`[getMailhogMessages] non-JSON response: ${result.stdout.slice(0, 200)}`);
+    return { items: [] };
+  }
+}
+
+/**
+ * Poll the MailHog inbox repeatedly inside a single kubectl exec — much
+ * faster than dispatching a new exec per attempt. Resolves with the inbox
+ * contents as soon as it has any items, or empty if the deadline elapses.
+ */
+export async function waitForMailhogMessages(target: MailhogTarget, opts: { timeoutMs?: number; intervalMs?: number; recipient?: string } = {}): Promise<{ items: Array<{ Content: { Headers: Record<string, string[]>; Body: string }; To: Array<{ Mailbox: string; Domain: string }> }> }> {
+  const timeoutMs = opts.timeoutMs ?? 20_000;
+  const intervalMs = opts.intervalMs ?? 500;
+  const podRes = runCommand('kubectl', ['-n', NAMESPACE, 'get', 'pod', '-l', 'app=oao-api', '-o', 'jsonpath={.items[0].metadata.name}'], true);
+  if (!podRes.ok || !podRes.stdout) throw new Error('Could not locate oao-api pod for MailHog query');
+  const pod = podRes.stdout.trim();
+  const url = `http://${target.httpHost}:${target.httpPort}/api/v2/messages`;
+  const recipient = opts.recipient ?? '';
+  const script = `
+    const url = ${JSON.stringify(url)};
+    const recipient = ${JSON.stringify(recipient)};
+    const deadline = Date.now() + ${timeoutMs};
+    (async () => {
+      while (Date.now() < deadline) {
+        try {
+          const r = await fetch(url);
+          const t = await r.text();
+          const j = JSON.parse(t);
+          if (j.items && j.items.length > 0) {
+            if (!recipient) { process.stdout.write(t); process.exit(0); }
+            const match = j.items.find((m) => (m.To || []).some((to) => (to.Mailbox + '@' + to.Domain) === recipient));
+            if (match) { process.stdout.write(t); process.exit(0); }
+          }
+        } catch (e) {}
+        await new Promise((r) => setTimeout(r, ${intervalMs}));
+      }
+      try {
+        const r = await fetch(url);
+        const t = await r.text();
+        process.stdout.write(t);
+      } catch (e) { process.stdout.write('{"items":[]}'); }
+      process.exit(0);
+    })();
+  `;
+  const result = runCommand('kubectl', ['-n', NAMESPACE, 'exec', pod, '--', 'node', '-e', script], true);
+  if (!result.ok) {
+    return { items: [] };
+  }
+  try {
+    return JSON.parse(result.stdout) as { items: Array<{ Content: { Headers: Record<string, string[]>; Body: string }; To: Array<{ Mailbox: string; Domain: string }> }> };
+  } catch {
+    return { items: [] };
+  }
+}
+
+export async function clearMailhog(target: MailhogTarget): Promise<void> {
+  const podRes = runCommand('kubectl', ['-n', NAMESPACE, 'get', 'pod', '-l', 'app=oao-api', '-o', 'jsonpath={.items[0].metadata.name}'], true);
+  if (!podRes.ok || !podRes.stdout) return;
+  const pod = podRes.stdout.trim();
+  const url = `http://${target.httpHost}:${target.httpPort}/api/v1/messages`;
+  runCommand('kubectl', ['-n', NAMESPACE, 'exec', pod, '--', 'node', '-e', `fetch(${JSON.stringify(url)}, { method: 'DELETE' }).then(()=>process.exit(0))`], true);
 }
 
 export function uniqueName(prefix: string) {

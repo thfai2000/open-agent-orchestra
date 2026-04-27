@@ -5,6 +5,7 @@ import {
   resetSuperAdminPassword,
   uniqueName,
 } from './helpers/cluster';
+import { ensureWorkspaceCopilotTokenVariable } from './helpers/copilot-token';
 import { loginViaUi, openTab } from './helpers/ui';
 
 const ADMIN_EMAIL = 'admin@oao.local';
@@ -40,6 +41,7 @@ async function getAuthContext(page: Page): Promise<AuthContext> {
 
 async function createDatabaseAgent(request: APIRequestContext, authToken: string, prefix: string): Promise<AgentRecord> {
   const name = uniqueName(prefix);
+  const copilotTokenCredentialId = await ensureWorkspaceCopilotTokenVariable(request, authToken);
   const response = await request.post('/api/agents', {
     headers: {
       Authorization: `Bearer ${authToken}`,
@@ -48,6 +50,7 @@ async function createDatabaseAgent(request: APIRequestContext, authToken: string
       name,
       description: 'Playwright agent for security and cleanup coverage',
       sourceType: 'database',
+      ...(copilotTokenCredentialId ? { copilotTokenCredentialId } : {}),
       files: [
         {
           filePath: 'agent.md',
@@ -139,7 +142,7 @@ async function deleteAgent(request: APIRequestContext, authToken: string, agentI
 }
 
 test('webhook abuse cases reject malformed signatures, dedupe replayed PAT events, and hide PAT secrets after creation', async ({ page, request }) => {
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const { authToken } = await getAuthContext(page);
 
   const tokenResponse = await request.post('/api/tokens', {
@@ -276,7 +279,7 @@ test('webhook abuse cases reject malformed signatures, dedupe replayed PAT event
 });
 
 test('workflow trigger cleanup keeps the detail page healthy and disables manual run when no active webhook remains', async ({ page, request }) => {
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const { authToken } = await getAuthContext(page);
 
   const agent = await createDatabaseAgent(request, authToken, 'pw-cleanup-agent');

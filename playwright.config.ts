@@ -1,4 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
+import dotenv from 'dotenv';
+
+// Load .env so secrets like TESTING_GITHUB_PAT, TESTING_JIRA_API_TOKEN are
+// available to the spec files (and to the helpers that provision agents with
+// real Copilot credentials). Tests still skip themselves when these env vars
+// are absent.
+dotenv.config();
 
 const auditMode = process.env.PLAYWRIGHT_AUDIT === '1';
 const auditReportDir = process.env.OAO_TEST_REPORT_DIR ?? 'test-results/audit-report';

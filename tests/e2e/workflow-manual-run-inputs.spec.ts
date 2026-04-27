@@ -16,7 +16,7 @@ test('manual run rejects missing required webhook inputs and accepts a valid pay
   const workflowName = uniqueName('pw-manual-workflow');
   const webhookPath = `/${uniqueName('manual-run')}`;
 
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const authToken = (await page.context().cookies()).find((cookie) => cookie.name === 'token')?.value;
   expect(authToken).toBeTruthy();
 

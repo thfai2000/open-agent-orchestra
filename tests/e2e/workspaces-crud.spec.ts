@@ -30,7 +30,7 @@ test('super_admin can create, edit, and delete a non-default workspace via the U
   const initialName = uniqueName('WS');
   const renamed = `${initialName}-renamed`;
 
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   await page.goto('/default/workspaces');
   await expect(page.getByRole('heading', { name: 'Workspaces' })).toBeVisible();
 

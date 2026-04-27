@@ -94,7 +94,7 @@
               <Card>
                 <template #content>
                   <div class="flex flex-col gap-3">
-                    <div><span class="text-surface-500 text-sm">Default Agent</span><p class="font-medium">{{ snapshotWorkflow.defaultAgentId || 'None' }}</p></div>
+                    <div><span class="text-surface-500 text-sm">Workflow Agent</span><p class="font-medium">{{ snapshotWorkflow.defaultAgentId || 'None' }}</p></div>
                     <div><span class="text-surface-500 text-sm">Default Model</span><p class="font-medium">{{ snapshotWorkflow.defaultModel || 'None' }}</p></div>
                     <div><span class="text-surface-500 text-sm">Reasoning Effort</span><p class="font-medium">{{ snapshotWorkflow.defaultReasoningEffort || 'None' }}</p></div>
                   </div>
@@ -145,6 +145,15 @@ const currentVersionIndex = computed(() => versions.value.findIndex((entry: any)
 const newerVersion = computed(() => currentVersionIndex.value > 0 ? versions.value[currentVersionIndex.value - 1] : null);
 const olderVersion = computed(() => currentVersionIndex.value >= 0 ? versions.value[currentVersionIndex.value + 1] ?? null : null);
 const isLatestVersion = computed(() => versions.value.some((entry: any) => entry.version === versionNumber.value && entry.isLatest));
+
+// If the user lands on a /v/<n> URL that is in fact the current latest version,
+// redirect them to the editable detail page so the Edit/Manual Run buttons are
+// available. Older snapshots stay read-only as before.
+watch(isLatestVersion, (latest) => {
+  if (latest) {
+    router.replace(latestPath.value);
+  }
+}, { immediate: true });
 
 const breadcrumbs = computed(() => [
   { label: 'Home', route: `/${ws.value}` },

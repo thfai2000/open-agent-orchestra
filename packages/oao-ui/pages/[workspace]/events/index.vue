@@ -18,11 +18,11 @@
     <div class="flex flex-wrap items-end gap-3 mb-4">
       <div class="flex flex-col gap-1">
         <label class="text-xs font-medium text-surface-500">Event Name</label>
-        <Select v-model="filterName" :options="eventNames" placeholder="All" showClear class="w-48" />
+        <MultiSelect v-model="filterName" :options="eventNames" placeholder="All" :showClear="true" :filter="true" display="chip" class="w-72" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="text-xs font-medium text-surface-500">Scope</label>
-        <Select v-model="filterScope" :options="['workspace', 'user']" placeholder="All" showClear class="w-36" />
+        <MultiSelect v-model="filterScope" :options="['workspace', 'user']" placeholder="All" :showClear="true" display="chip" class="w-56" />
       </div>
       <Button label="Refresh" icon="pi pi-refresh" severity="secondary" size="small" @click="refresh()" />
     </div>
@@ -58,13 +58,13 @@ const ws = computed(() => (route.params.workspace as string) || 'default');
 
 const page = ref(1);
 const limit = ref(20);
-const filterName = ref<string | null>(null);
-const filterScope = ref<string | null>(null);
+const filterName = ref<string[]>([]);
+const filterScope = ref<string[]>([]);
 
 const queryStr = computed(() => {
   const params = new URLSearchParams({ page: String(page.value), limit: String(limit.value) });
-  if (filterName.value) params.set('eventName', filterName.value);
-  if (filterScope.value) params.set('eventScope', filterScope.value);
+  if (filterName.value && filterName.value.length) params.set('eventName', filterName.value.join(','));
+  if (filterScope.value && filterScope.value.length) params.set('eventScope', filterScope.value.join(','));
   return params.toString();
 });
 
@@ -73,7 +73,7 @@ const events = computed(() => (data.value as any)?.events ?? []);
 const total = computed(() => (data.value as any)?.total ?? 0);
 
 const { data: namesData } = await useFetch('/api/events/names', { headers });
-const eventNames = computed(() => (namesData.value as any)?.names ?? []);
+const eventNames = computed(() => (namesData.value as any)?.eventNames ?? []);
 
 function onPage(event: any) { page.value = event.page + 1; }
 function onRowsChange(newRows: number) { limit.value = newRows; page.value = 1; }

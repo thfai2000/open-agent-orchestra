@@ -33,8 +33,9 @@
         <template #title>Workflow Defaults</template>
         <template #content>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Default Agent</label>
+            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Workflow Agent</label>
               <Select v-model="form.defaultAgentId" :options="agentOptions" optionLabel="name" optionValue="id" placeholder="Select agent" showClear />
+              <small class="text-surface-400">The agent that will run this workflow's steps (each step can override).</small>
             </div>
             <div class="flex flex-col gap-2"><label class="text-sm font-medium">Default Model</label>
               <Select v-model="form.defaultModel" :options="modelOptions" optionLabel="name" optionValue="name" placeholder="Default" showClear />

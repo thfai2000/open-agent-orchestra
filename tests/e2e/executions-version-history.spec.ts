@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from './helpers/fixtures';
 import { resetSuperAdminPassword, uniqueName } from './helpers/cluster';
+import { ensureWorkspaceCopilotTokenVariable } from './helpers/copilot-token';
 import { loginViaUi, openTab } from './helpers/ui';
 
 const ADMIN_EMAIL = 'admin@oao.local';
@@ -35,6 +36,10 @@ async function getAuthContext(page: Page): Promise<AuthContext> {
 
 async function createDatabaseAgent(request: APIRequestContext, authToken: string, prefix: string): Promise<AgentRecord> {
   const name = uniqueName(prefix);
+  // Best-effort: attach a real Copilot token so workflow runs triggered by
+  // this test exercise the LLM (rather than failing silently in the
+  // background and leaving orphan agent rows without a token).
+  const copilotTokenCredentialId = await ensureWorkspaceCopilotTokenVariable(request, authToken);
   const response = await request.post('/api/agents', {
     headers: {
       Authorization: `Bearer ${authToken}`,
@@ -43,6 +48,7 @@ async function createDatabaseAgent(request: APIRequestContext, authToken: string
       name,
       description: 'Playwright agent for execution and version coverage',
       sourceType: 'database',
+      ...(copilotTokenCredentialId ? { copilotTokenCredentialId } : {}),
       files: [
         {
           filePath: 'agent.md',
@@ -209,7 +215,7 @@ async function deleteAgent(request: APIRequestContext, authToken: string, agentI
 }
 
 test('execution history and version pages show persisted snapshots and linked history', async ({ page, request }) => {
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const { authToken } = await getAuthContext(page);
 
   const agent = await createDatabaseAgent(request, authToken, 'pw-version-agent');
@@ -231,8 +237,9 @@ test('execution history and version pages show persisted snapshots and linked hi
 
   await page.goto('/default/executions');
   await expect(page.getByRole('heading', { name: /Workflow Executions/i })).toBeVisible();
-  await expect(page.getByText(updatedWorkflowName, { exact: true })).toBeVisible();
-  await page.getByRole('link', { name: new RegExp(`^${executionId.substring(0, 8)}`) }).click();
+  const executionLink = page.getByRole('link', { name: new RegExp(`^${executionId.substring(0, 8)}`) });
+  await expect(executionLink).toBeVisible();
+  await executionLink.click();
 
   await expect(page).toHaveURL(new RegExp(`/default/executions/${executionId}$`));
   await expect(page.getByRole('heading', { name: new RegExp(`Execution ${executionId.substring(0, 8)}`) })).toBeVisible();

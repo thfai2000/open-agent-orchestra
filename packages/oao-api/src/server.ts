@@ -29,6 +29,8 @@ import tokensRouter, { validatePat } from './routes/tokens.js';
 import userGroupsRouter from './routes/user-groups.js';
 import adGroupMappingsRouter from './routes/ad-group-mappings.js';
 import rbacRouter from './routes/rbac.js';
+import rolesRouter from './routes/roles.js';
+import functionalitiesRouter from './routes/functionalities.js';
 import { startRealtimeSubscriber } from './services/realtime-bus.js';
 
 const logger = createLogger('oao-api');
@@ -69,6 +71,8 @@ const app = createApp({
     ['/api/user-groups', userGroupsRouter],
     ['/api/ad-group-mappings', adGroupMappingsRouter],
     ['/api/rbac', rbacRouter],
+    ['/api/roles', rolesRouter],
+    ['/api/functionalities', functionalitiesRouter],
   ],
 });
 

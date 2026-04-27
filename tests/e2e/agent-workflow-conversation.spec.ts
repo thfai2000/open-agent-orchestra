@@ -1,5 +1,6 @@
 import { test, expect } from './helpers/fixtures';
 import { resetSuperAdminPassword, uniqueName } from './helpers/cluster';
+import { ensureWorkspaceCopilotTokenVariable } from './helpers/copilot-token';
 import { confirmDeleteDialog, dismissVisibleToasts, fillField, loginViaUi, selectOption } from './helpers/ui';
 
 const ADMIN_EMAIL = 'admin@oao.local';
@@ -20,7 +21,7 @@ test('admin can create/edit an agent, use it in a conversation, create/edit/dele
   const updatedWorkflowName = `${workflowName}-v2`;
   const webhookPath = `/${uniqueName('wh')}`;
 
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
 
   await page.locator('aside a[href="/default/agents"]').first().click();
   await expect(page).toHaveURL(/\/default\/agents$/);
@@ -37,6 +38,20 @@ test('admin can create/edit an agent, use it in a conversation, create/edit/dele
   const createAgentPayload = await createAgentResponse.json() as { agent?: { id?: string } };
   const createdAgentId = createAgentPayload.agent?.id;
   expect(createdAgentId).toBeTruthy();
+
+  // Attach a real Copilot token to the freshly-created agent so the
+  // conversation send below has a chance of completing against a real LLM.
+  // When TESTING_GITHUB_PAT / GITHUB_TOKEN are absent this is a no-op.
+  const authToken = (await page.context().cookies()).find((cookie) => cookie.name === 'token')?.value;
+  if (authToken && createdAgentId) {
+    const tokenVarId = await ensureWorkspaceCopilotTokenVariable(page.request, authToken);
+    if (tokenVarId) {
+      await page.request.put(`/api/agents/${createdAgentId}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+        data: { copilotTokenCredentialId: tokenVarId },
+      });
+    }
+  }
 
   await expect(page).toHaveURL(/\/default\/agents$/);
   const createdAgentLink = page.getByRole('link', { name: agentName, exact: true });

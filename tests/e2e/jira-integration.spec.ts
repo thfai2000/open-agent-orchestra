@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { expect, test, type APIRequestContext, type Page } from './helpers/fixtures';
 import { resetSuperAdminPassword, uniqueName } from './helpers/cluster';
+import { ensureWorkspaceCopilotTokenVariable } from './helpers/copilot-token';
 import { loginViaUi, openTab } from './helpers/ui';
 import { loadTestEnv } from '../helpers/test-env';
 
@@ -168,6 +169,7 @@ async function deleteJiraIssue(config: LiveJiraConfig, issueKey: string) {
 
 async function createDatabaseAgent(request: APIRequestContext, authToken: string, prefix: string): Promise<AgentRecord> {
   const name = uniqueName(prefix);
+  const copilotTokenCredentialId = await ensureWorkspaceCopilotTokenVariable(request, authToken);
   const response = await request.post('/api/agents', {
     headers: {
       Authorization: `Bearer ${authToken}`,
@@ -176,6 +178,7 @@ async function createDatabaseAgent(request: APIRequestContext, authToken: string
       name,
       description: 'Playwright agent for Jira integration coverage',
       sourceType: 'database',
+      ...(copilotTokenCredentialId ? { copilotTokenCredentialId } : {}),
       files: [
         {
           filePath: 'agent.md',
@@ -237,6 +240,7 @@ async function createJiraNotificationWorkflow(request: APIRequestContext, authTo
   clientIdVariableKey: string;
   clientSecretVariableKey: string;
   jql: string;
+  defaultModel?: string;
 }) {
   const name = uniqueName('pw-jira-notify-workflow');
   const response = await request.post('/api/workflows', {
@@ -250,6 +254,7 @@ async function createJiraNotificationWorkflow(request: APIRequestContext, authTo
       defaultAgentId: params.agentId,
       workerRuntime: 'static',
       stepAllocationTimeoutSeconds: 300,
+      ...(params.defaultModel ? { defaultModel: params.defaultModel } : {}),
       steps: [
         {
           name: 'Handle Jira Description',
@@ -302,6 +307,7 @@ async function createJiraPollingWorkflow(request: APIRequestContext, authToken: 
   apiTokenVariableKey: string;
   jql: string;
   isActive: boolean;
+  defaultModel?: string;
 }) {
   const name = uniqueName('pw-jira-poll-workflow');
   const response = await request.post('/api/workflows', {
@@ -315,13 +321,17 @@ async function createJiraPollingWorkflow(request: APIRequestContext, authToken: 
       defaultAgentId: params.agentId,
       workerRuntime: 'static',
       stepAllocationTimeoutSeconds: 300,
+      ...(params.defaultModel ? { defaultModel: params.defaultModel } : {}),
       steps: [
         {
           name: 'Handle Jira Description',
           promptTemplate: [
             'Handle Jira ticket descriptions for weekly weather report requests.',
             'Issue keys: {{ inputs.jiraIssueKeys | join(", ") }}',
-            'First issue description: {{ inputs.jiraIssues[0].fields.description | default("No description") }}',
+            // Jira Cloud descriptions are ADF (a JSON object). Bare `{{ ... }}`
+            // would render as `[object Object]`; use `| dump` so the agent sees
+            // readable JSON instead.
+            'First issue description: {{ inputs.jiraIssues[0].fields.description | dump | default("\"No description\"") }}',
           ].join('\n'),
           stepOrder: 1,
           timeoutSeconds: 300,
@@ -491,6 +501,7 @@ async function createJiraNotificationWorkflowWithDummyCredentials(
   authToken: string,
   agentId: string,
   variables: VariableRecord[],
+  options: { defaultModel?: string } = {},
 ) {
   const jql = `project = OAO AND description ~ "${WEEKLY_WEATHER_DESCRIPTION}"`;
   return createJiraNotificationWorkflow(request, authToken, {
@@ -500,11 +511,12 @@ async function createJiraNotificationWorkflowWithDummyCredentials(
     clientIdVariableKey: variables[2].key,
     clientSecretVariableKey: variables[3].key,
     jql,
+    defaultModel: options.defaultModel,
   });
 }
 
 test('workspace Jira credential variable is stored without exposing the secret value', async ({ page, request }) => {
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const { authToken } = await getAuthContext(page);
 
   const secretValue = `dummy-jira-token-${uniqueName('secret')}`;
@@ -546,7 +558,7 @@ test('workspace Jira credential variable is stored without exposing the secret v
 });
 
 test('workflow can save a Jira dynamic webhook trigger with JQL and credential references', async ({ page, request }) => {
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const { authToken } = await getAuthContext(page);
 
   const variableDefinitions = [
@@ -637,7 +649,7 @@ test('live Jira polling workflow creates an execution for a new weather-report t
     return;
   }
 
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const { authToken } = await getAuthContext(page);
 
   const label = uniqueName('oao-e2e-jira').toLowerCase();
@@ -689,7 +701,7 @@ test('live Jira polling workflow creates an execution for a new weather-report t
 
     await page.goto('/default/executions');
     await expect(page.getByRole('heading', { name: /Workflow Executions/i })).toBeVisible();
-    await expect(page.getByText(workflow.name, { exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: new RegExp(`^${String(execution.id).substring(0, 8)}`) })).toBeVisible();
   } finally {
     if (jiraIssue) {
       await deleteJiraIssue(liveJira.config, jiraIssue.key).catch((error: unknown) => {
@@ -707,7 +719,14 @@ test('live Jira polling workflow creates an execution for a new weather-report t
 test('Jira changes notification simulation fires and completes a workflow execution', async ({ page, request }) => {
   test.setTimeout(240_000);
 
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  loadTestEnv();
+  const copilotTokenValue = firstEnvValue('TESTING_GITHUB_PAT', 'GITHUB_TOKEN');
+  if (!copilotTokenValue) {
+    test.skip(true, 'TESTING_GITHUB_PAT or GITHUB_TOKEN must be set so the simulated workflow execution can run a real Copilot session.');
+    return;
+  }
+
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const { authToken } = await getAuthContext(page);
 
   const variableDefinitions = [
@@ -717,6 +736,7 @@ test('Jira changes notification simulation fires and completes a workflow execut
     { key: uniqueVariableKey('JIRA_CLIENT_SECRET_SIM'), value: 'sim-oauth-client-secret' },
   ];
   const variables: VariableRecord[] = [];
+  let copilotTokenVariable: VariableRecord | null = null;
   let agent: AgentRecord | null = null;
   let workflow: WorkflowRecord | null = null;
 
@@ -731,8 +751,30 @@ test('Jira changes notification simulation fires and completes a workflow execut
       ));
     }
 
-    agent = await createDatabaseAgent(request, authToken, 'pw-jira-sim-agent');
-    workflow = await createJiraNotificationWorkflowWithDummyCredentials(request, authToken, agent.id, variables);
+    // Attach a real Copilot token credential so the agent can actually run.
+    const copilotResponse = await request.post('/api/variables', {
+      headers: { Authorization: `Bearer ${authToken}` },
+      data: {
+        scope: 'workspace',
+        key: uniqueVariableKey('COPILOT_TOKEN_SIM'),
+        value: copilotTokenValue,
+        variableType: 'credential',
+        credentialSubType: 'github_token',
+        injectAsEnvVariable: false,
+        description: 'GitHub Copilot token (Jira simulation E2E)',
+      },
+    });
+    expect(copilotResponse.status()).toBe(201);
+    const copilotBody = await copilotResponse.json() as { variable?: { id?: string; key?: string } };
+    expect(copilotBody.variable?.id).toBeTruthy();
+    copilotTokenVariable = {
+      id: copilotBody.variable!.id!,
+      key: copilotBody.variable!.key!,
+      scope: 'workspace',
+    };
+
+    agent = await createDatabaseAgentWithCopilotToken(request, authToken, 'pw-jira-sim-agent', copilotTokenVariable.id);
+    workflow = await createJiraNotificationWorkflowWithDummyCredentials(request, authToken, agent.id, variables, { defaultModel: 'gpt-5-mini' });
 
     // Fire the trigger with a simulated Jira issue payload
     const mockIssueKey = 'OAOE2E-42';
@@ -773,7 +815,7 @@ test('Jira changes notification simulation fires and completes a workflow execut
     // UI: navigate to executions list
     await page.goto('/default/executions');
     await expect(page.getByRole('heading', { name: /Workflow Executions/i })).toBeVisible();
-    await expect(page.getByText(workflow.name, { exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: new RegExp(`^${fireResult.executionId!.substring(0, 8)}`) })).toBeVisible();
 
     // UI: open execution detail page
     const executionId = fireResult.executionId!;
@@ -792,6 +834,7 @@ test('Jira changes notification simulation fires and completes a workflow execut
     for (const variable of variables) {
       await deleteVariable(request, authToken, variable);
     }
+    if (copilotTokenVariable) await deleteVariable(request, authToken, copilotTokenVariable);
   }
 });
 
@@ -806,12 +849,20 @@ test('live Jira polling force-fire immediately polls and completes a workflow ex
     return;
   }
 
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  loadTestEnv();
+  const copilotTokenValue = firstEnvValue('TESTING_GITHUB_PAT', 'GITHUB_TOKEN');
+  if (!copilotTokenValue) {
+    test.skip(true, 'TESTING_GITHUB_PAT or GITHUB_TOKEN must be set so the polling workflow execution can run a real Copilot session.');
+    return;
+  }
+
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const { authToken } = await getAuthContext(page);
 
   const label = uniqueName('oao-force-fire').toLowerCase();
   const jql = `project = ${liveJira.config.projectKey} AND labels = "${label}"`;
   let variable: VariableRecord | null = null;
+  let copilotTokenVariable: VariableRecord | null = null;
   let agent: AgentRecord | null = null;
   let workflow: WorkflowRecord | null = null;
   let jiraIssue: JiraIssueRecord | null = null;
@@ -824,7 +875,27 @@ test('live Jira polling force-fire immediately polls and completes a workflow ex
       liveJira.config.apiToken,
       'Live Jira API token for force-fire test',
     );
-    agent = await createDatabaseAgent(request, authToken, 'pw-jira-force-agent');
+    const copilotResponse = await request.post('/api/variables', {
+      headers: { Authorization: `Bearer ${authToken}` },
+      data: {
+        scope: 'workspace',
+        key: uniqueVariableKey('COPILOT_TOKEN_FF'),
+        value: copilotTokenValue,
+        variableType: 'credential',
+        credentialSubType: 'github_token',
+        injectAsEnvVariable: false,
+        description: 'GitHub Copilot token (Jira force-fire E2E)',
+      },
+    });
+    expect(copilotResponse.status()).toBe(201);
+    const copilotBody = await copilotResponse.json() as { variable?: { id?: string; key?: string } };
+    expect(copilotBody.variable?.id).toBeTruthy();
+    copilotTokenVariable = {
+      id: copilotBody.variable!.id!,
+      key: copilotBody.variable!.key!,
+      scope: 'workspace',
+    };
+    agent = await createDatabaseAgentWithCopilotToken(request, authToken, 'pw-jira-force-agent', copilotTokenVariable.id);
     workflow = await createJiraPollingWorkflow(request, authToken, {
       agentId: agent.id,
       jiraSiteUrl: liveJira.config.baseUrl,
@@ -832,6 +903,7 @@ test('live Jira polling force-fire immediately polls and completes a workflow ex
       apiTokenVariableKey: variable.key,
       jql,
       isActive: true,
+      defaultModel: 'gpt-5-mini',
     });
 
     // Confirm connectivity before creating the Jira issue
@@ -886,9 +958,8 @@ test('live Jira polling force-fire immediately polls and completes a workflow ex
     await expect(page.getByRole('link', { name: workflow.name, exact: true })).toBeVisible();
     await expect(page.locator('main')).toContainText(/completed/i);
 
-    // The step output should be visible on the detail page
-    const mainContent = page.locator('main');
-    await expect(mainContent).toContainText(/weather|report/i);
+    // Step output text is verified via API above (see stepOutput.toMatch).
+    // The UI page collapses step output by default, so we don't assert it here.
   } finally {
     if (jiraIssue) {
       await deleteJiraIssue(liveJira.config, jiraIssue.key).catch((error: unknown) => {
@@ -898,13 +969,14 @@ test('live Jira polling force-fire immediately polls and completes a workflow ex
     if (workflow) await deleteWorkflow(request, authToken, workflow.id);
     if (agent) await deleteAgent(request, authToken, agent.id);
     if (variable) await deleteVariable(request, authToken, variable);
+    if (copilotTokenVariable) await deleteVariable(request, authToken, copilotTokenVariable);
   }
 });
 
 // ─── Jira fire endpoint: authorization enforcement ────────────────────────────
 
 test('non-admin user cannot force-fire a Jira trigger', async ({ page, request }) => {
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const { authToken: adminToken } = await getAuthContext(page);
 
   const variableDefinitions = [
@@ -988,7 +1060,7 @@ test('Jira polling trigger runtimeSummary reflects connectivity test result', as
     return;
   }
 
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const { authToken } = await getAuthContext(page);
 
   let variable: VariableRecord | null = null;
@@ -1035,7 +1107,7 @@ test('Jira polling trigger runtimeSummary reflects connectivity test result', as
     const triggerPanel = await openTab(page, /Triggers/i);
     await expect(triggerPanel).toContainText('Jira Polling');
     await expect(triggerPanel).toContainText('Inactive');
-    await expect(triggerPanel).toContainText('JQL:');
+    await expect(triggerPanel).toContainText(`project = ${liveJira.config.projectKey}`);
   } finally {
     if (workflow) await deleteWorkflow(request, authToken, workflow.id);
     if (agent) await deleteAgent(request, authToken, agent.id);
@@ -1167,7 +1239,7 @@ test('live Jira polling with ephemeral runtime + Copilot token credential comple
     return;
   }
 
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const { authToken } = await getAuthContext(page);
 
   const label = uniqueName('oao-eph-jira').toLowerCase();

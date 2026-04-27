@@ -213,7 +213,7 @@ async function deleteWorkflow(request: APIRequestContext, authToken: string, wor
 }
 
 test('workspace Copilot token variable can be assigned to an agent without exposing the token', async ({ page, request }) => {
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const { authToken } = await getAuthContext(page);
 
   const tokenValue = `ghp_playwright_placeholder_${uniqueName('token')}`;
@@ -262,7 +262,7 @@ test('workspace Copilot token variable can be assigned to an agent without expos
 });
 
 test('webhook workflow can reference an external HTTP credential without storing the secret in trigger config', async ({ page, request }) => {
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   const { authToken } = await getAuthContext(page);
 
   const webhookSecret = `https://hooks.slack.example/services/${uniqueName('secret')}`;

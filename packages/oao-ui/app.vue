@@ -123,6 +123,7 @@ const mainNav = computed(() => [
 const adminNav = computed(() => [
   { to: `/${ws.value}/admin/users`, icon: 'pi pi-users', label: 'Users' },
   { to: `/${ws.value}/admin/user-groups`, icon: 'pi pi-id-card', label: 'User Groups' },
+  { to: `/${ws.value}/admin/roles`, icon: 'pi pi-key', label: 'Roles' },
   { to: `/${ws.value}/admin/rbac`, icon: 'pi pi-sitemap', label: 'Roles & Access' },
   { to: `/${ws.value}/admin/auth-providers`, icon: 'pi pi-lock', label: 'Auth Providers' },
   { to: `/${ws.value}/admin/security`, icon: 'pi pi-shield', label: 'Security' },

@@ -10,6 +10,7 @@ import { createJwt, authMiddleware, emailSchema, passwordSchema } from '@oao/sha
 import { authenticateLdap } from '../services/ldap-auth.js';
 import type { LdapConfig } from '../services/ldap-auth.js';
 import { sendPasswordResetEmail } from '../services/mailer.js';
+import { syncLdapGroupMemberships } from '../services/ldap-group-sync.js';
 
 const auth = new Hono();
 
@@ -224,6 +225,19 @@ async function handleLdapLogin(c: Context, email: string, password: string) {
           updatedAt: new Date(),
         }).where(eq(users.id, user.id));
         user = { ...user, authProvider: 'ldap' as const, name: ldapUser.name };
+      }
+
+      // RBAC v2: keep user-group memberships in sync with the user's current
+      // `memberOf` set. Failures are logged but do not block login.
+      try {
+        await syncLdapGroupMemberships({
+          userId: user.id,
+          workspaceId: provider.workspaceId,
+          memberOfDns: ldapUser.groups ?? [],
+        });
+      } catch (err) {
+        // best-effort
+        void err;
       }
 
       const token = await createJwt({

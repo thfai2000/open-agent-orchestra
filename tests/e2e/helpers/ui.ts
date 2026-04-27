@@ -127,7 +127,7 @@ export async function openTab(page: Page, name: string | RegExp) {
 export async function loginViaUi(page: Page, params: {
   identifier: string;
   password: string;
-  providerLabel?: 'Email & Password' | 'Active Directory';
+  providerLabel?: 'Built-in Database' | 'Active Directory';
 }) {
   await page.context().clearCookies();
   const providersResponse = page.waitForResponse((response) => {
@@ -139,21 +139,20 @@ export async function loginViaUi(page: Page, params: {
 
   if (params.providerLabel) {
     const identifierLabel = page.locator('label[for="identifier"]').first();
-    const currentLabel = ((await identifierLabel.textContent()) || '').trim();
     const wantsLdap = params.providerLabel === 'Active Directory';
     const expectedIdentifierLabel = wantsLdap ? 'Username or Email' : 'Email';
-    const needsProviderSwitch = wantsLdap
-      ? currentLabel !== 'Username or Email'
-      : currentLabel !== 'Email';
 
-    const providerButton = page.getByRole('button', { name: params.providerLabel, exact: true }).first();
-    if (needsProviderSwitch && await providerButton.count()) {
-      await providerButton.click();
-      if (!await identifierLabel.filter({ hasText: new RegExp(`^${escapeRegex(expectedIdentifierLabel)}$`) }).isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await providerButton.click();
+    // The login page renders a PrimeVue Select labelled "Authentication Method"
+    // when more than one provider exists. Switch to the requested option, then
+    // wait for the identifier label to update.
+    const select = page.locator('label', { hasText: 'Authentication Method' }).first().locator('..').locator('.p-select, [data-pc-name="select"]').first();
+    if (await select.count()) {
+      const currentSelectionText = ((await select.textContent()) || '').trim();
+      if (!currentSelectionText.includes(params.providerLabel)) {
+        await selectOption(page, 'Authentication Method', params.providerLabel);
       }
-      await expect(identifierLabel).toHaveText(expectedIdentifierLabel);
     }
+    await expect(identifierLabel).toHaveText(expectedIdentifierLabel, { timeout: 5_000 });
   }
 
   await fillField(page, /Username or Email|Email/, params.identifier);

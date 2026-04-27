@@ -1,5 +1,5 @@
 import { test, expect } from './helpers/fixtures';
-import { ensureClusterLdap, cleanupClusterLdap, resetSuperAdminPassword, uniqueEmail, uniqueName } from './helpers/cluster';
+import { deleteLdapAuthProviders, ensureClusterLdap, cleanupClusterLdap, resetSuperAdminPassword, uniqueEmail, uniqueName } from './helpers/cluster';
 import { fillField, loginViaUi, logoutViaUi, selectOption } from './helpers/ui';
 
 const ADMIN_EMAIL = 'admin@oao.local';
@@ -26,7 +26,7 @@ test('database registration, logout, login, and password change work through the
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
 
   await logoutViaUi(page);
-  await loginViaUi(page, { identifier: email, password, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: email, password, providerLabel: 'Built-in Database' });
 
   const userButton = page.locator('header').getByRole('button').last();
   await userButton.click();
@@ -45,14 +45,14 @@ test('database registration, logout, login, and password change work through the
   await expect(page.locator('.p-message').filter({ hasText: 'Password updated successfully.' })).toBeVisible();
 
   await logoutViaUi(page);
-  await loginViaUi(page, { identifier: email, password: nextPassword, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: email, password: nextPassword, providerLabel: 'Built-in Database' });
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
 });
 
 test('superadmin can create a user and change that user role', async ({ page }) => {
   const managedEmail = uniqueEmail('managed-user');
 
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   await page.goto('/default/admin/users/new');
 
   await selectOption(page, 'Role', 'Viewer');
@@ -76,48 +76,51 @@ test('superadmin can create a user and change that user role', async ({ page }) 
 });
 
 test('superadmin can configure LDAP, test it, and an LDAP user can log in with a non-email identifier', async ({ page }) => {
+  // Clear any leftover LDAP providers from previous failed runs (canAddMore would otherwise be false).
+  deleteLdapAuthProviders();
   const ldapUrl = await ensureClusterLdap();
   const providerName = uniqueName('ldap-e2e');
 
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   await page.locator('aside a[href="/default/admin/auth-providers"]').first().click();
   await expect(page).toHaveURL(/\/default\/admin\/auth-providers$/);
   await page.waitForLoadState('networkidle');
 
-  const addProviderButton = page.getByRole('button', { name: /Add Provider/i });
-  const providerDialog = page.locator('.p-dialog').filter({ has: page.getByText(/^Add Provider$/) }).last();
-  await addProviderButton.click();
-  if (!await providerDialog.isVisible({ timeout: 3_000 }).catch(() => false)) {
-    await addProviderButton.click();
-  }
-  await expect(providerDialog).toBeVisible();
-  await selectOption(page, 'Type', 'LDAP', providerDialog);
-  await fillField(page, 'Name', providerName, providerDialog);
-  await fillField(page, 'Server URL', ldapUrl, providerDialog);
-  await fillField(page, 'Bind DN', 'uid=admin,ou=system', providerDialog);
-  await fillField(page, 'Bind Password', 'secret', providerDialog);
-  await providerDialog.getByPlaceholder('dc=example,dc=com', { exact: true }).fill('ou=users,dc=wimpi,dc=net');
-  await providerDialog.getByPlaceholder('(uid={{username}})', { exact: true }).fill('(cn={{username}})');
-  await providerDialog.getByPlaceholder('uid', { exact: true }).fill('cn');
-  await providerDialog.getByPlaceholder('mail', { exact: true }).fill('mail');
-  await providerDialog.getByPlaceholder('cn', { exact: true }).fill('cn');
-  await expect(providerDialog.getByPlaceholder('dc=example,dc=com', { exact: true })).toHaveValue('ou=users,dc=wimpi,dc=net');
-  await expect(providerDialog.getByPlaceholder('(uid={{username}})', { exact: true })).toHaveValue('(cn={{username}})');
-  await page.keyboard.press('Tab');
-  await providerDialog.getByRole('button', { name: /^Create$/ }).click({ force: true });
-  await expect(providerDialog).toBeHidden();
+  // Auth providers now use an in-page form (no dialog). Navigate to /new.
+  await page.getByRole('link', { name: /Add Provider/i }).first().click();
+  await expect(page).toHaveURL(/\/default\/admin\/auth-providers\/new$/);
+  await expect(page.getByRole('heading', { name: /Add Authentication Provider/i })).toBeVisible();
 
-  await expect(page.getByText(providerName)).toBeVisible();
+  await fillField(page, 'Name', providerName);
+  await selectOption(page, 'Type', 'LDAP');
+  await fillField(page, 'Server URL', ldapUrl);
+  await fillField(page, 'Bind DN', 'uid=admin,ou=system');
+  await fillField(page, 'Bind Password', 'secret');
+  await fillField(page, 'Search Base', 'ou=users,dc=wimpi,dc=net');
+  await fillField(page, 'Search Filter', '(cn={{username}})');
+  await fillField(page, 'Username Attribute', 'cn');
+  await fillField(page, 'Email Attribute', 'mail');
+  await fillField(page, 'Name Attribute', 'cn');
 
-  const row = page.locator('tr', { hasText: providerName });
+  await page.getByRole('button', { name: /^Create$/ }).click();
+  // Backend redirects to the new provider's edit page after creation.
+  await expect(page).toHaveURL(/\/default\/admin\/auth-providers\/[0-9a-f-]{36}$/, { timeout: 10_000 });
+  await expect(page.getByRole('heading', { name: providerName })).toBeVisible({ timeout: 10_000 });
+
+  // Test connection from the edit page.
   const testConnectionResponsePromise = page.waitForResponse((response) => {
     return response.url().includes('/api/auth-providers/test-connection') && response.request().method() === 'POST';
   });
-  await row.getByRole('button', { name: /Test/i }).click();
+  await page.getByRole('button', { name: /Test Connection/i }).click();
   const testConnectionResponse = await testConnectionResponsePromise;
   expect(testConnectionResponse.ok()).toBe(true);
   const testConnectionPayload = await testConnectionResponse.json() as { success?: boolean };
   expect(testConnectionPayload.success).toBe(true);
+
+  // Confirm the provider is listed before logging out.
+  await page.locator('aside a[href="/default/admin/auth-providers"]').first().click();
+  await expect(page).toHaveURL(/\/default\/admin\/auth-providers$/);
+  await expect(page.getByText(providerName)).toBeVisible();
 
   await logoutViaUi(page);
   await loginViaUi(page, {
@@ -128,14 +131,19 @@ test('superadmin can configure LDAP, test it, and an LDAP user can log in with a
   await expect(page.locator('header').getByRole('button').last()).toContainText(/Test User|test/i);
 
   await logoutViaUi(page);
-  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Email & Password' });
+  await loginViaUi(page, { identifier: ADMIN_EMAIL, password: ADMIN_PASSWORD, providerLabel: 'Built-in Database' });
   await page.locator('aside a[href="/default/admin/auth-providers"]').first().click();
   await expect(page).toHaveURL(/\/default\/admin\/auth-providers$/);
   await page.waitForLoadState('networkidle');
   await expect(page.getByText(providerName)).toBeVisible({ timeout: 10_000 });
-  const deleteRow = page.locator('tr', { hasText: providerName });
-  await deleteRow.locator('button').last().click();
+
+  // Delete via the edit page.
+  await page.locator('tr', { hasText: providerName }).getByRole('link').first().click();
+  await expect(page.getByRole('heading', { name: providerName })).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: /^Delete$/ }).click();
+  // PrimeVue confirm dialog
+  await page.getByRole('button', { name: /^Delete$/ }).last().click();
+  await expect(page).toHaveURL(/\/default\/admin\/auth-providers$/, { timeout: 10_000 });
   await expect(page.getByText(providerName)).toHaveCount(0);
 
   cleanupClusterLdap();

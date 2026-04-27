@@ -10,7 +10,7 @@
     <div class="flex items-center justify-between mb-6">
       <div>
         <div class="flex items-center gap-2">
-          <h1 class="text-3xl font-bold">{{ isNew ? 'Create Custom Model' : (form.displayName || form.name || 'Edit Model') }}</h1>
+          <h1 class="text-3xl font-bold">{{ isNew ? 'Create Model' : (form.displayName || form.name || 'Edit Model') }}</h1>
         </div>
         <div class="flex flex-wrap items-center gap-1.5 mt-1">
           <Tag v-if="!isNew" :value="isCatalogRow ? 'GitHub Catalog (managed)' : 'Custom'" :severity="isCatalogRow ? 'info' : 'warn'" />

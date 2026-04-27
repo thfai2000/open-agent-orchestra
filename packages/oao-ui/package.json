@@ -1,6 +1,6 @@
 {
   "name": "@oao/oao-ui",
-  "version": "1.40.0",
+  "version": "2.0.1",
   "private": true,
   "type": "module",
   "scripts": {
