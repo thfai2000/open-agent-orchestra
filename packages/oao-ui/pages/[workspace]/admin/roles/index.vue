@@ -15,10 +15,19 @@
           under <NuxtLink :to="`/${ws}/admin/user-groups`" class="underline">User Groups</NuxtLink>.
         </p>
       </div>
-      <Button label="Create Role" icon="pi pi-plus" @click="openCreate" />
+      <Button label="Create Role" icon="pi pi-plus" :disabled="!canEdit" @click="openCreate" />
     </div>
 
-    <DataTable v-if="!editingId" :value="roles" stripedRows dataKey="id" :rowClass="() => 'cursor-pointer'" @rowClick="(e) => editingId = e.data.id">
+    <div v-if="pageError" class="mb-6">
+      <Message severity="error" :closable="false">{{ pageError }}</Message>
+      <div class="mt-3">
+        <Button label="Retry" icon="pi pi-refresh" severity="secondary" @click="loadPage" />
+      </div>
+    </div>
+
+    <div v-else-if="pageLoading && !editingId" class="py-12 text-center text-surface-400">Loading roles...</div>
+
+    <DataTable v-else-if="!editingId" :value="roles" stripedRows dataKey="id" :rowClass="() => 'cursor-pointer'" @rowClick="(e) => editingId = e.data.id">
       <template #empty><div class="text-center py-8 text-surface-400">No roles yet.</div></template>
       <Column header="Name" style="min-width: 220px">
         <template #body="{ data }">
@@ -44,34 +53,38 @@
     <!-- Edit pane -->
     <div v-else>
       <Button icon="pi pi-arrow-left" label="Back to roles" text @click="closeEdit" class="mb-4" />
-      <h2 class="text-2xl font-bold mb-1">{{ currentRole?.role?.name }}</h2>
-      <div class="flex flex-wrap items-center gap-1.5 mt-1 mb-4">
-        <Tag v-if="currentRole?.role?.isSystem" value="System role" severity="info" />
-        <Tag v-if="currentRole?.role?.workspaceId === null" value="Global" severity="secondary" />
-        <Tag :value="`${selectedKeys.length} flag${selectedKeys.length === 1 ? '' : 's'}`" />
-      </div>
-      <p v-if="currentRole?.role?.description" class="text-sm text-surface-400 mb-4">{{ currentRole.role.description }}</p>
+      <div v-if="detailLoading" class="py-12 text-center text-surface-400">Loading role...</div>
+      <div v-else-if="currentRole">
+        <h2 class="text-2xl font-bold mb-1">{{ currentRole.role.name }}</h2>
+        <div class="flex flex-wrap items-center gap-1.5 mt-1 mb-4">
+          <Tag v-if="currentRole.role.isSystem" value="System role" severity="info" />
+          <Tag v-if="currentRole.role.workspaceId === null" value="Global" severity="secondary" />
+          <Tag :value="`${selectedKeys.length} flag${selectedKeys.length === 1 ? '' : 's'}`" />
+        </div>
+        <p v-if="currentRole.role.description" class="text-sm text-surface-400 mb-4">{{ currentRole.role.description }}</p>
 
-      <h3 class="text-lg font-semibold mb-2">Functionalities</h3>
-      <p class="text-sm text-surface-400 mb-4">Tick the actions this role can perform. <span v-if="!canEdit">You need <code>admin:rbac:manage</code> to edit.</span></p>
+        <h3 class="text-lg font-semibold mb-2">Functionalities</h3>
+        <p class="text-sm text-surface-400 mb-4">Tick the actions this role can perform. <span v-if="!canEdit">You need <code>admin:rbac:manage</code> to edit.</span></p>
 
-      <div v-for="(group, cat) in groupedFunctionalities" :key="cat" class="mb-6">
-        <h4 class="text-md font-semibold mb-2 capitalize">{{ cat }}</h4>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-2 pl-2">
-          <label v-for="f in group" :key="f.key" class="flex items-start gap-2 cursor-pointer">
-            <Checkbox v-model="selectedKeys" :inputId="f.key" :value="f.key" :disabled="!canEdit" />
-            <div>
-              <div class="text-sm font-medium">{{ f.label }} <code class="text-xs text-surface-500">{{ f.key }}</code></div>
-              <div v-if="f.description" class="text-xs text-surface-500">{{ f.description }}</div>
-            </div>
-          </label>
+        <div v-for="(group, cat) in groupedFunctionalities" :key="cat" class="mb-6">
+          <h4 class="text-md font-semibold mb-2 capitalize">{{ cat }}</h4>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2 pl-2">
+            <label v-for="f in group" :key="f.key" class="flex items-start gap-2 cursor-pointer">
+              <Checkbox v-model="selectedKeys" :inputId="f.key" :value="f.key" :disabled="!canEdit" />
+              <div>
+                <div class="text-sm font-medium">{{ f.label }} <code class="text-xs text-surface-500">{{ f.key }}</code></div>
+                <div v-if="f.description" class="text-xs text-surface-500">{{ f.description }}</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="flex justify-end gap-2 sticky bottom-0 bg-surface-900 py-3">
+          <Button label="Reset" severity="secondary" @click="resetSelection" />
+          <Button label="Save" icon="pi pi-check" :loading="saving" :disabled="!canEdit" @click="saveBindings" />
         </div>
       </div>
-
-      <div class="flex justify-end gap-2 sticky bottom-0 bg-surface-900 py-3">
-        <Button label="Reset" severity="secondary" @click="resetSelection" />
-        <Button label="Save" icon="pi pi-check" :loading="saving" :disabled="!canEdit" @click="saveBindings" />
-      </div>
+      <div v-else class="py-12 text-center text-surface-400">Role not found.</div>
     </div>
 
     <Dialog v-model:visible="createDialogVisible" header="Create Role" :style="{ width: '32rem' }" modal>
@@ -107,6 +120,9 @@ const currentRole = ref<RoleDetail | null>(null);
 const selectedKeys = ref<string[]>([]);
 const initialKeys = ref<string[]>([]);
 const saving = ref(false);
+const pageLoading = ref(false);
+const detailLoading = ref(false);
+const pageError = ref('');
 const effectiveFlags = ref<Set<string>>(new Set());
 
 const createDialogVisible = ref(false);
@@ -148,19 +164,47 @@ async function loadEffective() {
 }
 
 async function loadRole(id: string) {
-  const data = await $fetch<RoleDetail>(`/api/roles/${id}`, { baseURL: '/', headers });
-  currentRole.value = data;
-  selectedKeys.value = [...data.functionalityKeys];
-  initialKeys.value = [...data.functionalityKeys];
+  detailLoading.value = true;
+  pageError.value = '';
+  try {
+    const data = await $fetch<RoleDetail>(`/api/roles/${id}`, { baseURL: '/', headers });
+    currentRole.value = data;
+    selectedKeys.value = [...data.functionalityKeys];
+    initialKeys.value = [...data.functionalityKeys];
+  } catch (e: unknown) {
+    pageError.value = (e as { data?: { error?: string } })?.data?.error ?? 'Failed to load role details.';
+    currentRole.value = null;
+    selectedKeys.value = [];
+    initialKeys.value = [];
+  } finally {
+    detailLoading.value = false;
+  }
 }
 
 watch(editingId, async (id) => {
   if (id) await loadRole(id);
-  else { currentRole.value = null; selectedKeys.value = []; initialKeys.value = []; }
+  else {
+    currentRole.value = null;
+    selectedKeys.value = [];
+    initialKeys.value = [];
+    pageError.value = '';
+  }
 });
 
 function closeEdit() { editingId.value = null; }
 function resetSelection() { selectedKeys.value = [...initialKeys.value]; }
+
+async function loadPage() {
+  pageLoading.value = true;
+  pageError.value = '';
+  try {
+    await Promise.all([loadRoles(), loadFunctionalities(), loadEffective()]);
+  } catch (e: unknown) {
+    pageError.value = (e as { data?: { error?: string } })?.data?.error ?? 'Failed to load roles.';
+  } finally {
+    pageLoading.value = false;
+  }
+}
 
 async function saveBindings() {
   if (!editingId.value) return;
@@ -192,7 +236,5 @@ async function submitCreate() {
   } finally { creating.value = false; }
 }
 
-onMounted(async () => { await Promise.all([loadRoles(), loadFunctionalities(), loadEffective()]); });
-
-definePageMeta({ middleware: 'auth' });
+onMounted(() => { void loadPage(); });
 </script>

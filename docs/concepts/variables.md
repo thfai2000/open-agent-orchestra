@@ -1,12 +1,14 @@
 # Variables
 
-The platform provides a three-tier encrypted variable system for managing credentials and configuration.
+The platform provides encrypted variables for shared configuration, user-level overrides, agent-level credentials, and workflow-level runtime properties.
 
-The UI manages variables with breadcrumb-based pages:
+The UI manages variables from these surfaces:
 
-- `/{workspace}/variables` — list all workspace, user, and agent-scoped variables
-- `/{workspace}/variables/{scope}/{id}` — latest editable variable page
+- `/{workspace}/variables` — list and edit workspace and user-scoped variables
+- `/{workspace}/variables/{scope}/{id}` — latest editable variable page for workspace and user scopes, plus direct deep links when needed
 - `/{workspace}/variables/{scope}/{id}/v/{version}` — read-only historical variable page
+- `/{workspace}/agents/{id}?tab=variables` — agent-scoped variable CRUD on the agent detail page
+- `/{workspace}/workflows/{id}?tab=variables` — workflow-scoped variable CRUD on the workflow detail page
 
 ## Variable Types
 
@@ -14,14 +16,15 @@ The UI manages variables with breadcrumb-based pages:
 |---|---|---|
 | **Credential** | AES-256-GCM encrypted | API keys, tokens, passwords — injected into Copilot session credential map |
 | **Property** | AES-256-GCM encrypted | Configuration values, settings — injectable into prompt templates |
+| **Short Memory** | JSONB (per-agent KV with TTL) | Persistent agent recollection across executions — see [Visual Workflows](/concepts/visual-workflows#variables-and-memory) |
 
 ## Properties
 
-Properties are injected into prompt templates using <code v-pre>{{ Properties.KEY }}</code> syntax:
+Properties are injected into prompt templates using `{{ properties.KEY }}` syntax:
 
 ```txt
-Analyze the market for {⁣{ Properties.MARKET_SYMBOL }⁣}.
-Current risk tolerance: {⁣{ Properties.RISK_LEVEL }⁣}.
+Analyze the market for {{ properties.MARKET_SYMBOL }}.
+Current risk tolerance: {{ properties.RISK_LEVEL }}.
 ```
 
 The engine replaces these tokens with decrypted values before sending to Copilot.
@@ -43,23 +46,29 @@ Structured credential subtypes such as GitHub App, User Account, Private Key, an
 
 ## Scoping & Priority
 
-Variables exist at three levels. When the same key exists at multiple levels, the most specific scope wins:
+Variables resolve across five levels during execution. When the same key exists at multiple levels, the most specific scope wins:
 
 ```mermaid
 graph TB
-    AV["Agent Variables<br/>(highest priority)"] --> UV["User Variables<br/>(medium priority)"]
-    UV --> WV["Workspace Variables<br/>(lowest priority)"]
+  EV["Execution Inputs<br/>(highest priority)"] --> AV["Agent Variables"]
+  AV --> WF["Workflow Variables"]
+  WF --> UV["User Variables"]
+  UV --> WV["Workspace Variables<br/>(lowest priority)"]
 
-    style AV fill:#4CAF50,color:#fff
-    style UV fill:#2196F3,color:#fff
-    style WV fill:#9E9E9E,color:#fff
+  style EV fill:#7C3AED,color:#fff
+  style AV fill:#4CAF50,color:#fff
+  style WF fill:#F59E0B,color:#fff
+  style UV fill:#2196F3,color:#fff
+  style WV fill:#9E9E9E,color:#fff
 ```
 
-**Resolution order**: Agent → User → Workspace
+**Resolution order**: Execution → Agent → Workflow → User → Workspace
+
+Workflow-scoped variables only participate when the agent is running inside that workflow.
 
 ## Versioning
 
-Variables are first-class versioned resources across **all three scopes**.
+Workspace, user, and agent variables are first-class versioned resources.
 
 - The latest editable page lives at `/{workspace}/variables/{scope}/{id}`
 - Historical snapshots live at `/{workspace}/variables/{scope}/{id}/v/{version}`
@@ -68,17 +77,21 @@ Variables are first-class versioned resources across **all three scopes**.
 - Deleting a variable preserves a final read-only historical snapshot marked as deleted
 - Agent-scoped variable changes also increment the owning agent version so agent history remains aligned with its files and variables
 
+Workflow-scoped variables are versioned through workflow history on the workflow detail page rather than the generic `/variables` routes.
+
 Credential values remain masked in both live and historical views. Version history tracks metadata, scope, env-injection settings, and lifecycle state without exposing the stored secret.
 
 ### Example
 
-If `API_KEY` is defined at all three levels:
+If `API_KEY` is defined at every level during a workflow run:
 
 | Scope | Value | Resolved? |
 |---|---|---|
 | Workspace | `ws-key-123` | No |
 | User | `user-key-456` | No |
-| Agent | `agent-key-789` | **Yes** ← wins |
+| Workflow | `wf-key-789` | No |
+| Agent | `agent-key-999` | No |
+| Execution | `run-key-123` | **Yes** ← wins |
 
 ## Environment Variable Injection
 
@@ -100,12 +113,12 @@ All variable keys must match: `^[A-Z_][A-Z0-9_]*$` (UPPER_SNAKE_CASE)
 
 ## Access Control
 
-| Role | User Variables | Workspace Variables | Agent Variables |
-|---|---|---|---|
-| `super_admin` | Full CRUD | Full CRUD | Full CRUD |
-| `workspace_admin` | Full CRUD | Full CRUD | Full CRUD |
-| `creator_user` | Own only | Read only | Own agents only |
-| `view_user` | Read own | Read only | Read only |
+| Role | User Variables | Workspace Variables | Agent Variables | Workflow Variables |
+|---|---|---|---|---|
+| `super_admin` | Full CRUD | Full CRUD | Full CRUD | Full CRUD |
+| `workspace_admin` | Full CRUD | Full CRUD | Full CRUD | Full CRUD |
+| `creator_user` | Own only | Read only | Own agents only | Own workflows only |
+| `view_user` | Read own | Read only | Read only | Read only |
 
 ## Credential Reference
 
@@ -173,5 +186,19 @@ curl -X POST http://localhost:4002/api/variables \
     "value": "sk-...",
     "variableType": "credential",
     "injectAsEnvVariable": true
+  }'
+```
+
+### Create a workflow variable
+
+```bash
+curl -X PUT http://localhost:4002/api/workflow-graph/<workflow-id>/variables \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "key": "API_KEY",
+    "value": "wf-override",
+    "type": "credential",
+    "description": "Workflow-specific override"
   }'
 ```

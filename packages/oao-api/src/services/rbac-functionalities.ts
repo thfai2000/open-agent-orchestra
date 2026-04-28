@@ -152,3 +152,23 @@ export const SYSTEM_ROLES: Array<{
 ];
 
 export const SYSTEM_ROLE_NAMES = SYSTEM_ROLES.map((r) => r.name) as ReadonlyArray<string>;
+
+const LEGACY_ROLE_TO_SYSTEM_ROLE = {
+  super_admin: 'super_admin',
+  workspace_admin: 'workspace_admin',
+  creator_user: 'creator',
+  view_user: 'viewer',
+} as const;
+
+const SYSTEM_ROLE_MAP = new Map(SYSTEM_ROLES.map((role) => [role.name, role] as const));
+
+export function mapLegacyRoleToSystemRoleName(role: string | null | undefined) {
+  if (!role) return null;
+  return LEGACY_ROLE_TO_SYSTEM_ROLE[role as keyof typeof LEGACY_ROLE_TO_SYSTEM_ROLE] ?? null;
+}
+
+export function getSystemRoleDefaultFunctionalities(role: string | null | undefined): ReadonlyArray<string> {
+  const systemRoleName = mapLegacyRoleToSystemRoleName(role);
+  if (!systemRoleName) return [];
+  return SYSTEM_ROLE_MAP.get(systemRoleName)?.functionalities ?? [];
+}

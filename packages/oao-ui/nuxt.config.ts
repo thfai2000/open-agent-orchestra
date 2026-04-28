@@ -1,5 +1,10 @@
+import { readFileSync } from 'node:fs';
 import Aura from '@primevue/themes/aura';
 import { definePreset } from '@primevue/themes';
+
+const rootPackage = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
+  version?: string;
+};
 
 const OaoPreset = definePreset(Aura, {
   semantic: {
@@ -22,6 +27,11 @@ const OaoPreset = definePreset(Aura, {
 export default defineNuxtConfig({
   extends: ['../ui-base'],
   devServer: { port: 3002 },
+  runtimeConfig: {
+    public: {
+      appVersion: process.env.NUXT_PUBLIC_APP_VERSION || rootPackage.version || '0.0.0',
+    },
+  },
   modules: ['@primevue/nuxt-module'],
   primevue: {
     options: {

@@ -3,7 +3,13 @@
  * The DB-backed resolver is exercised in E2E tests against a live deployment.
  */
 import { describe, it, expect } from 'vitest';
-import { FUNCTIONALITY_CATALOG, SYSTEM_ROLES, SYSTEM_ROLE_NAMES } from '../src/services/rbac-functionalities.js';
+import {
+  FUNCTIONALITY_CATALOG,
+  SYSTEM_ROLES,
+  SYSTEM_ROLE_NAMES,
+  getSystemRoleDefaultFunctionalities,
+  mapLegacyRoleToSystemRoleName,
+} from '../src/services/rbac-functionalities.js';
 import { setHasFunctionality } from '../src/services/rbac.js';
 
 describe('FUNCTIONALITY_CATALOG', () => {
@@ -60,6 +66,21 @@ describe('SYSTEM_ROLES', () => {
         expect(validKeys.has(fk), `unknown key ${fk} on ${r.name}`).toBe(true);
       }
     }
+  });
+
+  it('maps legacy user roles onto the matching system roles', () => {
+    expect(mapLegacyRoleToSystemRoleName('super_admin')).toBe('super_admin');
+    expect(mapLegacyRoleToSystemRoleName('workspace_admin')).toBe('workspace_admin');
+    expect(mapLegacyRoleToSystemRoleName('creator_user')).toBe('creator');
+    expect(mapLegacyRoleToSystemRoleName('view_user')).toBe('viewer');
+    expect(mapLegacyRoleToSystemRoleName('unknown_role')).toBeNull();
+  });
+
+  it('exposes default functionality fallbacks for legacy admin roles', () => {
+    expect(getSystemRoleDefaultFunctionalities('super_admin')).toContain('*');
+    expect(getSystemRoleDefaultFunctionalities('workspace_admin')).toContain('admin:rbac:read');
+    expect(getSystemRoleDefaultFunctionalities('workspace_admin')).toContain('admin:rbac:manage');
+    expect(getSystemRoleDefaultFunctionalities('unknown_role')).toEqual([]);
   });
 });
 

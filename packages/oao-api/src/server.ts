@@ -9,6 +9,7 @@ import agentsRouter from './routes/agents.js';
 import authRouter from './routes/auth.js';
 import authProvidersRouter from './routes/auth-providers.js';
 import workflowsRouter from './routes/workflows.js';
+import workflowGraphRouter from './routes/workflow-graph.js';
 import executionsRouter from './routes/executions.js';
 import variablesRouter from './routes/variables.js';
 import triggersRouter from './routes/triggers.js';
@@ -51,6 +52,7 @@ const app = createApp({
     ['/api/auth-providers', authProvidersRouter],
     ['/api/agents', agentsRouter],
     ['/api/workflows', workflowsRouter],
+    ['/api/workflow-graph', workflowGraphRouter],
     ['/api/executions', executionsRouter],
     ['/api/variables', variablesRouter],
     ['/api/triggers', triggersRouter],

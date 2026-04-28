@@ -62,6 +62,20 @@ vi.mock('../src/database/index.js', () => ({
   db: mockDb,
 }));
 
+// ─── Mock workspace-settings (controls credential guardrail) ────────
+const mockWorkspaceSettings = vi.fn();
+vi.mock('../src/services/workspace-settings.js', () => ({
+  getWorkspaceSettings: mockWorkspaceSettings,
+  invalidateWorkspaceSettingsCache: vi.fn(),
+  DEFAULT_SETTINGS: {
+    allowRegistration: true,
+    allowPasswordReset: true,
+    ephemeralKeepAliveMs: 3_600_000,
+    staticCleanupIntervalMs: 86_400_000,
+    disallowCredentialAccessViaTools: true,
+  },
+}));
+
 // ─── Mock embedding service ─────────────────────────────────────────
 vi.mock('../src/services/embedding-service.js', () => ({
   generateEmbedding: vi.fn().mockResolvedValue(new Array(1536).fill(0.01)),
@@ -390,6 +404,20 @@ describe('agent-tools: edit_workflow', () => {
 });
 
 describe('agent-tools: read_variables', () => {
+  // Existing baseline tests run with guardrail OFF so they exercise the
+  // legacy "show all + mask credential" behavior. The dedicated guardrail
+  // describe below covers the default ON path.
+  beforeEach(() => {
+    mockWorkspaceSettings.mockResolvedValue({
+      workspaceId: '550e8400-e29b-41d4-a716-446655440099',
+      allowRegistration: true,
+      allowPasswordReset: true,
+      ephemeralKeepAliveMs: 3_600_000,
+      staticCleanupIntervalMs: 86_400_000,
+      disallowCredentialAccessViaTools: false,
+    });
+  });
+
   it('reads agent-scoped variables', async () => {
     mockDb.query.agentVariables.findMany.mockResolvedValueOnce([
       { id: 'v1', key: 'API_KEY', variableType: 'credential', valueEncrypted: 'enc_value', description: null, injectAsEnvVariable: false },
@@ -405,9 +433,10 @@ describe('agent-tools: read_variables', () => {
     expect(result).toBeDefined();
     expect(result.variables).toBeDefined();
     expect(result.variables.length).toBe(2);
-    // Credential values should be masked
+    // Credential values are never returned verbatim; they appear only as a
+    // pointer to the {{ credentials.* }} Jinja syntax used server-side.
     const credVar = result.variables.find((v: { key: string }) => v.key === 'API_KEY');
-    expect(credVar.value).toBe('••••••••');
+    expect(credVar.value).toContain('credentials.API_KEY');
   });
 
   it('reads user-scoped variables', async () => {
@@ -571,5 +600,96 @@ describe('agent-tools: simple_http_request credential masking', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Credential guardrail — workspace-level "always disallow agent
+// access to credential variables through agent tools"
+// ═══════════════════════════════════════════════════════════════════
+describe('agent-tools: credential guardrail (read_variables)', () => {
+  const CONTEXT_WITH_WS = { ...TEST_CONTEXT, workspaceId: '550e8400-e29b-41d4-a716-446655440099' };
+
+  beforeEach(() => {
+    mockDb.query.agentVariables.findMany.mockResolvedValue([
+      { id: 'v1', key: 'API_BASE', variableType: 'property', description: '', injectAsEnvVariable: false },
+      { id: 'v2', key: 'API_TOKEN', variableType: 'credential', description: '', injectAsEnvVariable: true },
+    ]);
+    mockDb.query.userVariables.findMany.mockResolvedValue([
+      { id: 'u1', key: 'USER_PREF', variableType: 'property', description: '', injectAsEnvVariable: false },
+      { id: 'u2', key: 'USER_KEY', variableType: 'credential', description: '', injectAsEnvVariable: false },
+    ]);
+  });
+
+  it('strips credential rows from agent scope when guardrail is ON (default)', async () => {
+    mockWorkspaceSettings.mockResolvedValue({
+      workspaceId: CONTEXT_WITH_WS.workspaceId,
+      allowRegistration: true,
+      allowPasswordReset: true,
+      ephemeralKeepAliveMs: 3_600_000,
+      staticCleanupIntervalMs: 86_400_000,
+      disallowCredentialAccessViaTools: true,
+    });
+    const { createAgentTools } = await import('../src/services/agent-tools.js');
+    const tool = createAgentTools(new Map(), CONTEXT_WITH_WS).find(t => t.name === 'read_variables');
+    expect(tool).toBeDefined();
+    const r: any = await tool!.handler({ scope: 'agent', variableType: 'all' });
+    expect(r.guardrailEnforced).toBe(true);
+    expect(r.variables).toHaveLength(1);
+    expect(r.variables[0].key).toBe('API_BASE');
+    expect(r.variables.find((v: any) => v.variableType === 'credential')).toBeUndefined();
+  });
+
+  it('returns empty list with explanatory note when filter=credential and guardrail ON', async () => {
+    mockWorkspaceSettings.mockResolvedValue({
+      workspaceId: CONTEXT_WITH_WS.workspaceId,
+      allowRegistration: true,
+      allowPasswordReset: true,
+      ephemeralKeepAliveMs: 3_600_000,
+      staticCleanupIntervalMs: 86_400_000,
+      disallowCredentialAccessViaTools: true,
+    });
+    const { createAgentTools } = await import('../src/services/agent-tools.js');
+    const tool = createAgentTools(new Map(), CONTEXT_WITH_WS).find(t => t.name === 'read_variables');
+    const r: any = await tool!.handler({ scope: 'agent', variableType: 'credential' });
+    expect(r.variables).toEqual([]);
+    expect(r.note).toContain('Credential access via agent tools is disabled');
+  });
+
+  it('returns credential rows (masked) when guardrail is OFF', async () => {
+    mockWorkspaceSettings.mockResolvedValue({
+      workspaceId: CONTEXT_WITH_WS.workspaceId,
+      allowRegistration: true,
+      allowPasswordReset: true,
+      ephemeralKeepAliveMs: 3_600_000,
+      staticCleanupIntervalMs: 86_400_000,
+      disallowCredentialAccessViaTools: false,
+    });
+    const { createAgentTools } = await import('../src/services/agent-tools.js');
+    const tool = createAgentTools(new Map(), CONTEXT_WITH_WS).find(t => t.name === 'read_variables');
+    const r: any = await tool!.handler({ scope: 'agent', variableType: 'all' });
+    expect(r.guardrailEnforced).toBe(false);
+    expect(r.variables).toHaveLength(2);
+    const cred = r.variables.find((v: any) => v.variableType === 'credential');
+    expect(cred).toBeDefined();
+    // Even when guardrail is off, the actual secret value is never returned.
+    expect(cred.value).not.toContain('TOKEN_VALUE');
+    expect(JSON.stringify(r)).not.toContain('TOKEN_VALUE');
+  });
+
+  it('strips credentials from user scope when guardrail is ON', async () => {
+    mockWorkspaceSettings.mockResolvedValue({
+      workspaceId: CONTEXT_WITH_WS.workspaceId,
+      allowRegistration: true,
+      allowPasswordReset: true,
+      ephemeralKeepAliveMs: 3_600_000,
+      staticCleanupIntervalMs: 86_400_000,
+      disallowCredentialAccessViaTools: true,
+    });
+    const { createAgentTools } = await import('../src/services/agent-tools.js');
+    const tool = createAgentTools(new Map(), CONTEXT_WITH_WS).find(t => t.name === 'read_variables');
+    const r: any = await tool!.handler({ scope: 'user', variableType: 'all' });
+    expect(r.variables).toHaveLength(1);
+    expect(r.variables[0].key).toBe('USER_PREF');
   });
 });

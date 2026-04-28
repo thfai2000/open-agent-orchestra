@@ -90,6 +90,7 @@ export default withMermaid(
             text: 'Automation',
             items: [
               { text: 'Workflows', link: '/concepts/workflows' },
+              { text: 'Visual Workflows (Graph Mode)', link: '/concepts/visual-workflows' },
               { text: 'Agent Steps', link: '/concepts/agent-steps' },
               { text: 'Workflow Engine & Controller', link: '/concepts/workflow-engine' },
             ],

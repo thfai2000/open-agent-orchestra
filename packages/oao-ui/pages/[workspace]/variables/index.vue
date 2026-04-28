@@ -10,7 +10,7 @@
     <div class="flex items-center justify-between mb-6">
       <div>
         <h1 class="text-2xl font-semibold">Variables</h1>
-        <p class="text-surface-500 text-sm mt-1">Manage workspace, user, and agent-scoped variables with version history</p>
+        <p class="text-surface-500 text-sm mt-1">Manage workspace and user-scoped variables with version history.</p>
       </div>
       <Button label="Create Variable" icon="pi pi-plus" @click="showCreate = true" />
     </div>
@@ -70,10 +70,7 @@
       <Message v-if="formError" severity="error" :closable="false" class="mb-3">{{ formError }}</Message>
       <div class="flex flex-col gap-3">
         <div class="flex flex-col gap-2"><label class="text-sm font-medium">Scope *</label>
-          <Select v-model="form.scope" :options="[{ label: 'User', value: 'user' }, { label: 'Workspace', value: 'workspace' }, { label: 'Agent', value: 'agent' }]" optionLabel="label" optionValue="value" />
-        </div>
-        <div v-if="form.scope === 'agent'" class="flex flex-col gap-2"><label class="text-sm font-medium">Agent *</label>
-          <Select v-model="form.agentId" :options="agentOptions" optionLabel="name" optionValue="id" placeholder="Select agent" />
+          <Select v-model="form.scope" :options="scopeOptions" optionLabel="label" optionValue="value" />
         </div>
         <div class="flex flex-col gap-2"><label class="text-sm font-medium">Key *</label>
           <InputText v-model="form.key" placeholder="MY_SECRET_KEY" />
@@ -128,7 +125,6 @@ const formError = ref('');
 const scopeOptions = [
   { label: 'Workspace', value: 'workspace' },
   { label: 'User', value: 'user' },
-  { label: 'Agent', value: 'agent' },
 ];
 
 const credSubTypes = [
@@ -141,53 +137,32 @@ const credSubTypes = [
 ];
 
 const form = reactive({
-  scope: 'workspace' as string, agentId: null as string | null,
+  scope: 'workspace' as string,
   key: '', value: '', variableType: 'credential', credentialSubType: 'secret_text',
   description: '', injectAsEnvVariable: false,
 });
-const editForm = reactive({ id: '', key: '', value: '', description: '', injectAsEnvVariable: false, _scope: '', agentId: null as string | null });
+const editForm = reactive({ id: '', key: '', value: '', description: '', injectAsEnvVariable: false, _scope: '' });
 
 // Fetch variables for each scope
 const { data: wsVarsData, refresh: refreshWs } = await useFetch('/api/variables?scope=workspace', { headers });
 const { data: userVarsData, refresh: refreshUser } = await useFetch('/api/variables?scope=user', { headers });
 
-const { data: agentsData } = await useFetch('/api/agents', { headers });
-const agentOptions = computed(() => (agentsData.value as any)?.agents ?? []);
-
-const agentVarsMap = ref<Record<string, any[]>>({});
-
-async function loadAgentVars() {
-  const map: Record<string, any[]> = {};
-  for (const agent of agentOptions.value) {
-    try {
-      const res = await $fetch<any>(`/api/variables?scope=agent&agentId=${agent.id}`, { headers });
-      map[agent.id] = (res?.variables ?? []).map((v: any) => ({ ...v, _scope: 'agent', _agentName: agent.name }));
-    } catch { /* skip */ }
-  }
-  agentVarsMap.value = map;
-}
-
-onMounted(() => { if (agentOptions.value.length > 0) loadAgentVars(); });
-watch(agentOptions, (a) => { if (a.length > 0) loadAgentVars(); });
-
 const wsVars = computed(() => ((wsVarsData.value as any)?.variables ?? []).map((v: any) => ({ ...v, _scope: 'workspace' })));
 const userVars = computed(() => ((userVarsData.value as any)?.variables ?? []).map((v: any) => ({ ...v, _scope: 'user' })));
-const agentVars = computed(() => Object.values(agentVarsMap.value).flat());
 
 const filteredVars = computed(() => {
-  if (scope.value === 'agent') return agentVars.value;
   if (scope.value === 'user') return userVars.value;
   return wsVars.value;
 });
 
-function scopeSeverity(s: string) { return { user: 'info', workspace: 'success', agent: 'warn' }[s] || 'secondary'; }
+function scopeSeverity(s: string) { return { user: 'info', workspace: 'success' }[s] || 'secondary'; }
 
 function variableDetailPath(scopeValue: string, id: string) {
   return `/${ws.value}/variables/${scopeValue}/${id}`;
 }
 
 async function refreshAll() {
-  await Promise.all([refreshWs(), refreshUser(), loadAgentVars()]);
+  await Promise.all([refreshWs(), refreshUser()]);
 }
 
 async function handleCreate() {
@@ -199,11 +174,10 @@ async function handleCreate() {
       credentialSubType: form.credentialSubType, description: form.description,
       injectAsEnvVariable: form.injectAsEnvVariable, scope: form.scope,
     };
-    if (form.scope === 'agent') body.agentId = form.agentId;
     await $fetch('/api/variables', { method: 'POST', headers, body });
     showCreate.value = false;
     toast.add({ severity: 'success', summary: 'Created', life: 3000 });
-    Object.assign(form, { key: '', value: '', variableType: 'credential', credentialSubType: 'secret_text', description: '', injectAsEnvVariable: false, agentId: null });
+    Object.assign(form, { scope: 'workspace', key: '', value: '', variableType: 'credential', credentialSubType: 'secret_text', description: '', injectAsEnvVariable: false });
     await refreshAll();
   } catch (e: any) {
     formError.value = e?.data?.error || 'Failed to create variable';
@@ -213,7 +187,7 @@ async function handleCreate() {
 }
 
 function startEdit(v: any) {
-  Object.assign(editForm, { id: v.id, key: v.key, value: '', description: v.description || '', injectAsEnvVariable: v.injectAsEnvVariable || false, _scope: v._scope, agentId: v.agentId || null });
+  Object.assign(editForm, { id: v.id, key: v.key, value: '', description: v.description || '', injectAsEnvVariable: v.injectAsEnvVariable || false, _scope: v._scope });
   showEdit.value = true;
 }
 
@@ -222,7 +196,6 @@ async function handleUpdate() {
   try {
     const body: any = { description: editForm.description, injectAsEnvVariable: editForm.injectAsEnvVariable, scope: editForm._scope };
     if (editForm.value) body.value = editForm.value;
-    if (editForm.agentId) body.agentId = editForm.agentId;
     await $fetch(`/api/variables/${editForm.id}`, { method: 'PUT', headers, body });
     showEdit.value = false;
     toast.add({ severity: 'success', summary: 'Updated', life: 3000 });
@@ -239,9 +212,7 @@ function handleDelete(v: any) {
     message: `Delete variable "${v.key}"?`, header: 'Confirm', icon: 'pi pi-exclamation-triangle',
     rejectProps: { label: 'Cancel', severity: 'secondary' }, acceptProps: { label: 'Delete', severity: 'danger' },
     accept: async () => {
-      const params = new URLSearchParams({ scope: v._scope });
-      if (v.agentId) params.set('agentId', v.agentId);
-      await $fetch(`/api/variables/${v.id}?${params.toString()}`, { method: 'DELETE', headers });
+      await $fetch(`/api/variables/${v.id}?scope=${v._scope}`, { method: 'DELETE', headers });
       toast.add({ severity: 'success', summary: 'Deleted', life: 3000 });
       await refreshAll();
     },

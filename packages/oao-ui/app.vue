@@ -81,6 +81,10 @@
             </div>
           </template>
         </nav>
+        <div class="border-t border-surface-200 px-4 py-3 text-xs text-surface-400">
+          <div class="font-medium text-surface-500">Open Agent Orchestra</div>
+          <div>v{{ appVersion }}</div>
+        </div>
       </aside>
 
       <!-- Main content -->
@@ -95,6 +99,7 @@
 
 <script setup lang="ts">
 const { user, isAuthenticated, logout } = useAuth();
+const runtimeConfig = useRuntimeConfig();
 const route = useRoute();
 const router = useRouter();
 const sidebarOpen = ref(false);
@@ -102,6 +107,7 @@ const userMenu = ref();
 
 const ws = computed(() => user.value?.workspaceSlug || (route.params.workspace as string) || 'default');
 const isAdmin = computed(() => user.value?.role === 'workspace_admin' || user.value?.role === 'super_admin');
+const appVersion = computed(() => runtimeConfig.public.appVersion || '0.0.0');
 
 const roleLabel = computed(() => {
   const map: Record<string, string> = { super_admin: 'Super Admin', workspace_admin: 'Admin', creator_user: 'Creator', view_user: 'Viewer' };
@@ -124,9 +130,8 @@ const adminNav = computed(() => [
   { to: `/${ws.value}/admin/users`, icon: 'pi pi-users', label: 'Users' },
   { to: `/${ws.value}/admin/user-groups`, icon: 'pi pi-id-card', label: 'User Groups' },
   { to: `/${ws.value}/admin/roles`, icon: 'pi pi-key', label: 'Roles' },
-  { to: `/${ws.value}/admin/rbac`, icon: 'pi pi-sitemap', label: 'Roles & Access' },
   { to: `/${ws.value}/admin/auth-providers`, icon: 'pi pi-lock', label: 'Auth Providers' },
-  { to: `/${ws.value}/admin/security`, icon: 'pi pi-shield', label: 'Security' },
+  { to: `/${ws.value}/admin/settings`, icon: 'pi pi-shield', label: 'Settings' },
   { to: `/${ws.value}/admin/rate-limits`, icon: 'pi pi-gauge', label: 'Rate Limits' },
   ...(user.value?.role === 'super_admin' ? [{ to: `/${ws.value}/admin/mail-settings`, icon: 'pi pi-envelope', label: 'Mail Settings' }] : []),
 ]);

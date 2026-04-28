@@ -168,8 +168,6 @@ export async function syncGithubCatalogIntoUser(params: {
       const capabilities = Array.isArray(entry.capabilities)
         ? entry.capabilities.filter((c): c is string => typeof c === 'string')
         : null;
-      const maxInputTokens = entry.limits?.max_input_tokens ?? null;
-      const maxOutputTokens = entry.limits?.max_output_tokens ?? null;
       const htmlUrl = entry.html_url?.trim() || null;
       const modelVersion = entry.version?.trim() || null;
 
@@ -186,8 +184,6 @@ export async function syncGithubCatalogIntoUser(params: {
             rateLimitTier,
             tags,
             capabilities,
-            maxInputTokens,
-            maxOutputTokens,
             htmlUrl,
             modelVersion,
             supportedReasoningEfforts,
@@ -223,8 +219,6 @@ export async function syncGithubCatalogIntoUser(params: {
           rateLimitTier,
           tags,
           capabilities,
-          maxInputTokens,
-          maxOutputTokens,
           htmlUrl,
           modelVersion,
           supportedReasoningEfforts,

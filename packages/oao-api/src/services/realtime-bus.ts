@@ -57,7 +57,12 @@ export interface RealtimeEvent {
     | 'agent.tool.ask_questions_resolved'
     // ── Workflow-step granular events (mirror conversation.message.* / .tool.*) ──
     | 'step.tool.ask_questions'
-    | 'step.tool.ask_questions_resolved';
+    | 'step.tool.ask_questions_resolved'
+    // ── Graph workflow node events ────────────────────────────────────
+    | 'node.started'
+    | 'node.completed'
+    | 'node.skipped'
+    | 'node.failed';
   /** Workflow execution ID */
   executionId?: string;
   /** Workflow ID (for listing page filtering) */

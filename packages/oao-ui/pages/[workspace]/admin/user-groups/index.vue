@@ -12,7 +12,7 @@
         <h1 class="text-3xl font-bold">User Groups</h1>
         <p class="text-muted-foreground text-sm mt-1">
           Organize users into groups for bulk role assignment and shared resource scoping. Groups don't grant roles by themselves —
-          assign roles per-user under <NuxtLink :to="`/${ws}/admin/rbac`" class="underline">Admin → Roles</NuxtLink>.
+          manage the available role bundles under <NuxtLink :to="`/${ws}/admin/roles`" class="underline">Admin → Roles</NuxtLink>.
         </p>
       </div>
       <Button label="Create Group" icon="pi pi-plus" @click="openCreate" />

@@ -317,4 +317,59 @@ adminRouter.put('/security', async (c) => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════
+// Workspace Settings — combined access + lifecycle + guardrails (v3.1)
+// ═══════════════════════════════════════════════════════════════════════
+
+// GET /admin/settings
+adminRouter.get('/settings', async (c) => {
+  const user = c.get('user');
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, user.workspaceId!) });
+  if (!workspace) return c.json({ error: 'Workspace not found' }, 404);
+  return c.json({
+    allowRegistration: workspace.allowRegistration,
+    allowPasswordReset: workspace.allowPasswordReset,
+    ephemeralKeepAliveMs: workspace.ephemeralKeepAliveMs,
+    staticCleanupIntervalMs: workspace.staticCleanupIntervalMs,
+    disallowCredentialAccessViaTools: workspace.disallowCredentialAccessViaTools,
+  });
+});
+
+// PUT /admin/settings — partial update
+adminRouter.put('/settings', async (c) => {
+  const user = c.get('user');
+  const body = z.object({
+    allowRegistration: z.boolean().optional(),
+    allowPasswordReset: z.boolean().optional(),
+    ephemeralKeepAliveMs: z.number().int().min(60_000).max(7 * 24 * 60 * 60 * 1000).optional(),
+    staticCleanupIntervalMs: z.number().int().min(60_000).max(30 * 24 * 60 * 60 * 1000).optional(),
+    disallowCredentialAccessViaTools: z.boolean().optional(),
+  }).parse(await c.req.json());
+
+  const update: Record<string, unknown> = { updatedAt: new Date() };
+  if (body.allowRegistration !== undefined) update.allowRegistration = body.allowRegistration;
+  if (body.allowPasswordReset !== undefined) update.allowPasswordReset = body.allowPasswordReset;
+  if (body.ephemeralKeepAliveMs !== undefined) update.ephemeralKeepAliveMs = body.ephemeralKeepAliveMs;
+  if (body.staticCleanupIntervalMs !== undefined) update.staticCleanupIntervalMs = body.staticCleanupIntervalMs;
+  if (body.disallowCredentialAccessViaTools !== undefined) update.disallowCredentialAccessViaTools = body.disallowCredentialAccessViaTools;
+
+  await db.update(workspaces).set(update).where(eq(workspaces.id, user.workspaceId!));
+
+  // Drop the cached settings so the next read sees the new values
+  const { invalidateWorkspaceSettingsCache } = await import('../services/workspace-settings.js');
+  invalidateWorkspaceSettingsCache(user.workspaceId!);
+
+  const fresh = await db.query.workspaces.findFirst({ where: eq(workspaces.id, user.workspaceId!) });
+  return c.json({
+    message: 'Workspace settings updated',
+    settings: {
+      allowRegistration: fresh?.allowRegistration,
+      allowPasswordReset: fresh?.allowPasswordReset,
+      ephemeralKeepAliveMs: fresh?.ephemeralKeepAliveMs,
+      staticCleanupIntervalMs: fresh?.staticCleanupIntervalMs,
+      disallowCredentialAccessViaTools: fresh?.disallowCredentialAccessViaTools,
+    },
+  });
+});
+
 export default adminRouter;

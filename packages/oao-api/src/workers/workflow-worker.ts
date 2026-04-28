@@ -1,6 +1,10 @@
 import { Worker } from 'bullmq';
+import { eq } from 'drizzle-orm';
 import { createLogger } from '@oao/shared';
 import { executeWorkflow } from '../services/workflow-engine.js';
+import { executeGraphWorkflow } from '../services/workflow-graph-engine.js';
+import { db } from '../database/index.js';
+import { workflowExecutions, workflows } from '../database/schema.js';
 import { getRedisConnectionOpts } from '../services/redis.js';
 
 const logger = createLogger('workflow-worker');
@@ -27,7 +31,24 @@ export function startWorker(): Worker {
         'Processing workflow execution',
       );
 
-      await executeWorkflow(executionId, stepIndex);
+      // Resolve execution mode (sequential vs graph) by reading the
+      // workflow row referenced by this execution. Graph workflows ignore
+      // startFromStep; partial resume is sequential-only for now.
+      const execution = workflowId
+        ? null
+        : await db.query.workflowExecutions.findFirst({ where: eq(workflowExecutions.id, executionId) });
+      const wfId = workflowId ?? execution?.workflowId;
+      let mode: 'sequential' | 'graph' = 'sequential';
+      if (wfId) {
+        const wf = await db.query.workflows.findFirst({ where: eq(workflows.id, wfId) });
+        if (wf?.executionMode === 'graph') mode = 'graph';
+      }
+
+      if (mode === 'graph') {
+        await executeGraphWorkflow(executionId);
+      } else {
+        await executeWorkflow(executionId, stepIndex);
+      }
     },
     {
       connection: getRedisConnectionOpts(),

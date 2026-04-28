@@ -1241,9 +1241,12 @@ export async function executeCopilotSession(params: {
   userId: string;
   workflowDefaultModel?: string | null;
   workflowDefaultReasoningEffort?: string | null;
+  nodeExecutionId?: string;
+  nodeKey?: string;
+  templateExtra?: Record<string, unknown>;
   onProgress?: (events: LiveOutputEvent[]) => void | Promise<void>;
 }): Promise<{ output: string; resolvedPrompt: string; reasoningTrace: Record<string, unknown> }> {
-  const { agent, step, stepExecutionId, resolvedPrompt: rawPrompt, precedentOutput, credentials, properties, envVariables, workerRuntime, inputs, workflowId, workspaceId, executionId, userId, workflowDefaultModel, workflowDefaultReasoningEffort, onProgress } = params;
+  const { agent, step, stepExecutionId, resolvedPrompt: rawPrompt, precedentOutput, credentials, properties, envVariables, workerRuntime, inputs, workflowId, workspaceId, executionId, userId, workflowDefaultModel, workflowDefaultReasoningEffort, nodeExecutionId, nodeKey, templateExtra, onProgress } = params;
 
   // Render prompt template using Jinja2 (nunjucks) with full variable context
   const templateContext = buildTemplateContext({
@@ -1252,6 +1255,7 @@ export async function executeCopilotSession(params: {
     envVariables,
     precedentOutput,
     inputs,
+    extra: templateExtra,
   });
   const resolvedPrompt = renderTemplate(rawPrompt, templateContext);
 
@@ -1373,6 +1377,8 @@ export async function executeCopilotSession(params: {
       workflowId,
       executionId,
       stepExecutionId,
+      nodeExecutionId,
+      nodeKey,
       userId: agent.userId,
       workspaceId,
     }, agentToolSelection.selectedBuiltinToolNames, templateContext);
@@ -1539,6 +1545,7 @@ export async function executeCopilotSession(params: {
           stepOrder: step.stepOrder,
         })
       : null;
+    const graphNodeEventData = nodeKey ? { nodeKey, nodeExecutionId } : {};
 
     session.on('tool.execution_start', (event) => {
       const toolName = event.data?.toolName ?? 'unknown';
@@ -1546,6 +1553,7 @@ export async function executeCopilotSession(params: {
       pushLiveEvent({ type: 'tool_call_start', timestamp: new Date().toISOString(), tool: toolName, args: event.data?.arguments });
       if (agentScope) {
         void publishAgentSessionEvent(agentScope, 'tool.execution_start', {
+          ...graphNodeEventData,
           toolName,
           toolCallId: event.data?.toolCallId,
           arguments: event.data?.arguments,
@@ -1557,6 +1565,7 @@ export async function executeCopilotSession(params: {
       pushLiveEvent({ type: 'tool_call_end', timestamp: new Date().toISOString(), tool: event.data?.toolCallId ?? 'unknown', result: event.data?.success });
       if (agentScope) {
         void publishAgentSessionEvent(agentScope, 'tool.execution_complete', {
+          ...graphNodeEventData,
           toolCallId: event.data?.toolCallId,
           success: event.data?.success,
         });
@@ -1567,7 +1576,7 @@ export async function executeCopilotSession(params: {
       const delta = event.data?.deltaContent ?? '';
       pushLiveEvent({ type: 'message_delta', timestamp: new Date().toISOString(), content: delta });
       if (agentScope && delta) {
-        void publishAgentSessionEvent(agentScope, 'message.delta', { delta });
+        void publishAgentSessionEvent(agentScope, 'message.delta', { ...graphNodeEventData, delta });
       }
     });
 
@@ -1577,7 +1586,7 @@ export async function executeCopilotSession(params: {
       (event) => {
         const reasoning = event.data?.delta ?? event.data?.deltaContent ?? event.data?.reasoning ?? '';
         if (agentScope && reasoning) {
-          void publishAgentSessionEvent(agentScope, 'message.reasoning_delta', { delta: reasoning });
+          void publishAgentSessionEvent(agentScope, 'message.reasoning_delta', { ...graphNodeEventData, delta: reasoning });
         }
       },
     );
@@ -1585,15 +1594,15 @@ export async function executeCopilotSession(params: {
     session.on('assistant.turn_start', () => {
       pushLiveEvent({ type: 'turn_start', timestamp: new Date().toISOString() });
       if (agentScope) {
-        void publishAgentSessionEvent(agentScope, 'turn.started', {});
-        void publishAgentSessionEvent(agentScope, 'message.started', {});
+        void publishAgentSessionEvent(agentScope, 'turn.started', graphNodeEventData);
+        void publishAgentSessionEvent(agentScope, 'message.started', graphNodeEventData);
       }
     });
 
     session.on('assistant.turn_end', () => {
       pushLiveEvent({ type: 'turn_end', timestamp: new Date().toISOString() });
       if (agentScope) {
-        void publishAgentSessionEvent(agentScope, 'turn.completed', {});
+        void publishAgentSessionEvent(agentScope, 'turn.completed', graphNodeEventData);
       }
     });
 

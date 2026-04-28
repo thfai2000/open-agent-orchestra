@@ -3,7 +3,8 @@ import { eq } from 'drizzle-orm';
 import { db } from '../database/index.js';
 import { agentInstances } from '../database/schema.js';
 import { authMiddleware, uuidSchema } from '@oao/shared';
-import { listInstances, cleanupOldInstances } from '../services/agent-instance-registry.js';
+import { listInstances, cleanupOldInstances, cleanupTerminatedEphemeralInstances, cleanupStaleStaticInstances } from '../services/agent-instance-registry.js';
+import { getWorkspaceSettings } from '../services/workspace-settings.js';
 
 const agentInstancesRouter = new Hono();
 agentInstancesRouter.use('/*', authMiddleware);
@@ -52,10 +53,26 @@ agentInstancesRouter.delete('/:id', async (c) => {
   return c.json({ message: 'Instance removed' });
 });
 
-// POST /cleanup — remove old terminated/offline instances
+// POST /cleanup — remove old terminated/offline instances using the caller's
+// workspace lifecycle settings (ephemeralKeepAliveMs, staticCleanupIntervalMs).
 agentInstancesRouter.post('/cleanup', async (c) => {
-  const count = await cleanupOldInstances();
-  return c.json({ removed: count });
+  const user = c.get('user');
+  const settings = await getWorkspaceSettings(user.workspaceId);
+  if (user.role === 'super_admin' && c.req.query('global') === 'true') {
+    const count = await cleanupOldInstances();
+    return c.json({ removed: count, mode: 'global' });
+  }
+  const ephemeralRemoved = await cleanupTerminatedEphemeralInstances(settings.ephemeralKeepAliveMs);
+  const staticRemoved = await cleanupStaleStaticInstances(settings.staticCleanupIntervalMs);
+  return c.json({
+    removed: ephemeralRemoved + staticRemoved,
+    ephemeralRemoved,
+    staticRemoved,
+    settings: {
+      ephemeralKeepAliveMs: settings.ephemeralKeepAliveMs,
+      staticCleanupIntervalMs: settings.staticCleanupIntervalMs,
+    },
+  });
 });
 
 export default agentInstancesRouter;

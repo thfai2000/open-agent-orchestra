@@ -23,6 +23,8 @@ import {
   captureWorkflowHistoricalVersion,
   captureVariableHistoricalVersion,
 } from './versioning.js';
+import { createWorkflowAgentTools } from './workflow-agent-tools.js';
+import { getWorkspaceSettings } from './workspace-settings.js';
 
 const logger = createLogger('agent-tools');
 
@@ -66,6 +68,10 @@ export interface AgentToolContext {
    * need step-level scoping (e.g. ask_questions).
    */
   stepExecutionId?: string;
+  /** Graph node execution id when a visual workflow agent_step is running. */
+  nodeExecutionId?: string;
+  /** Graph node key for realtime UI correlation. */
+  nodeKey?: string;
   userId?: string;
   workspaceId?: string;
 }
@@ -583,7 +589,7 @@ export function createAgentTools(
 
     toolMap['read_variables'] = defineTool('read_variables', {
       description:
-        'Read agent-level or user-level variables (properties and credentials). Credential values are masked for security.',
+        'Read agent-level or user-level variables. Property values are referenced via Jinja2 in prompts. Credentials are NEVER returned through this tool — they are injected server-side into prompts/MCP/HTTP via {{ credentials.* }}.',
       parameters: z.object({
         scope: z.enum(['agent', 'user']).describe('Read agent-level or user-level variables'),
         variableType: z.enum(['property', 'credential', 'all']).default('all').describe('Filter by variable type'),
@@ -592,27 +598,42 @@ export function createAgentTools(
       handler: async ({ scope, variableType }: { scope: 'agent' | 'user'; variableType: string }) => {
         logger.info({ scope, variableType, agentId: context?.agentId }, 'Tool: read_variables');
 
-        if (scope === 'agent' && context?.agentId) {
-          let vars = await db.query.agentVariables.findMany({ where: eq(agentVariables.agentId, context.agentId) });
-          if (variableType !== 'all') vars = vars.filter(v => v.variableType === variableType);
+        // Guardrail: per-workspace setting "disallowCredentialAccessViaTools" (default true)
+        // strips ALL credential rows from the tool response — agents see only properties.
+        const settings = await getWorkspaceSettings(context?.workspaceId);
+        const guardrailOn = settings.disallowCredentialAccessViaTools;
+
+        if (guardrailOn && variableType === 'credential') {
           return {
-            variables: vars.map(v => ({
-              id: v.id, key: v.key, variableType: v.variableType,
-              description: v.description, injectAsEnvVariable: v.injectAsEnvVariable,
-              value: v.variableType === 'property' ? '(use {{ Properties.' + v.key + ' }} in prompts)' : '••••••••',
-            })),
+            variables: [],
+            note: 'Credential access via agent tools is disabled by workspace policy. Use {{ credentials.KEY }} in prompts/MCP configs/HTTP request bodies — values are rendered server-side and never sent through tool calls.',
           };
         }
+
+        const filterRows = <T extends { variableType: string }>(rows: T[]): T[] => {
+          let out = rows;
+          if (variableType !== 'all') out = out.filter(v => v.variableType === variableType);
+          if (guardrailOn) out = out.filter(v => v.variableType !== 'credential');
+          return out;
+        };
+        const renderRow = (v: { id: string; key: string; variableType: string; description: string | null; injectAsEnvVariable: boolean }) => ({
+          id: v.id,
+          key: v.key,
+          variableType: v.variableType,
+          description: v.description,
+          injectAsEnvVariable: v.injectAsEnvVariable,
+          value: v.variableType === 'property'
+            ? '(use {{ Properties.' + v.key + ' }} in prompts)'
+            : '(blocked by workspace guardrail — use {{ credentials.' + v.key + ' }} in prompts)',
+        });
+
+        if (scope === 'agent' && context?.agentId) {
+          const vars = filterRows(await db.query.agentVariables.findMany({ where: eq(agentVariables.agentId, context.agentId) }));
+          return { variables: vars.map(renderRow), guardrailEnforced: guardrailOn };
+        }
         if (scope === 'user' && context?.userId) {
-          let vars = await db.query.userVariables.findMany({ where: eq(userVariables.userId, context.userId) });
-          if (variableType !== 'all') vars = vars.filter(v => v.variableType === variableType);
-          return {
-            variables: vars.map(v => ({
-              id: v.id, key: v.key, variableType: v.variableType,
-              description: v.description, injectAsEnvVariable: v.injectAsEnvVariable,
-              value: v.variableType === 'property' ? '(use {{ Properties.' + v.key + ' }} in prompts)' : '••••••••',
-            })),
-          };
+          const vars = filterRows(await db.query.userVariables.findMany({ where: eq(userVariables.userId, context.userId) }));
+          return { variables: vars.map(renderRow), guardrailEnforced: guardrailOn };
         }
         return { error: 'No context available for the requested scope' };
       },
@@ -960,6 +981,8 @@ export function createAgentTools(
       }) => {
         const rawExecutionId = context?.executionId ?? '';
         const stepExecutionId = context?.stepExecutionId;
+        const nodeExecutionId = context?.nodeExecutionId;
+        const nodeKey = context?.nodeKey;
 
         // Determine scope: conversation vs workflow step.
         let scopeKind: 'conversation' | 'workflow_step';
@@ -1005,9 +1028,12 @@ export function createAgentTools(
         if (scopeKind === 'workflow_step') {
           try {
             const { db } = await import('../database/index.js');
-            const { stepExecutions } = await import('../database/schema.js');
+            const { stepExecutions, nodeExecutions } = await import('../database/schema.js');
             const { eq } = await import('drizzle-orm');
             await db.update(stepExecutions).set({ status: 'awaiting_input' }).where(eq(stepExecutions.id, scopeId));
+            if (nodeExecutionId) {
+              await db.update(nodeExecutions).set({ status: 'awaiting_input' }).where(eq(nodeExecutions.id, nodeExecutionId));
+            }
           } catch (err) {
             logger.warn({ err, stepExecutionId: scopeId }, 'Failed to mark step as awaiting_input');
           }
@@ -1022,7 +1048,7 @@ export function createAgentTools(
           workflowId: context?.workflowId,
           workspaceId: context?.workspaceId,
           timestamp: new Date().toISOString(),
-          data: { askId, introduction: introduction ?? null, questions, timeoutMs },
+          data: { askId, introduction: introduction ?? null, questions, timeoutMs, nodeExecutionId, nodeKey },
         });
         // Unified agent.* event.
         await publishAgentSessionEvent(agentScope, 'tool.ask_questions', {
@@ -1030,6 +1056,8 @@ export function createAgentTools(
           introduction: introduction ?? null,
           questions,
           timeoutMs,
+          nodeExecutionId,
+          nodeKey,
         });
 
         logger.info({ scopeKind, scopeId, askId, count: questions.length }, 'Tool: ask_questions awaiting user input');
@@ -1044,15 +1072,18 @@ export function createAgentTools(
             workflowId: context?.workflowId,
             workspaceId: context?.workspaceId,
             timestamp: new Date().toISOString(),
-            data: { askId, answered: true },
+            data: { askId, answered: true, nodeExecutionId, nodeKey },
           });
-          await publishAgentSessionEvent(agentScope, 'tool.ask_questions_resolved', { askId, answered: true });
+          await publishAgentSessionEvent(agentScope, 'tool.ask_questions_resolved', { askId, answered: true, nodeExecutionId, nodeKey });
           if (scopeKind === 'workflow_step') {
             try {
               const { db } = await import('../database/index.js');
-              const { stepExecutions } = await import('../database/schema.js');
+              const { stepExecutions, nodeExecutions } = await import('../database/schema.js');
               const { eq } = await import('drizzle-orm');
               await db.update(stepExecutions).set({ status: 'running' }).where(eq(stepExecutions.id, scopeId));
+              if (nodeExecutionId) {
+                await db.update(nodeExecutions).set({ status: 'running' }).where(eq(nodeExecutions.id, nodeExecutionId));
+              }
             } catch (err) {
               logger.warn({ err, stepExecutionId: scopeId }, 'Failed to mark step back as running after ask_questions resolved');
             }
@@ -1067,19 +1098,24 @@ export function createAgentTools(
             workflowId: context?.workflowId,
             workspaceId: context?.workspaceId,
             timestamp: new Date().toISOString(),
-            data: { askId, answered: false, error: err instanceof Error ? err.message : 'unknown error' },
+            data: { askId, answered: false, error: err instanceof Error ? err.message : 'unknown error', nodeExecutionId, nodeKey },
           });
           await publishAgentSessionEvent(agentScope, 'tool.ask_questions_resolved', {
             askId,
             answered: false,
             error: err instanceof Error ? err.message : 'unknown error',
+            nodeExecutionId,
+            nodeKey,
           });
           if (scopeKind === 'workflow_step') {
             try {
               const { db } = await import('../database/index.js');
-              const { stepExecutions } = await import('../database/schema.js');
+              const { stepExecutions, nodeExecutions } = await import('../database/schema.js');
               const { eq } = await import('drizzle-orm');
               await db.update(stepExecutions).set({ status: 'running' }).where(eq(stepExecutions.id, scopeId));
+              if (nodeExecutionId) {
+                await db.update(nodeExecutions).set({ status: 'running' }).where(eq(nodeExecutions.id, nodeExecutionId));
+              }
             } catch (innerErr) {
               logger.warn({ err: innerErr, stepExecutionId: scopeId }, 'Failed to mark step back as running after ask_questions failure');
             }
@@ -1088,6 +1124,28 @@ export function createAgentTools(
         }
       },
     });
+
+    // ── Workflow-context tools (variables + short memory) ───────────
+    // Available whenever the session is running inside a workflow execution
+    // (sequential or graph). Cheap to register; gated by enabledTools below.
+    if (context?.workflowId && context?.executionId && context?.agentId && context?.workspaceId) {
+      try {
+        const workflowTools = createWorkflowAgentTools({
+          agentId: context.agentId,
+          workspaceId: context.workspaceId,
+          workflowId: context.workflowId,
+          executionId: typeof context.executionId === 'string' && context.executionId.startsWith('conversation:')
+            ? '00000000-0000-0000-0000-000000000000' // placeholder for conversation context — execution variables are no-op
+            : context.executionId,
+        });
+        for (const tool of workflowTools) {
+          const name = (tool as { name?: string }).name ?? '';
+          if (name) toolMap[name] = tool;
+        }
+      } catch (err) {
+        logger.warn({ err }, 'Failed to register workflow-context agent tools');
+      }
+    }
 
     // ── Filter by enabled tools ──────────────────────────────────────
 

@@ -181,7 +181,7 @@ const form = reactive({
 });
 
 const { data: agentsData } = await useFetch('/api/agents', { headers });
-const { data: modelsData } = await useFetch('/api/models/all', { headers });
+const { data: modelsData } = await useFetch('/api/models', { headers });
 const { data: triggerTypesData } = await useFetch('/api/triggers/types', { headers });
 const { data: userVarsData } = await useFetch('/api/variables?scope=user', { headers });
 const { data: wsVarsData } = await useFetch('/api/variables?scope=workspace', { headers });

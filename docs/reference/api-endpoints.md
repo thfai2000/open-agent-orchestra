@@ -647,6 +647,18 @@ Partial update. Automatically increments `version`. **Auth**: JWT/PAT · **Role*
 
 Atomically replace all workflow steps. **Auth**: JWT/PAT · **Role**: `creator_user`+
 
+### `GET /api/workflow-graph/:workflowId/graph`
+
+Fetch graph nodes, edges, execution mode, current workflow steps, and serialized triggers. If no saved graph exists, the API returns a synthetic graph built from existing sequential steps so the Visual Editor can display every `workflow_steps` row as an `agent_step` block. **Auth**: JWT/PAT
+
+### `PUT /api/workflow-graph/:workflowId/graph`
+
+Replace graph nodes and edges atomically, switch the workflow to graph mode, and synchronize saved `agent_step` blocks back to `workflow_steps`. Validates exactly one `start` node, valid edge endpoints, and non-empty prompt templates for agent-step nodes. **Auth**: JWT/PAT · **Role**: `creator_user`+
+
+### `GET /api/workflow-graph/executions/:executionId/nodes`
+
+List graph node execution rows for one execution. Rows include node input/output/error, status (`pending`, `running`, `awaiting_input`, `completed`, `failed`, `skipped`), the frozen node snapshot, and `stepExecutionId` for `agent_step` nodes so the UI can load live output and answer `ask_questions`. **Auth**: JWT/PAT
+
 ### `DELETE /api/workflows/:id`
 
 Delete workflow. **Auth**: JWT/PAT · **Role**: `creator_user`+
@@ -730,6 +742,8 @@ curl -N http://localhost:4002/api/executions/stream/all \
 ### `GET /api/executions/:id/stream`
 
 SSE stream for a single execution. **Auth**: JWT/PAT
+
+Graph-mode runs emit `node.started`, `node.completed`, `node.skipped`, and `node.failed` events in addition to execution-level events. Agent-step nodes also emit `agent.*` / `step.tool.ask_questions*` events with `nodeKey` and `nodeExecutionId` for graph-panel correlation.
 
 ### `POST /api/executions/:id/cancel`
 
@@ -1137,8 +1151,7 @@ As of v1.37.0 the model registry is **user-scoped**, not workspace-scoped. Each 
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/models` | List **active** models for the current user (used by chat/workflow runtimes) |
-| `GET` | `/api/models/all` | List all models (active + inactive) for the current user |
+| `GET` | `/api/models` | List **active** models for the current user |
 | `GET` | `/api/models/:id` | Get a single model owned by the current user |
 | `POST` | `/api/models` | Create a custom model |
 | `PUT` | `/api/models/:id` | Update a model (catalog rows lock most fields) |
@@ -1148,7 +1161,7 @@ As of v1.37.0 the model registry is **user-scoped**, not workspace-scoped. Each 
 The `githubTokenCredentialId` parameter is the UUID of a user-scope credential variable (sub-type `github_token`). When omitted the server falls back to the `DEFAULT_LLM_API_KEY` / `GITHUB_TOKEN` env vars.
 
 Catalog rows expose additional metadata (filled by sync, never overwritten by users):
-`rateLimitTier` (low/high — closest signal to "premium"), `tags[]`, `capabilities[]`, `maxInputTokens`, `maxOutputTokens`, `htmlUrl`, `modelVersion`. The GitHub Models catalog endpoint does **not** return any explicit premium/credit/billing field.
+`rateLimitTier` (low/high — closest signal to "premium"), `tags[]`, `capabilities[]`, `htmlUrl`, `modelVersion`. The GitHub Models catalog endpoint does **not** return any explicit premium/credit/billing field.
 
 ```bash
 curl -X POST http://localhost:4002/api/models \
@@ -1182,8 +1195,10 @@ Custom provider fields:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/admin/security` | Get workspace security settings |
-| `PUT` | `/api/admin/security` | Update `allowRegistration` and `allowPasswordReset` |
+| `GET` | `/api/admin/security` | Get workspace security settings (legacy — use `/api/admin/settings`) |
+| `PUT` | `/api/admin/security` | Update `allowRegistration` and `allowPasswordReset` (legacy — use `/api/admin/settings`) |
+| `GET` | `/api/admin/settings` | Get workspace settings: `allowRegistration`, `allowPasswordReset`, `ephemeralKeepAliveMs`, `staticCleanupIntervalMs`, `disallowCredentialAccessViaTools` |
+| `PUT` | `/api/admin/settings` | Update workspace settings (validates lifecycle bounds: ephemeral 60s–7d, static 60s–30d) |
 
 ### Mail Settings
 

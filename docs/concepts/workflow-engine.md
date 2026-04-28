@@ -206,6 +206,8 @@ A single run of a workflow:
 - **Workflow Snapshot** — Complete snapshot of workflow + steps at trigger time (immutable)
 - **Step Executions** — Ordered list of step execution records with output and reasoning trace
 
+Graph-mode executions also record one `node_executions` row per fired or skipped graph node. The Start node outputs the trigger envelope (`inputs`, `trigger`, `payload`, `eventData`) so procedural blocks and agent prompts can consume manual-run inputs and webhook payloads as first-class workflow data. Agent-step graph nodes are linked back to their synced `step_executions` rows, which keeps reasoning traces, live output, and `ask_questions` user approvals available from the execution graph view.
+
 ### Execution Pipeline
 
 When the BullMQ worker picks up a job, it orchestrates the workflow by **dispatching each step according to its resolved runtime**:

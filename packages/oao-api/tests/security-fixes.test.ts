@@ -94,6 +94,8 @@ vi.mock('../src/services/workflow-engine.js', () => ({
 vi.mock('../src/services/agent-instance-registry.js', () => ({
   listInstances: vi.fn().mockResolvedValue([]),
   cleanupOldInstances: vi.fn().mockResolvedValue(3),
+  cleanupTerminatedEphemeralInstances: vi.fn().mockResolvedValue(2),
+  cleanupStaleStaticInstances: vi.fn().mockResolvedValue(1),
   registerStaticInstance: vi.fn(),
   startHeartbeat: vi.fn(),
   deregisterStaticInstance: vi.fn(),
@@ -103,6 +105,25 @@ vi.mock('../src/services/agent-instance-registry.js', () => ({
   terminateEphemeralInstance: vi.fn(),
   markStaleInstancesOffline: vi.fn(),
   getCurrentInstanceId: vi.fn().mockReturnValue(null),
+}));
+
+vi.mock('../src/services/workspace-settings.js', () => ({
+  getWorkspaceSettings: vi.fn().mockResolvedValue({
+    workspaceId: 'ws-1',
+    allowRegistration: true,
+    allowPasswordReset: true,
+    ephemeralKeepAliveMs: 3_600_000,
+    staticCleanupIntervalMs: 86_400_000,
+    disallowCredentialAccessViaTools: true,
+  }),
+  invalidateWorkspaceSettingsCache: vi.fn(),
+  DEFAULT_SETTINGS: {
+    allowRegistration: true,
+    allowPasswordReset: true,
+    ephemeralKeepAliveMs: 3_600_000,
+    staticCleanupIntervalMs: 86_400_000,
+    disallowCredentialAccessViaTools: true,
+  },
 }));
 
 vi.mock('../src/services/system-events.js', () => ({

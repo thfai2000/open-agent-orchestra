@@ -2,6 +2,8 @@
 
 Open Agent Orchestra (OAO) uses role-based access control (RBAC) to manage permissions within each workspace.
 
+Built-in workspace roles still determine the broad access level for a signed-in user. Fine-grained platform actions are bundled into functionality-based role definitions on `/{workspace}/admin/roles`, and those role bundles can then be attached to user groups.
+
 ## Built-in Roles
 
 ```mermaid
@@ -48,7 +50,9 @@ graph TB
 ## Role Assignment
 
 - New users register as `creator_user` by default
-- `workspace_admin` and `super_admin` can change roles via **Admin → Users** (within their workspace)
+- `workspace_admin` and `super_admin` can change the built-in workspace role via **Admin → Users** (within their workspace)
+- `workspace_admin` and `super_admin` can manage fine-grained functionality bundles via **Admin → Roles**
+- User groups can be used to bind those role bundles to sets of users without reintroducing the legacy `Admin → Roles & Access` screen
 - `super_admin` role can only be set at the database level (not via UI role selector)
 
 ## Workspace-Scoped Resources

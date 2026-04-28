@@ -102,9 +102,30 @@
       <!-- Error -->
       <Message v-if="execution.error" severity="error" :closable="false" class="mb-4">{{ execution.error }}</Message>
 
+      <!-- View toggle: Timeline (sequential) ↔ Graph (DAG visualization) -->
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-semibold">{{ viewMode === 'graph' ? 'Execution Graph' : 'Steps' }}</h2>
+        <SelectButton
+          v-if="hasGraphView"
+          v-model="viewMode"
+          :options="[{ label: 'Timeline', value: 'timeline' }, { label: 'Graph', value: 'graph' }]"
+          option-label="label"
+          option-value="value"
+          size="small"
+          :allow-empty="false"
+        />
+      </div>
+
+      <ExecutionGraphView
+        v-if="viewMode === 'graph' && execution.workflowId"
+        :workflow-id="execution.workflowId"
+        :execution-id="execution.id"
+        :stream-events="streamEvents"
+        class="mb-6"
+      />
+
       <!-- GitHub Actions–style Step Timeline -->
-      <h2 class="text-xl font-semibold mb-4">Steps</h2>
-      <div class="border border-surface-200 rounded-lg overflow-hidden">
+      <div v-show="viewMode === 'timeline'" class="border border-surface-200 rounded-lg overflow-hidden">
         <div v-for="(step, idx) in steps" :key="step.id" class="border-b border-surface-200 last:border-b-0">
           <!-- Step Header (clickable) -->
           <div
@@ -372,7 +393,27 @@ const breadcrumbs = computed(() => [
 // ─── Live Streaming ───────────────────────────────────────────────────
 
 const isLive = computed(() => execution.value?.status === 'running' || execution.value?.status === 'pending');
-const { connected: streamConnected, on: onStreamEvent } = useExecutionStream(execId, { enabled: isLive });
+const { connected: streamConnected, on: onStreamEvent, events: streamEvents } = useExecutionStream(execId, { enabled: isLive });
+
+// ─── View mode toggle: Timeline (sequential) ↔ Graph (DAG) ──────────
+const viewMode = ref<'timeline' | 'graph'>('timeline');
+const hasGraphView = ref(false);
+
+async function detectGraphView() {
+  if (!execution.value?.workflowId || !execution.value?.id) return;
+  try {
+    const r = await $fetch<{ nodeExecutions: any[] }>(
+      `/api/workflow-graph/executions/${execution.value.id}/nodes`,
+      { headers: authHeaders() },
+    );
+    if ((r.nodeExecutions ?? []).length > 0) {
+      hasGraphView.value = true;
+      // Default to graph view for graph executions; users can flip back.
+      if (viewMode.value === 'timeline') viewMode.value = 'graph';
+    }
+  } catch { /* ignore — page falls back to timeline */ }
+}
+watch(() => execution.value?.id, detectGraphView, { immediate: false });
 
 // Accumulate live events per step
 const liveEventsMap = ref<Record<string, any[]>>({});

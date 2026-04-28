@@ -9,19 +9,8 @@
 
     <div class="flex items-center justify-between mb-6">
       <div>
-        <div class="flex items-center gap-2">
-          <h1 class="text-3xl font-bold">{{ isNew ? 'Create Custom Model' : (form.displayName || form.name || 'Edit Model') }}</h1>
-        </div>
-        <div class="flex flex-wrap items-center gap-1.5 mt-1">
-          <Tag v-if="!isNew" :value="isCatalogRow ? 'GitHub Catalog (managed)' : 'Custom'" :severity="isCatalogRow ? 'info' : 'warn'" />
-          <Tag v-if="form.publisher" :value="form.publisher" />
-          <Tag v-if="!isNew && form.lastSyncedAt" :value="`Last synced ${new Date(form.lastSyncedAt).toLocaleString()}`" severity="secondary" />
-        </div>
-        <p class="text-muted-foreground text-sm mt-1">
-          {{ isCatalogRow
-            ? 'GitHub-managed catalog row — only Active toggle, credit cost, and reasoning-effort whitelist are editable. Re-sync replaces other fields.'
-            : 'Configure model name, provider routing, credentials, and credit costs.' }}
-        </p>
+        <h1 class="text-3xl font-bold">{{ isNew ? 'Create Custom Model' : (form.name || 'Edit Model') }}</h1>
+        <p class="text-muted-foreground text-sm mt-1">Configure model name, provider routing, credentials, and credit costs.</p>
       </div>
       <div class="flex gap-2">
         <Button label="Back to Models" severity="secondary" icon="pi pi-arrow-left" @click="goBack" />
@@ -36,21 +25,17 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="flex flex-col gap-2">
             <label class="text-sm font-medium">Model Name *</label>
-            <InputText v-model="form.name" placeholder="gpt-4.1" :disabled="isCatalogRow" />
+            <InputText v-model="form.name" placeholder="gpt-4.1" />
             <small class="text-surface-400">Sent as the `model` value when OAO starts a Copilot session.</small>
-          </div>
-          <div v-if="isCatalogRow" class="flex flex-col gap-2">
-            <label class="text-sm font-medium">Catalog Display Name</label>
-            <InputText v-model="form.displayName" disabled />
           </div>
           <div class="flex flex-col gap-2">
             <label class="text-sm font-medium">Provider Mode *</label>
-            <Select v-model="form.providerType" :options="providerModeOptions" optionLabel="label" optionValue="value" :disabled="isCatalogRow" />
+            <Select v-model="form.providerType" :options="providerModeOptions" optionLabel="label" optionValue="value" />
             <small class="text-surface-400">GitHub uses Copilot CLI auth. Custom uses an explicit ProviderConfig.</small>
           </div>
           <div class="flex flex-col gap-2">
             <label class="text-sm font-medium">Provider Label</label>
-            <InputText v-model="form.provider" placeholder="github" :disabled="isCatalogRow" />
+            <InputText v-model="form.provider" placeholder="github" />
             <small class="text-surface-400">Display label for tables, reporting, and audit trails.</small>
           </div>
           <div class="flex flex-col gap-2">
@@ -68,14 +53,10 @@
           </div>
           <div class="flex flex-col gap-2 md:col-span-2">
             <label class="text-sm font-medium">Description</label>
-            <Textarea v-model="form.description" rows="3" placeholder="Optional notes for operators" :disabled="isCatalogRow" />
-          </div>
-          <div v-if="isCatalogRow && form.summary" class="flex flex-col gap-2 md:col-span-2">
-            <label class="text-sm font-medium">Catalog Summary</label>
-            <Textarea :modelValue="form.summary" rows="2" disabled />
+            <Textarea v-model="form.description" rows="3" placeholder="Optional notes for operators" />
           </div>
 
-          <template v-if="isCustomProvider && !isCatalogRow">
+          <template v-if="isCustomProvider">
             <div class="flex flex-col gap-2">
               <label class="text-sm font-medium">Custom Provider Type *</label>
               <Select v-model="form.customProviderType" :options="customProviderTypeOptions" optionLabel="label" optionValue="value" placeholder="Select provider" />
@@ -109,7 +90,7 @@
         </div>
 
         <div class="flex justify-between gap-2 mt-6">
-          <Button v-if="!isNew && !isCatalogRow" label="Delete" severity="danger" outlined icon="pi pi-trash" @click="confirmDelete" />
+          <Button v-if="!isNew" label="Delete" severity="danger" outlined icon="pi pi-trash" @click="confirmDelete" />
           <span v-else></span>
           <div class="flex gap-2">
             <Button label="Cancel" severity="secondary" @click="goBack" />
@@ -164,11 +145,6 @@ const loadError = ref('');
 
 const form = reactive({
   name: '',
-  displayName: '',
-  publisher: '',
-  summary: '',
-  catalogSource: 'custom' as 'custom' | 'github_catalog',
-  lastSyncedAt: null as string | null,
   provider: 'github',
   providerType: 'github' as 'github' | 'custom',
   customProviderType: null as 'openai' | 'azure' | 'anthropic' | null,
@@ -182,7 +158,6 @@ const form = reactive({
   supportedReasoningEfforts: ['low', 'medium', 'high'] as string[],
 });
 
-const isCatalogRow = computed(() => form.catalogSource === 'github_catalog');
 const isCustomProvider = computed(() => form.providerType === 'custom');
 const showWireApiField = computed(() => form.customProviderType === 'openai' || form.customProviderType === 'azure');
 const requiresAzureApiVersion = computed(() => form.customProviderType === 'azure');
@@ -191,11 +166,10 @@ const breadcrumbItems = computed(() => [
   { label: 'Home', route: `/${ws.value}` },
   { label: 'Admin' },
   { label: 'Models', route: `/${ws.value}/admin/models` },
-  { label: isNew.value ? 'Create Model' : (form.displayName || form.name || 'Edit') },
+  { label: isNew.value ? 'Create Model' : (form.name || 'Edit') },
 ]);
 
 watch(() => form.providerType, (providerType) => {
-  if (isCatalogRow.value) return;
   if (providerType === 'custom') {
     if (!form.provider || form.provider === 'github') {
       form.provider = form.customProviderType || 'custom';
@@ -211,7 +185,6 @@ watch(() => form.providerType, (providerType) => {
 });
 
 watch(() => form.customProviderType, (providerType) => {
-  if (isCatalogRow.value) return;
   if (form.providerType === 'custom' && (!form.provider || form.provider === 'github' || form.provider === 'custom')) {
     form.provider = providerType || 'custom';
   }
@@ -231,11 +204,6 @@ async function loadModel() {
     }
     Object.assign(form, {
       name: m.name,
-      displayName: m.displayName || '',
-      publisher: m.publisher || '',
-      summary: m.summary || '',
-      catalogSource: m.catalogSource || 'custom',
-      lastSyncedAt: m.lastSyncedAt || null,
       provider: m.provider || 'github',
       providerType: m.providerType || 'github',
       customProviderType: m.customProviderType || null,
@@ -280,14 +248,6 @@ function buildCreatePayload() {
 }
 
 function buildUpdatePayload() {
-  // Catalog rows can only update isActive, creditCost, supportedReasoningEfforts.
-  if (isCatalogRow.value) {
-    return {
-      isActive: form.isActive,
-      creditCost: form.creditCost.trim() || '1.00',
-      supportedReasoningEfforts: form.supportedReasoningEfforts,
-    };
-  }
   return buildCreatePayload();
 }
 

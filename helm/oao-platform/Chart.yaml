@@ -2,8 +2,8 @@ apiVersion: v2
 name: oao-platform
 description: Open Agent Orchestra (OAO) — Autonomous AI workflow engine (API + UI + PostgreSQL)
 type: application
-version: 2.0.1
-appVersion: "2.0.1"
+version: 3.6.0
+appVersion: "3.6.0"
 home: https://github.com/thfai2000/open-agent-orchestra
 sources:
   - https://github.com/thfai2000/open-agent-orchestra

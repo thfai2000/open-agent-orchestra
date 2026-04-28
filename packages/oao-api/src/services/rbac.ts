@@ -18,6 +18,7 @@
 import { db } from '../database/index.js';
 import { users, userGroupMembers, userGroupRoles, roleFunctionalities, roles } from '../database/schema.js';
 import { eq, inArray } from 'drizzle-orm';
+import { getSystemRoleDefaultFunctionalities, mapLegacyRoleToSystemRoleName } from './rbac-functionalities.js';
 
 const SUPER = '*';
 const CACHE_TTL_MS = 30_000;
@@ -55,6 +56,7 @@ export async function resolveEffectiveFunctionalities(userId: string): Promise<R
     columns: { id: true, role: true },
   });
   const legacyRoleName = user?.role ?? null;
+  const legacySystemRoleName = mapLegacyRoleToSystemRoleName(legacyRoleName);
 
   // Step 2: roles inherited via user-group memberships
   const memberships = await db.query.userGroupMembers.findMany({
@@ -73,21 +75,16 @@ export async function resolveEffectiveFunctionalities(userId: string): Promise<R
   }
 
   // Step 3: roles matched by legacy role name (only system, workspace-null roles)
-  if (legacyRoleName) {
-    // Map old enum values to new role names
-    const legacyMap: Record<string, string> = {
-      super_admin: 'super_admin',
-      workspace_admin: 'workspace_admin',
-      creator_user: 'creator',
-      view_user: 'viewer',
-    };
-    const mapped = legacyMap[legacyRoleName] ?? legacyRoleName;
+  if (legacySystemRoleName) {
     const sysRoles = await db.query.roles.findMany({
-      where: eq(roles.name, mapped),
+      where: eq(roles.name, legacySystemRoleName),
       columns: { id: true, workspaceId: true, isSystem: true },
     });
-    for (const r of sysRoles) {
-      if (r.isSystem && r.workspaceId === null) groupRoleIds.push(r.id);
+    const seededSystemRoles = sysRoles.filter((role) => role.isSystem && role.workspaceId === null);
+    if (seededSystemRoles.length > 0) {
+      for (const role of seededSystemRoles) groupRoleIds.push(role.id);
+    } else {
+      for (const key of getSystemRoleDefaultFunctionalities(legacyRoleName)) flags.add(key);
     }
   }
 

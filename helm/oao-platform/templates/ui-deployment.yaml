@@ -24,6 +24,8 @@ spec:
           env:
             - name: NUXT_API_BASE_URL
               value: "http://oao-api:{{ .Values.api.port }}"
+            - name: NUXT_PUBLIC_APP_VERSION
+              value: {{ .Chart.AppVersion | quote }}
           resources:
             requests:
               memory: 64Mi

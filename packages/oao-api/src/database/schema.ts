@@ -50,8 +50,27 @@ export const stepStatusEnum = pgEnum('step_status', [
 ]);
 export const reasoningEffortEnum = pgEnum('reasoning_effort', ['high', 'medium', 'low']);
 export const workerRuntimeEnum = pgEnum('worker_runtime', ['static', 'ephemeral']);
-export const variableTypeEnum = pgEnum('variable_type', ['property', 'credential']);
+export const variableTypeEnum = pgEnum('variable_type', ['property', 'credential', 'short_memory']);
 export const variableScopeEnum = pgEnum('variable_scope', ['agent', 'user', 'workspace']);
+export const workflowExecutionModeEnum = pgEnum('workflow_execution_mode', ['sequential', 'graph']);
+export const workflowNodeTypeEnum = pgEnum('workflow_node_type', [
+  'start',
+  'end',
+  'agent_step',
+  'http_request',
+  'script',
+  'conditional',
+  'parallel',
+  'join',
+]);
+export const nodeExecutionStatusEnum = pgEnum('node_execution_status', [
+  'pending',
+  'running',
+  'awaiting_input',
+  'completed',
+  'failed',
+  'skipped',
+]);
 export const credentialSubTypeEnum = pgEnum('credential_sub_type', [
   'secret_text',
   'github_token',
@@ -83,6 +102,18 @@ export const workspaces = pgTable('workspaces', {
   isDefault: boolean('is_default').notNull().default(false), // Default Workspace cannot be deleted
   allowRegistration: boolean('allow_registration').notNull().default(true), // Allow public self-registration
   allowPasswordReset: boolean('allow_password_reset').notNull().default(true), // Allow database users to request password reset emails
+  // ─── Agent lifecycle (workspace-scoped overrides) ──────────────────
+  // Time (ms) to keep a terminated ephemeral agent instance row before deletion.
+  // Default 1h. Cleanup is gated by `cleanupOldInstances`.
+  ephemeralKeepAliveMs: integer('ephemeral_keep_alive_ms').notNull().default(60 * 60 * 1000),
+  // Time (ms) without heartbeat before a static agent instance is considered stale and removed.
+  // Default 24h.
+  staticCleanupIntervalMs: integer('static_cleanup_interval_ms').notNull().default(24 * 60 * 60 * 1000),
+  // ─── Guardrails ────────────────────────────────────────────────────
+  // When true (default), agent tools (read_variables, workflow_get_variable, etc.)
+  // never expose `credential` typed variables back to the agent — even masked.
+  // Credentials still flow into prompts/MCP configs/HTTP headers via Jinja2 server-side rendering.
+  disallowCredentialAccessViaTools: boolean('disallow_credential_access_via_tools').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -189,6 +220,7 @@ export const workflows = pgTable('workflows', {
   defaultReasoningEffort: reasoningEffortEnum('default_reasoning_effort'), // workflow-level default
   workerRuntime: workerRuntimeEnum('worker_runtime').notNull().default('static'), // workflow-level worker assignment
   stepAllocationTimeoutSeconds: integer('step_allocation_timeout_seconds').notNull().default(300), // timeout for assigning a step to a runtime
+  executionMode: workflowExecutionModeEnum('execution_mode').notNull().default('sequential'), // 'sequential' = legacy ordered steps; 'graph' = DAG of nodes
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -597,8 +629,6 @@ export const models = pgTable('models', {
   rateLimitTier: text('rate_limit_tier'), // 'low' | 'high' as returned by GitHub Models catalog
   tags: text('tags').array(), // multipurpose, multilingual, multimodal, etc.
   capabilities: text('capabilities').array(), // streaming, tool-calling, agents, etc.
-  maxInputTokens: integer('max_input_tokens'),
-  maxOutputTokens: integer('max_output_tokens'),
   htmlUrl: text('html_url'), // marketplace link
   modelVersion: text('model_version'), // catalog `version` field (e.g. "2025-04-14")
   // Per-model whitelist of reasoning-effort values; e.g. gpt-5-mini -> ['low','medium','high']
@@ -933,3 +963,166 @@ export const passwordResetTokens = pgTable('password_reset_tokens', {
   usedAt: timestamp('used_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ─── Workflow Graph (Visual Workflow v3) ─────────────────────────────
+//
+// Graph workflows are DAGs of typed nodes connected by edges. They support
+// parallel branches, conditional routing, mixed agent + procedural steps,
+// and per-node configuration. A workflow opts into graph mode by setting
+// `workflows.executionMode = 'graph'`. Sequential workflows continue to
+// use `workflow_steps` and the legacy executor.
+
+export const workflowNodes = pgTable(
+  'workflow_nodes',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => workflows.id, { onDelete: 'cascade' }),
+    nodeKey: varchar('node_key', { length: 100 }).notNull(), // stable key referenced by edges
+    nodeType: workflowNodeTypeEnum('node_type').notNull(),
+    name: varchar('name', { length: 200 }).notNull(),
+    // Type-specific configuration:
+    //   agent_step:   { promptTemplate, agentId?, model?, reasoningEffort?, workerRuntime?, timeoutSeconds? }
+    //   http_request: { method, url, headers, query, body, jsonPath?, timeoutMs? }
+    //   script:       { source, timeoutMs?, language: 'javascript' }
+    //   conditional:  { expression }            // JS-ish expression evaluated against input
+    //   parallel:     { }                       // pure fan-out
+    //   join:         { strategy: 'all'|'any' }
+    config: jsonb('config').notNull().default({}),
+    positionX: integer('position_x').notNull().default(0), // visual-editor coordinates
+    positionY: integer('position_y').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    workflowNodeKeyIdx: uniqueIndex('workflow_nodes_wf_key_idx').on(table.workflowId, table.nodeKey),
+    workflowNodeWfIdx: index('workflow_nodes_wf_idx').on(table.workflowId),
+  }),
+);
+
+export const workflowEdges = pgTable(
+  'workflow_edges',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => workflows.id, { onDelete: 'cascade' }),
+    fromNodeKey: varchar('from_node_key', { length: 100 }).notNull(),
+    toNodeKey: varchar('to_node_key', { length: 100 }).notNull(),
+    // Optional branch label. For conditional nodes this is 'true'|'false' or
+    // a custom label whose value matches the conditional output. Null edges
+    // are followed unconditionally.
+    branchKey: varchar('branch_key', { length: 100 }),
+    label: varchar('label', { length: 200 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    workflowEdgesWfIdx: index('workflow_edges_wf_idx').on(table.workflowId),
+    workflowEdgesFromIdx: index('workflow_edges_from_idx').on(table.workflowId, table.fromNodeKey),
+  }),
+);
+
+// Per-execution record of a node firing. Different runs of the same node
+// (e.g. inside a loop or re-tried branch) produce separate rows.
+export const nodeExecutions = pgTable(
+  'node_executions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    workflowExecutionId: uuid('workflow_execution_id')
+      .notNull()
+      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+    nodeKey: varchar('node_key', { length: 100 }).notNull(),
+    nodeType: workflowNodeTypeEnum('node_type').notNull(),
+    status: nodeExecutionStatusEnum('status').notNull().default('pending'),
+    attempt: integer('attempt').notNull().default(1),
+    input: jsonb('input'),
+    output: jsonb('output'),
+    error: text('error'),
+    // Snapshot of the node's config at dispatch time. Lets us re-render the
+    // graph and inspect inputs even after the workflow has been edited.
+    nodeSnapshot: jsonb('node_snapshot'),
+    // For agent_step nodes we link to the legacy step_executions row so we
+    // get reasoning trace, live output, and prompt resolution for free.
+    stepExecutionId: uuid('step_execution_id').references(() => stepExecutions.id, { onDelete: 'set null' }),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    nodeExecWfIdx: index('node_executions_wf_exec_idx').on(table.workflowExecutionId),
+    nodeExecKeyIdx: index('node_executions_wf_exec_key_idx').on(table.workflowExecutionId, table.nodeKey),
+  }),
+);
+
+// Workflow-scoped variables: stable across all executions of a workflow.
+// Credentials are AES-256-GCM-encrypted just like the existing variable
+// tables; properties and short_memory entries are stored as plain JSON.
+export const workflowVariables = pgTable(
+  'workflow_variables',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => workflows.id, { onDelete: 'cascade' }),
+    key: varchar('key', { length: 100 }).notNull(),
+    variableType: variableTypeEnum('variable_type').notNull().default('property'),
+    valueJson: jsonb('value_json'), // for property + short_memory (small JSON values)
+    valueEncrypted: text('value_encrypted'), // for credential subtype
+    description: varchar('description', { length: 300 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    workflowVariablesKeyIdx: uniqueIndex('workflow_variables_wf_key_idx').on(table.workflowId, table.key),
+  }),
+);
+
+// Execution-scoped variables: live for the lifetime of one workflow_execution.
+// Cascades-deleted with the execution. No encryption — these are short-lived
+// runtime values (intermediate results, computed fields, transient state).
+export const workflowExecutionVariables = pgTable(
+  'workflow_execution_variables',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    workflowExecutionId: uuid('workflow_execution_id')
+      .notNull()
+      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+    key: varchar('key', { length: 100 }).notNull(),
+    valueJson: jsonb('value_json').notNull(),
+    setByNodeKey: varchar('set_by_node_key', { length: 100 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    executionVariablesKeyIdx: uniqueIndex('workflow_execution_variables_key_idx').on(
+      table.workflowExecutionId,
+      table.key,
+    ),
+  }),
+);
+
+// Agent short-term memory: persistent KV the agent itself writes via the
+// `remember` / `recall` tools. Survives across executions — distinct from
+// per-execution variables. Optional TTL allows time-bounded entries.
+export const agentShortMemories = pgTable(
+  'agent_short_memories',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    key: varchar('key', { length: 200 }).notNull(),
+    valueJson: jsonb('value_json').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    shortMemoryAgentKeyIdx: uniqueIndex('agent_short_memories_agent_key_idx').on(table.agentId, table.key),
+    shortMemoryExpiresIdx: index('agent_short_memories_expires_idx').on(table.expiresAt),
+  }),
+);

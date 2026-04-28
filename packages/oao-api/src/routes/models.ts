@@ -1,11 +1,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { and, desc, eq } from 'drizzle-orm';
-import { authMiddleware, decrypt, uuidSchema } from '@oao/shared';
+import { eq } from 'drizzle-orm';
+import { authMiddleware, uuidSchema } from '@oao/shared';
 import { db } from '../database/index.js';
-import { models, userVariables, workspaceVariables } from '../database/schema.js';
+import { models } from '../database/schema.js';
 import { listUserActiveModels } from '../services/user-models.js';
-import { syncGithubCatalogIntoUser } from '../services/github-catalog.js';
 
 const modelsRouter = new Hono();
 modelsRouter.use('/*', authMiddleware);
@@ -15,16 +14,6 @@ modelsRouter.get('/', async (c) => {
   const user = c.get('user');
   const activeModels = await listUserActiveModels(user.userId);
   return c.json({ models: activeModels });
-});
-
-// GET /api/models/all — list ALL models (active + inactive) owned by current user
-modelsRouter.get('/all', async (c) => {
-  const user = c.get('user');
-  const allModels = await db.query.models.findMany({
-    where: eq(models.userId, user.userId),
-    orderBy: desc(models.createdAt),
-  });
-  return c.json({ models: allModels });
 });
 
 // ── Create / Update / Delete ─────────────────────────────────────────────
@@ -123,22 +112,6 @@ modelsRouter.put('/:id', async (c) => {
   if (!existing) return c.json({ error: 'Model not found' }, 404);
   if (existing.userId !== user.userId) return c.json({ error: 'Model does not belong to current user' }, 403);
 
-  // Catalog-managed rows lock most fields. Only `isActive`, `creditCost`, and
-  // `supportedReasoningEfforts` are user-overridable; everything else is owned
-  // by the upstream catalog and would be reset on next sync.
-  const isCatalogRow = existing.catalogSource === 'github_catalog';
-  if (isCatalogRow) {
-    const lockedKeys = [
-      'name', 'provider', 'providerType', 'customProviderType', 'customBaseUrl',
-      'customAuthType', 'customWireApi', 'customAzureApiVersion', 'description',
-    ] as const;
-    for (const key of lockedKeys) {
-      if (body[key] !== undefined) {
-        return c.json({ error: `Field "${key}" is managed by the GitHub Models catalog and cannot be edited. Only isActive, creditCost, and supportedReasoningEfforts may be overridden.` }, 400);
-      }
-    }
-  }
-
   const updateData: Record<string, unknown> = { updatedAt: new Date() };
   if (body.name !== undefined) updateData.name = body.name;
   if (body.provider !== undefined) updateData.provider = body.provider;
@@ -196,96 +169,5 @@ modelsRouter.delete('/:id', async (c) => {
   return c.json({ success: true });
 });
 
-// POST /api/models/sync-catalog — pull GitHub Models /catalog/models for the
-// current user. The github token MUST come from a credential of sub-type
-// 'github_token' (or 'secret_text'). The credential may be:
-//   - user-scope (owned by the calling user), or
-//   - workspace-scope (in the calling user's workspace).
-// Falling back to env vars is preserved as a convenience.
-const syncCatalogSchema = z.object({
-  url: z.string().url().max(1000).optional(),
-  githubTokenCredentialId: z.string().uuid().optional(),
-  // Optional explicit scope hint. When omitted, the server probes user-scope
-  // first then workspace-scope, so older clients keep working.
-  credentialScope: z.enum(['user', 'workspace']).optional(),
-});
-
-modelsRouter.post('/sync-catalog', async (c) => {
-  const user = c.get('user');
-  const body = syncCatalogSchema.parse(await c.req.json().catch(() => ({})));
-
-  let githubToken: string;
-
-  if (body.githubTokenCredentialId) {
-    // Probe user-scope first (current user only), then workspace-scope (must
-    // belong to the caller's workspace). This keeps the old user-only flow
-    // intact while letting workspace_admins reuse a shared workspace token.
-    let credential:
-      | { variableType: string; valueEncrypted: string | null; credentialSubType: string | null }
-      | null = null;
-    const wantUser = body.credentialScope !== 'workspace';
-    const wantWorkspace = body.credentialScope !== 'user';
-
-    if (wantUser) {
-      const row = await db.query.userVariables.findFirst({
-        where: and(
-          eq(userVariables.id, body.githubTokenCredentialId),
-          eq(userVariables.userId, user.userId),
-        ),
-      });
-      if (row) credential = row;
-    }
-    if (!credential && wantWorkspace && user.workspaceId) {
-      const row = await db.query.workspaceVariables.findFirst({
-        where: and(
-          eq(workspaceVariables.id, body.githubTokenCredentialId),
-          eq(workspaceVariables.workspaceId, user.workspaceId),
-        ),
-      });
-      if (row) credential = row;
-    }
-
-    if (!credential) return c.json({ error: 'Selected credential not found.' }, 404);
-    if (credential.variableType !== 'credential' || !credential.valueEncrypted) {
-      return c.json({ error: 'Selected variable is not a credential.' }, 400);
-    }
-    if (
-      credential.credentialSubType &&
-      credential.credentialSubType !== 'github_token' &&
-      credential.credentialSubType !== 'secret_text'
-    ) {
-      return c.json(
-        { error: `Selected credential sub-type is "${credential.credentialSubType}". Choose a github_token or secret_text credential.` },
-        400,
-      );
-    }
-    try {
-      githubToken = decrypt(credential.valueEncrypted);
-    } catch {
-      return c.json({ error: 'Failed to decrypt selected credential.' }, 500);
-    }
-  } else {
-    githubToken = process.env.DEFAULT_LLM_API_KEY || process.env.GITHUB_TOKEN || '';
-  }
-
-  if (!githubToken) {
-    return c.json(
-      { error: 'No GitHub token available. Select a github_token credential or set DEFAULT_LLM_API_KEY / GITHUB_TOKEN on the server.' },
-      400,
-    );
-  }
-
-  try {
-    const result = await syncGithubCatalogIntoUser({
-      userId: user.userId,
-      githubToken,
-      url: body.url ?? null,
-    });
-    return c.json({ result });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Catalog sync failed.';
-    return c.json({ error: message }, 502);
-  }
-});
-
 export default modelsRouter;
+

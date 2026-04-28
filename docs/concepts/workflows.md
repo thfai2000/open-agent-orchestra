@@ -1,6 +1,40 @@
 # Workflows
 
-A **workflow** is an ordered sequence of steps, each executed as a separate Copilot session. Steps pass output forward, enabling complex multi-stage reasoning.
+A **workflow** is an automation graph made of trigger blocks, agent-step blocks, and optional procedural blocks. Agent steps execute as separate Copilot sessions and can pass output to downstream blocks.
+
+The workflow detail page uses three tabs: **Flows** for authoring (with Visual Editor and YAML Editor sub-tabs), **Executions** for run history, and **Variables**. The legacy block-step list has been replaced by the Visual Editor; existing sequential steps are shown as connected `agent_step` blocks so prompts and step overrides remain editable without switching modes.
+
+## Flow Editing
+
+Inside the **Flows** tab there are two complementary views over the same underlying graph:
+
+- **Visual Editor** — drag-and-drop SVG canvas. Mouse-wheel zoom is anchored at the cursor (so the element under the pointer stays put). The toolbar also exposes a **Center** button next to **Reset** to fit and centre all blocks within the viewport.
+- **YAML Editor** — the same workflow rendered as YAML (`blocks`, `edges`, `triggers`, `executionMode`). Edits are validated and saved back through the same `/api/workflow-graph/:id/graph` endpoint, so the two views are always in sync.
+
+Example YAML:
+
+```yaml
+executionMode: graph
+blocks:
+  - key: start
+    type: start
+    name: Start
+    position: { x: 40, y: 200 }
+  - key: a
+    type: agent_step
+    name: A
+    position: { x: 320, y: 200 }
+    config: { promptTemplate: "Process {{ inputs.payload }}" }
+edges:
+  - { from: start, to: a }
+triggers:
+  - id: 7e3d…
+    type: manual
+    active: true
+    configuration: {}
+```
+
+Fan-out (one block → multiple downstream blocks) executes children in parallel; fan-in (multiple parents → one child) waits for **all** upstream blocks to complete before running, when `executionMode` is `graph`.
 
 ## Workflow Structure
 
@@ -16,7 +50,7 @@ graph LR
     style R fill:#4CAF50,color:#fff
 ```
 
-A workflow is a linear pipeline of steps. Each step runs as an independent Copilot session. The output of step _N_ becomes <span v-pre>`{{ precedent_output }}`</span> for step _N+1_.
+A workflow can still behave like a linear pipeline, but the authoring surface is visual. Each `agent_step` block runs as an independent Copilot session. The output of one agent step becomes <span v-pre>`{{ precedent_output }}`</span> for the next synced agent step, and graph-mode blocks can also use <span v-pre>`{{ node_input }}`</span> for the previous node output.
 
 Each workflow has:
 - **Name & description**
@@ -41,6 +75,16 @@ Workflows keep immutable version history for the workflow definition, ordered st
 Workflow history captures the state before each edit so older versions remain navigable even after later changes.
 
 Trigger create, update, and delete operations also increment the workflow version, whether they originate from the UI, the API, or built-in agent tools.
+
+## Visual Editor
+
+The **Visual Editor** tab is the primary workflow authoring surface. It represents every existing sequential workflow step as an `agent_step` block and lets users add, delete, position, and connect blocks directly on the canvas.
+
+Clicking an agent-step block expands the inspector and exposes the same controls that used to live in the block-step editor: **Prompt Template**, agent override, model override, reasoning effort, worker runtime, timeout, and position. Clicking empty canvas space collapses the inspector. Drag empty canvas space to pan around large workflows.
+
+Saved workflow triggers appear on the canvas as trigger elements connected to the first agent step, making the execution entry path visible. Trigger creation, editing, deletion, and connectivity tests now live inside the Visual Editor inspector rather than in a separate trigger tab.
+
+Saving a graph switches the workflow to graph mode and synchronizes all `agent_step` blocks back into `workflow_steps` for version history and classic step-list compatibility. Procedural blocks such as HTTP requests, scripts, conditionals, parallel markers, and joins are stored only in the graph tables.
 
 ## Execution Detail View
 

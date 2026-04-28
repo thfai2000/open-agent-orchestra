@@ -15,7 +15,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { authMiddleware } from '@oao/shared';
 import { db } from '../database/index.js';
-import { conversations, stepExecutions, workflowExecutions, workflows } from '../database/schema.js';
+import { conversations, stepExecutions, workflowExecutions, workflows, nodeExecutions } from '../database/schema.js';
 import { hasPendingQuestion, resolveQuestion } from '../services/question-registry.js';
 
 const router = new Hono();
@@ -51,9 +51,15 @@ router.post('/answer', async (c) => {
       where: eq(stepExecutions.id, body.contextId),
       columns: { id: true, workflowExecutionId: true },
     });
-    if (!step) return c.json({ error: 'Step execution not found' }, 404);
+    const node = step
+      ? null
+      : await db.query.nodeExecutions.findFirst({
+          where: eq(nodeExecutions.id, body.contextId),
+          columns: { id: true, workflowExecutionId: true },
+        });
+    if (!step && !node) return c.json({ error: 'Step execution not found' }, 404);
     const exec = await db.query.workflowExecutions.findFirst({
-      where: eq(workflowExecutions.id, step.workflowExecutionId),
+      where: eq(workflowExecutions.id, (step ?? node)!.workflowExecutionId),
       columns: { id: true, workflowId: true },
     });
     if (!exec) return c.json({ error: 'Execution not found' }, 404);

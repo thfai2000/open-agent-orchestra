@@ -135,7 +135,7 @@
           </Tab>
           <Tab value="variables">
             Variables
-            <span v-if="mergedVars.length > 0" class="ml-1.5 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full bg-primary-100 text-primary-700 text-xs font-semibold">{{ mergedVars.length }}</span>
+            <span v-if="variableCount > 0" class="ml-1.5 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full bg-primary-100 text-primary-700 text-xs font-semibold">{{ variableCount }}</span>
           </Tab>
         </TabList>
         <TabPanels>
@@ -155,7 +155,7 @@
                       <div>
                         <span class="text-surface-500 text-sm">Git Auth Credential</span>
                         <p v-if="resolvedGitCredential" class="text-sm">
-                          <NuxtLink :to="`/${ws}/variables?scope=${resolvedGitCredential.scope}&id=${resolvedGitCredential.id}`" class="text-primary hover:underline">{{ resolvedGitCredential.optionLabel }}</NuxtLink>
+                          <NuxtLink :to="credentialLink(resolvedGitCredential)" class="text-primary hover:underline">{{ resolvedGitCredential.optionLabel }}</NuxtLink>
                         </p>
                         <p v-else class="text-sm text-surface-400 italic">Not configured (falls back to system default)</p>
                       </div>
@@ -169,7 +169,7 @@
                     <div>
                       <span class="text-surface-500 text-sm">GitHub Copilot Token / LLM API Key</span>
                       <p v-if="resolvedCopilotCredential" class="text-sm">
-                        <NuxtLink :to="`/${ws}/variables?scope=${resolvedCopilotCredential.scope}&id=${resolvedCopilotCredential.id}`" class="text-primary hover:underline">{{ resolvedCopilotCredential.optionLabel }}</NuxtLink>
+                        <NuxtLink :to="credentialLink(resolvedCopilotCredential)" class="text-primary hover:underline">{{ resolvedCopilotCredential.optionLabel }}</NuxtLink>
                       </p>
                       <p v-else class="text-sm text-surface-400 italic">Not configured (falls back to server default)</p>
                     </div>
@@ -243,48 +243,105 @@
 
           <!-- Variables Tab -->
           <TabPanel value="variables">
-            <div class="mt-4">
-              <div class="flex items-center justify-between mb-4">
-                <div>
-                  <h3 class="text-lg font-medium">Effective Variables</h3>
-                  <p class="text-surface-400 text-xs mt-1">Consolidated view across all scopes. Agent &gt; User &gt; Workspace priority (higher overrides lower).</p>
-                </div>
-                <div class="flex gap-2 items-center">
-                  <NuxtLink :to="`/${ws}/variables`">
-                    <Button label="Manage Variables" icon="pi pi-external-link" severity="secondary" size="small" />
-                  </NuxtLink>
-                </div>
+            <div class="mt-4 flex flex-col gap-6">
+              <div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                Variable priority (highest wins): <strong>Execution</strong> &gt; <strong>Agent</strong> &gt; <strong>Workflow</strong> &gt; <strong>User</strong> &gt; <strong>Workspace</strong>.
+                Use <code class="font-mono text-xs bg-blue-100 px-1 rounded" v-pre>{{ properties.KEY }}</code> in prompt templates.
+                <div class="mt-1 text-xs text-blue-700">Workflow-scoped variables are configured on each workflow and only apply when this agent runs inside that workflow.</div>
               </div>
 
-              <Message severity="info" :closable="false" class="mb-4 text-xs">
-                <i class="pi pi-info-circle mr-1"></i>
-                To add or edit variables, go to the <NuxtLink :to="`/${ws}/variables`" class="text-primary font-medium hover:underline">Variables</NuxtLink> page where you can manage Workspace, User, and Agent-scoped variables.
-              </Message>
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <h3 class="text-sm font-semibold text-surface-700">Workspace Scope <span class="ml-1 text-xs font-normal text-surface-400">(lowest priority)</span></h3>
+                  <NuxtLink :to="`/${ws}/variables`" class="text-xs text-primary hover:underline">Manage workspace variables →</NuxtLink>
+                </div>
+                <DataTable :value="workspaceVars" size="small" class="text-xs">
+                  <template #empty><div class="py-3 text-center text-surface-400">No workspace variables.</div></template>
+                  <Column field="key" header="Key" />
+                  <Column field="variableType" header="Type" />
+                  <Column field="description" header="Description" />
+                </DataTable>
+              </div>
 
-              <DataTable :value="mergedVars" dataKey="_uid" stripedRows>
-                <template #empty><div class="text-center py-8 text-surface-400">No variables configured across any scope for this agent.</div></template>
-                <Column field="key" header="Key" style="min-width: 160px">
-                  <template #body="{ data }"><span class="font-mono text-sm">{{ data.key }}</span></template>
-                </Column>
-                <Column field="variableType" header="Type" style="width: 110px">
-                  <template #body="{ data }"><Tag :value="data.variableType" :severity="data.variableType === 'credential' ? 'warn' : 'info'" /></template>
-                </Column>
-                <Column header="Effective Scope" style="width: 150px">
-                  <template #body="{ data }">
-                    <Tag :value="scopeLabel(data._effectiveScope)" :severity="scopeSeverity(data._effectiveScope)" />
-                  </template>
-                </Column>
-                <Column header="Defined In" style="width: 200px">
-                  <template #body="{ data }">
-                    <div class="flex flex-wrap gap-1">
-                      <Tag v-for="s in data._definedScopes" :key="s" :value="scopeLabel(s)" :severity="scopeSeverity(s)" class="text-[10px]" :class="{ 'opacity-40 line-through': s !== data._effectiveScope }" />
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <h3 class="text-sm font-semibold text-surface-700">User Scope</h3>
+                  <NuxtLink :to="`/${ws}/variables`" class="text-xs text-primary hover:underline">Manage user variables →</NuxtLink>
+                </div>
+                <DataTable :value="userVars" size="small" class="text-xs">
+                  <template #empty><div class="py-3 text-center text-surface-400">No user variables.</div></template>
+                  <Column field="key" header="Key" />
+                  <Column field="variableType" header="Type" />
+                  <Column field="description" header="Description" />
+                </DataTable>
+              </div>
+
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <h3 class="text-sm font-semibold text-surface-700">Agent Scope <span class="ml-1 text-xs font-normal text-surface-400">(overrides workflow, user, and workspace)</span></h3>
+                  <Button label="Add Variable" icon="pi pi-plus" size="small" @click="openCreateAgentVar" />
+                </div>
+
+                <div v-if="agentVarFormVisible" class="mb-3 rounded-lg border border-surface-200 bg-surface-50 p-3">
+                  <Message v-if="agentVarError" severity="error" :closable="false" class="mb-3">{{ agentVarError }}</Message>
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div class="flex flex-col gap-1">
+                      <label class="text-xs font-medium">Key *</label>
+                      <InputText v-model="agentVarForm.key" placeholder="MY_KEY" :disabled="agentVarEditMode" class="font-mono text-sm" />
                     </div>
-                  </template>
-                </Column>
-                <Column field="description" header="Description">
-                  <template #body="{ data }"><span class="text-sm text-surface-500">{{ data.description || '—' }}</span></template>
-                </Column>
-              </DataTable>
+                    <div class="flex flex-col gap-1">
+                      <label class="text-xs font-medium">Type</label>
+                      <Select v-model="agentVarForm.variableType" :options="agentVarTypeOptions" optionLabel="label" optionValue="value" />
+                    </div>
+                    <div v-if="agentVarForm.variableType === 'credential'" class="flex flex-col gap-1 md:col-span-2">
+                      <label class="text-xs font-medium">Credential Sub-Type</label>
+                      <Select v-model="agentVarForm.credentialSubType" :options="credentialSubTypeOptions" optionLabel="label" optionValue="value" />
+                    </div>
+                    <div class="flex flex-col gap-1 md:col-span-2">
+                      <label class="text-xs font-medium">{{ agentVarEditMode ? 'New Value' : 'Value' }}{{ agentVarEditMode ? '' : ' *' }}</label>
+                      <Textarea v-model="agentVarForm.value" rows="4" :placeholder="agentVarEditMode ? 'Leave empty to keep the current stored value' : 'Stored encrypted'" />
+                    </div>
+                    <div class="flex flex-col gap-1 md:col-span-2">
+                      <label class="text-xs font-medium">Description</label>
+                      <InputText v-model="agentVarForm.description" placeholder="Optional description" />
+                    </div>
+                    <div class="md:col-span-2 flex items-center gap-2">
+                      <Checkbox v-model="agentVarForm.injectAsEnvVariable" :binary="true" inputId="agentInjectEnv" />
+                      <label for="agentInjectEnv" class="text-sm">Inject as environment variable</label>
+                    </div>
+                  </div>
+                  <div class="mt-3 flex justify-end gap-2">
+                    <Button label="Cancel" severity="secondary" size="small" @click="closeAgentVarForm" />
+                    <Button label="Save" icon="pi pi-check" size="small" :loading="savingAgentVar" @click="handleSaveAgentVar" />
+                  </div>
+                </div>
+
+                <DataTable :value="agentVars" size="small" class="text-xs">
+                  <template #empty><div class="py-3 text-center text-surface-400">No agent variables. Click Add Variable to create one.</div></template>
+                  <Column field="key" header="Key">
+                    <template #body="{ data }"><code class="font-mono">{{ data.key }}</code></template>
+                  </Column>
+                  <Column header="Version" style="width: 90px">
+                    <template #body="{ data }"><Tag :value="`v${data.version || 1}`" severity="secondary" /></template>
+                  </Column>
+                  <Column field="variableType" header="Type" style="width: 110px" />
+                  <Column field="credentialSubType" header="Sub-Type" style="width: 160px">
+                    <template #body="{ data }"><span>{{ data.variableType === 'credential' ? data.credentialSubType || 'secret_text' : '—' }}</span></template>
+                  </Column>
+                  <Column field="description" header="Description" />
+                  <Column header="Inject ENV" style="width: 110px">
+                    <template #body="{ data }"><Tag :value="data.injectAsEnvVariable ? 'Yes' : 'No'" :severity="data.injectAsEnvVariable ? 'success' : 'secondary'" /></template>
+                  </Column>
+                  <Column header="" style="width: 120px">
+                    <template #body="{ data }">
+                      <div class="flex gap-1">
+                        <Button icon="pi pi-pencil" text size="small" @click="startEditAgentVar(data)" />
+                        <Button icon="pi pi-times" text severity="danger" size="small" @click="handleDeleteAgentVar(data)" />
+                      </div>
+                    </template>
+                  </Column>
+                </DataTable>
+              </div>
             </div>
           </TabPanel>
         </TabPanels>
@@ -312,7 +369,8 @@ const agentId = computed(() => route.params.id as string);
 const isHistoricalVersionRoute = computed(() => Boolean(route.params.version));
 const { buildCredentialOptions, filterGitAuthCredentialOptions, filterCopilotCredentialOptions, findCredentialOption } = useAgentCredentialOptions();
 
-const activeTab = ref<string | number>('overview');
+const agentTabs = ['overview', 'files', 'variables'];
+const activeTab = ref<string | number>(agentTabs.includes(route.query.tab as string) ? route.query.tab as string : 'overview');
 const editing = ref(false);
 const editError = ref('');
 const savingEdit = ref(false);
@@ -421,6 +479,7 @@ const { data: wsVarsData } = await useFetch('/api/variables?scope=workspace', { 
 const workspaceVars = computed(() => (wsVarsData.value as any)?.variables ?? []);
 const { data: userVarsData } = await useFetch('/api/variables?scope=user', { headers });
 const userVars = computed(() => (userVarsData.value as any)?.variables ?? []);
+const variableCount = computed(() => workspaceVars.value.length + userVars.value.length + agentVars.value.length);
 const credentialOptions = computed(() => buildCredentialOptions([
   { scope: 'agent', scopeLabel: 'Agent', variables: agentVars.value },
   { scope: 'user', scopeLabel: 'User', variables: userVars.value },
@@ -431,36 +490,157 @@ const modelAuthCredOptions = computed(() => filterCopilotCredentialOptions(crede
 const resolvedCopilotCredential = computed(() => findCredentialOption(credentialOptions.value, agent.value?.copilotTokenCredentialId));
 const resolvedGitCredential = computed(() => findCredentialOption(credentialOptions.value, agent.value?.githubTokenCredentialId));
 
-// Merge variables: Agent > User > Workspace priority
-const mergedVars = computed(() => {
-  const map = new Map<string, any>();
-  // Workspace (lowest priority)
-  for (const v of workspaceVars.value) {
-    map.set(v.key, { ...v, _effectiveScope: 'workspace', _definedScopes: ['workspace'], _uid: `ws-${v.id}` });
-  }
-  // User (medium priority)
-  for (const v of userVars.value) {
-    const existing = map.get(v.key);
-    if (existing) {
-      map.set(v.key, { ...v, _effectiveScope: 'user', _definedScopes: [...existing._definedScopes, 'user'], _uid: `usr-${v.id}` });
-    } else {
-      map.set(v.key, { ...v, _effectiveScope: 'user', _definedScopes: ['user'], _uid: `usr-${v.id}` });
-    }
-  }
-  // Agent (highest priority)
-  for (const v of agentVars.value) {
-    const existing = map.get(v.key);
-    if (existing) {
-      map.set(v.key, { ...v, _effectiveScope: 'agent', _definedScopes: [...existing._definedScopes, 'agent'], _uid: `ag-${v.id}` });
-    } else {
-      map.set(v.key, { ...v, _effectiveScope: 'agent', _definedScopes: ['agent'], _uid: `ag-${v.id}` });
-    }
-  }
-  return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key));
+const agentVarFormVisible = ref(false);
+const agentVarEditMode = ref(false);
+const savingAgentVar = ref(false);
+const agentVarError = ref('');
+const agentVarTypeOptions = [
+  { label: 'Credential', value: 'credential' },
+  { label: 'Property', value: 'property' },
+];
+const credentialSubTypeOptions = [
+  { label: 'Secret Text', value: 'secret_text' },
+  { label: 'GitHub Token', value: 'github_token' },
+  { label: 'GitHub App', value: 'github_app' },
+  { label: 'User Account', value: 'user_account' },
+  { label: 'Private Key', value: 'private_key' },
+  { label: 'Certificate', value: 'certificate' },
+];
+const agentVarForm = reactive({
+  id: '',
+  key: '',
+  value: '',
+  variableType: 'credential',
+  credentialSubType: 'secret_text',
+  description: '',
+  injectAsEnvVariable: false,
 });
 
-function scopeLabel(s: string) { return { workspace: 'Workspace', user: 'User', agent: 'Agent' }[s] || s; }
-function scopeSeverity(s: string) { return { workspace: 'secondary', user: 'info', agent: 'success' }[s] || 'secondary'; }
+watch(() => route.query.tab, (tab) => {
+  const nextTab = typeof tab === 'string' && agentTabs.includes(tab) ? tab : 'overview';
+  if (nextTab !== activeTab.value) activeTab.value = nextTab;
+});
+
+watch(activeTab, (tab) => {
+  const nextQuery = { ...route.query } as Record<string, string | string[] | undefined>;
+  if (tab === 'overview') delete nextQuery.tab;
+  else nextQuery.tab = String(tab);
+  router.replace({ query: nextQuery });
+});
+
+function credentialLink(option?: { scope?: string; id?: string } | null) {
+  if (!option?.scope || !option?.id) return `/${ws.value}/variables`;
+  if (option.scope === 'agent') return `/${ws.value}/agents/${agentId.value}?tab=variables`;
+  return `/${ws.value}/variables/${option.scope}/${option.id}`;
+}
+
+function resetAgentVarForm() {
+  Object.assign(agentVarForm, {
+    id: '',
+    key: '',
+    value: '',
+    variableType: 'credential',
+    credentialSubType: 'secret_text',
+    description: '',
+    injectAsEnvVariable: false,
+  });
+  agentVarEditMode.value = false;
+  agentVarError.value = '';
+}
+
+function closeAgentVarForm() {
+  agentVarFormVisible.value = false;
+  resetAgentVarForm();
+}
+
+function openCreateAgentVar() {
+  resetAgentVarForm();
+  agentVarFormVisible.value = true;
+}
+
+function startEditAgentVar(variable: any) {
+  Object.assign(agentVarForm, {
+    id: variable.id,
+    key: variable.key,
+    value: '',
+    variableType: variable.variableType || 'credential',
+    credentialSubType: variable.credentialSubType || 'secret_text',
+    description: variable.description || '',
+    injectAsEnvVariable: variable.injectAsEnvVariable === true,
+  });
+  agentVarEditMode.value = true;
+  agentVarError.value = '';
+  agentVarFormVisible.value = true;
+}
+
+async function handleSaveAgentVar() {
+  agentVarError.value = '';
+
+  if (!agentVarForm.key.trim()) {
+    agentVarError.value = 'A variable key is required.';
+    return;
+  }
+
+  if (!agentVarEditMode.value && !agentVarForm.value.trim()) {
+    agentVarError.value = 'A variable value is required.';
+    return;
+  }
+
+  savingAgentVar.value = true;
+  try {
+    if (agentVarEditMode.value) {
+      const body: Record<string, unknown> = {
+        scope: 'agent',
+        variableType: agentVarForm.variableType,
+        credentialSubType: agentVarForm.credentialSubType,
+        description: agentVarForm.description.trim() || undefined,
+        injectAsEnvVariable: agentVarForm.injectAsEnvVariable,
+      };
+      if (agentVarForm.value.trim()) body.value = agentVarForm.value;
+
+      await $fetch(`/api/variables/${agentVarForm.id}`, { method: 'PUT', headers, body });
+      toast.add({ severity: 'success', summary: 'Saved', detail: 'Agent variable updated', life: 3000 });
+    } else {
+      await $fetch('/api/variables', {
+        method: 'POST',
+        headers,
+        body: {
+          scope: 'agent',
+          agentId: agentId.value,
+          key: agentVarForm.key.trim(),
+          value: agentVarForm.value,
+          variableType: agentVarForm.variableType,
+          credentialSubType: agentVarForm.credentialSubType,
+          description: agentVarForm.description.trim() || undefined,
+          injectAsEnvVariable: agentVarForm.injectAsEnvVariable,
+        },
+      });
+      toast.add({ severity: 'success', summary: 'Created', detail: 'Agent variable added', life: 3000 });
+    }
+
+    closeAgentVarForm();
+    await Promise.all([refreshVars(), refreshAgent(), refreshAgentVersions()]);
+  } catch (e: any) {
+    agentVarError.value = e?.data?.error || 'Failed to save agent variable.';
+  } finally {
+    savingAgentVar.value = false;
+  }
+}
+
+function handleDeleteAgentVar(variable: any) {
+  confirm.require({
+    message: `Delete variable "${variable.key}"?`,
+    header: 'Confirm',
+    icon: 'pi pi-exclamation-triangle',
+    rejectProps: { label: 'Cancel', severity: 'secondary' },
+    acceptProps: { label: 'Delete', severity: 'danger' },
+    accept: async () => {
+      await $fetch(`/api/variables/${variable.id}?scope=agent`, { method: 'DELETE', headers });
+      toast.add({ severity: 'success', summary: 'Deleted', detail: 'Agent variable removed', life: 3000 });
+      await Promise.all([refreshVars(), refreshAgent(), refreshAgentVersions()]);
+    },
+  });
+}
 
 // Edit form
 const editForm = reactive({
@@ -695,6 +875,4 @@ async function handleDeleteFile(fileId: string) {
     },
   });
 }
-
-// (Variables are managed on the dedicated Variables page)
 </script>

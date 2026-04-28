@@ -1076,16 +1076,24 @@ describe('Admin routes — user management', () => {
 });
 
 describe('Model routes — user-scoped (v1.37.0)', () => {
-  it('GET /api/models/all returns user models', async () => {
+  it('GET /api/models returns active user models', async () => {
     const token = await getToken('workspace_admin');
     mockFindMany.mockResolvedValueOnce([
-      { id: TEST_MODEL_ID, name: 'gpt-4.1', provider: 'github' },
+      {
+        id: TEST_MODEL_ID,
+        name: 'gpt-4.1',
+        provider: 'github',
+        isActive: true,
+      },
     ]);
 
-    const res = await app.request('/api/models/all', { headers: authHeaders(token) });
+    const res = await app.request('/api/models', { headers: authHeaders(token) });
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.models).toBeDefined();
+    expect(json.models[0].name).toBe('gpt-4.1');
+    expect(json.models[0].maxInputTokens).toBeUndefined();
+    expect(json.models[0].maxOutputTokens).toBeUndefined();
   });
 
   it('POST /api/models creates model', async () => {

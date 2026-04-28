@@ -1,18 +1,22 @@
 # Admin
 
-Workspace administrators have access to management features for models, users, rate limits, and security.
+Workspace administrators have access to management features for users, role bundles, groups, rate limits, authentication providers, and security.
 
 ## Admin Pages
 
 | Page | Path | Description |
 |------|------|-------------|
 | Users | `/{workspace}/admin/users` | List, add, and manage user roles |
-| Models | `/{workspace}/admin/models` | Configure available AI models and credit costs |
+| Roles | `/{workspace}/admin/roles` | Manage functionality bundles that grant fine-grained platform access |
+| User Groups | `/{workspace}/admin/user-groups` | Organize users into shared groups that can be bound to role bundles |
+| Models | `/{workspace}/models` | Manage saved model records and enabled states |
 | Auth Providers | `/{workspace}/admin/auth-providers` | Configure authentication providers (Database, LDAP). See [Auth Providers](/concepts/auth-providers) |
 | Rate Limits | `/{workspace}/admin/rate-limits` | Set workspace defaults and per-user credit limits |
-| Security | `/{workspace}/admin/security` | Configure workspace self-service registration and forgot-password access |
+| Settings | `/{workspace}/admin/settings` | Workspace settings: registration/password-reset access, ephemeral agent lifecycle, static agent cleanup interval, and security guardrails (replaces the legacy `/admin/security` page, which now redirects here) |
 | Mail Settings | `/{workspace}/admin/mail-settings` | Configure global SMTP settings for password reset and system emails (`super_admin` only) |
 | Workspaces | `/{workspace}/workspaces` | Manage workspaces (`super_admin` only) |
+
+The legacy `/{workspace}/admin/rbac` screen has been removed. Role definitions now live on `/{workspace}/admin/roles`.
 
 ## Model Management
 

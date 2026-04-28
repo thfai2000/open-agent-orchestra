@@ -53,6 +53,8 @@ export function useExecutionStream(executionId: Ref<string>, options?: { enabled
       'agent.message.completed', 'agent.message.failed',
       'agent.tool.execution_start', 'agent.tool.execution_complete',
       'agent.tool.ask_questions', 'agent.tool.ask_questions_resolved',
+      // Graph workflow node lifecycle events (v3+)
+      'node.started', 'node.completed', 'node.failed',
     ];
 
     for (const type of eventTypes) {
