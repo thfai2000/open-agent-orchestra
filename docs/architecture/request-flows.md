@@ -20,9 +20,9 @@ sequenceDiagram
     UI-->>User: Render page
 ```
 
-## Trigger Flow (Unified Event-Based)
+## Trigger Flow
 
-All trigger types follow the same event-based pattern — the API writes a `system_event`, and the Controller picks it up:
+Webhook and event triggers enter through `system_events`; manual trigger runs enqueue immediately; scheduled triggers are polled by the Controller.
 
 ```mermaid
 sequenceDiagram
@@ -39,9 +39,9 @@ sequenceDiagram
         API->>DB: Insert webhook.received event
         API-->>Src: 202 Accepted
     else Manual Run (UI)
-        Src->>API: POST /api/workflows/:id/run
-        API->>DB: Insert webhook.received event
-        API-->>Src: 202 Accepted
+        Src->>API: POST /api/triggers/:id/run
+        API->>Q: Enqueue workflow-execution job
+        API-->>Src: 202 Accepted {executionId,status}
     else Cron / Datetime
         Note over Ctrl: Poll triggers table directly
     else System Event
@@ -51,8 +51,8 @@ sequenceDiagram
     Ctrl->>DB: Poll system_events + triggers
     Ctrl->>Q: Enqueue workflow-execution job
     Q->>W: Dequeue
-    W->>AI: Dispatch steps to agent instances
-    AI->>DB: Execute steps + write results
+    W->>AI: Run agent_step nodes when reached
+    AI->>DB: Write step and node results
 ```
 
 ## URL Routing

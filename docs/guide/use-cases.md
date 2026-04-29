@@ -283,7 +283,7 @@ Treat hostile inputs as first-class product use cases, not optional hardening wo
 |------------|-----------------------------|----------------------------|
 | Malformed webhook signature | Send a very short or malformed `X-Signature` value to an HMAC-protected webhook | Return `401 Invalid signature` and never throw a server-side length mismatch error |
 | Webhook replay attack | Resend the same signed payload with the same `X-Event-Id` | Return `already_processed` and do not emit a second workflow run |
-| Manual-run contract bypass | Call `POST /api/workflows/:id/run` without required inputs declared by the webhook trigger | Return `400 Missing required inputs: ...` and do not enqueue execution |
+| Manual-run contract bypass | Call `POST /api/triggers/:id/run` without required inputs declared by the webhook trigger, or call it for an inactive trigger | Return `400 Missing required inputs: ...` or `400 Trigger is not active`, and do not enqueue execution |
 | PAT enumeration attempt | List API tokens after creation and inspect metadata responses | Only token metadata is returned; raw tokens and token hashes are never exposed again after initial creation |
 | Agent file traversal | Submit `..` or absolute paths when creating agent files | Reject the request before any file content is stored or versioned |
 

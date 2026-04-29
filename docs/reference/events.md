@@ -75,11 +75,10 @@ The `webhook.received` event is special — it drives the webhook execution pipe
 
 1. **External webhook** → `POST /api/webhooks/:registrationId` → inserts `webhook.received` event
 2. **Jira callback** → `POST /api/jira-webhooks/:triggerId?token=...` → inserts `webhook.received` event with `triggerType: "jira_changes_notification"`
-3. **Manual Run** → `POST /api/workflows/:id/run` → inserts `webhook.received` event
-4. **Controller** → polls `system_events` → processes `webhook.received` → enqueues workflow execution
+3. **Controller** → polls `system_events` → processes `webhook.received` → enqueues workflow execution
 
 `webhook.received.eventData` commonly includes `triggerId`, `workflowId`, `triggerType`, `source`, `authMethod`, `eventId`, `payload`, `inputs`, and `receivedAt`.
 
-Jira polling is different: `jira_polling` triggers do not emit `webhook.received`; the controller polls Jira directly and enqueues executions with `triggerMetadata.type = "jira_polling"`.
+Manual Run is different: `POST /api/triggers/:id/run` validates the selected trigger and enqueues execution immediately with `triggerMetadata.source = "manual_run"`. Jira polling also bypasses `webhook.received`; the controller polls Jira directly and enqueues executions with `triggerMetadata.type = "jira_polling"`.
 
-Generic webhooks, Jira callbacks, and Manual Run all flow through the same event pipeline, ensuring consistent processing and auditability.
+Generic webhooks and Jira callbacks flow through the event pipeline, ensuring consistent processing and auditability for external callbacks.

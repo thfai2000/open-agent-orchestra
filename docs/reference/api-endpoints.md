@@ -643,17 +643,13 @@ Get a specific workflow version snapshot, including the workflow config, steps, 
 
 Partial update. Automatically increments `version`. **Auth**: JWT/PAT · **Role**: `creator_user`+
 
-### `PUT /api/workflows/:id/steps`
-
-Atomically replace all workflow steps. **Auth**: JWT/PAT · **Role**: `creator_user`+
-
 ### `GET /api/workflow-graph/:workflowId/graph`
 
-Fetch graph nodes, edges, execution mode, current workflow steps, and serialized triggers. If no saved graph exists, the API returns a synthetic graph built from existing sequential steps so the Visual Editor can display every `workflow_steps` row as an `agent_step` block. **Auth**: JWT/PAT
+Fetch persisted graph nodes, edges, current `workflow_steps` projection, and serialized triggers. **Auth**: JWT/PAT
 
 ### `PUT /api/workflow-graph/:workflowId/graph`
 
-Replace graph nodes and edges atomically, switch the workflow to graph mode, and synchronize saved `agent_step` blocks back to `workflow_steps`. Validates exactly one `start` node, valid edge endpoints, and non-empty prompt templates for agent-step nodes. **Auth**: JWT/PAT · **Role**: `creator_user`+
+Replace graph nodes and edges atomically and synchronize saved `agent_step` blocks back to `workflow_steps`. Validates graph node types, valid edge endpoints, and non-empty prompt templates for agent-step nodes. **Auth**: JWT/PAT · **Role**: `creator_user`+
 
 ### `GET /api/workflow-graph/executions/:executionId/nodes`
 
@@ -663,18 +659,24 @@ List graph node execution rows for one execution. Rows include node input/output
 
 Delete workflow. **Auth**: JWT/PAT · **Role**: `creator_user`+
 
-### `POST /api/workflows/:id/run`
+### `POST /api/triggers/:id/run`
 
-Manually trigger workflow execution. If the workflow has a webhook trigger with defined parameters, `inputs` are validated. **Auth**: JWT/PAT · **Role**: `creator_user`+
+Manually run a workflow through a specific trigger. Eligible trigger types are
+`webhook`, `time_schedule`, `exact_datetime`, `jira_polling` (all entries with
+`supportsManualRun: true` in the trigger catalog). The selected trigger's
+`entryNodeKey` is honoured by the graph engine, so each trigger has its own
+entry point. For `webhook` triggers, `inputs` are validated against the
+declared `parameters`; for the other eligible types, `inputs` are passed
+through to the execution context as a free-form object. **Auth**: JWT/PAT · **Role**: `creator_user`+
 
 ```bash
-curl -X POST http://localhost:4002/api/workflows/$WF_ID/run \
+curl -X POST http://localhost:4002/api/triggers/$TRIGGER_ID/run \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"inputs": {"issue_url": "https://github.com/org/repo/issues/42"}}'
 ```
 
-**Response**: `202 Accepted`
+**Response**: `202 Accepted` — `{ "executionId": "...", "status": "pending" }`
 
 ---
 
@@ -962,6 +964,14 @@ curl -X POST http://localhost:4002/api/triggers \
 ### `PUT /api/triggers/:id`
 
 Update trigger. **Auth**: JWT/PAT · **Role**: `creator_user`+
+
+Optional fields (all may be sent independently):
+
+- `triggerType`, `configuration`, `isActive` — same shape as `POST`.
+- `entryNodeKey` (string | null) — graph node where this trigger begins execution. `null` (or omitted) falls back to the first root block by canvas position and node key. Multiple triggers on the same workflow can target different entry nodes.
+- `positionX`, `positionY` (integer) — visual editor coordinates of the trigger block on the canvas.
+
+The `POST /api/triggers` body accepts the same `entryNodeKey`, `positionX`, and `positionY` fields, so triggers can be created in-place when dragged onto the visual editor canvas.
 
 ### `POST /api/triggers/:id/test`
 

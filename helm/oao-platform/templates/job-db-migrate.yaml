@@ -71,6 +71,125 @@ spec:
                   await sql.end();
                 })().catch(e => { console.error(e); process.exit(1); });
               "
+              # v4.0.0: drop start/end node types + executionMode column.
+              # Triggers now point at any node directly via entryNodeKey, and graph mode
+              # is the only execution mode. We:
+              #   1) delete edges connected to legacy start/end nodes,
+              #   2) delete the start/end nodes themselves,
+              #   3) drop the legacy executionMode column,
+              #   4) recreate workflow_node_type enum without 'start','end'.
+              # All idempotent — safe to re-run.
+              cd /app/packages/oao-api && node -e "
+                (async () => {
+                  const postgres = (await import('postgres')).default;
+                  const sql = postgres(process.env.AGENT_DATABASE_URL);
+                  try {
+                    const enumRows = await sql\`SELECT enumlabel FROM pg_enum WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname='workflow_node_type')\`;
+                    const labels = enumRows.map(r => r.enumlabel);
+                    if (labels.includes('start') || labels.includes('end')) {
+                      console.log('v4.0.0: cleaning legacy start/end nodes…');
+                      await sql\`UPDATE triggers t
+                         SET entry_node_key = NULL
+                         WHERE t.entry_node_key IS NOT NULL
+                           AND EXISTS (
+                             SELECT 1
+                             FROM workflow_nodes wn
+                             WHERE wn.workflow_id = t.workflow_id
+                               AND wn.node_key = t.entry_node_key
+                               AND wn.node_type IN ('start','end')
+                           )\`;
+                      await sql\`DELETE FROM workflow_edges WHERE from_node_key IN (SELECT node_key FROM workflow_nodes WHERE node_type IN ('start','end')) OR to_node_key IN (SELECT node_key FROM workflow_nodes WHERE node_type IN ('start','end'))\`;
+                      await sql\`DELETE FROM workflow_nodes WHERE node_type IN ('start','end')\`;
+                      await sql\`DELETE FROM node_executions WHERE node_type IN ('start','end')\`;
+                      // Recreate enum without start/end
+                      await sql\`ALTER TYPE workflow_node_type RENAME TO workflow_node_type_old\`;
+                      await sql\`CREATE TYPE workflow_node_type AS ENUM ('agent_step','http_request','script','conditional','parallel','join')\`;
+                      await sql\`ALTER TABLE workflow_nodes ALTER COLUMN node_type TYPE workflow_node_type USING node_type::text::workflow_node_type\`;
+                      await sql\`ALTER TABLE node_executions ALTER COLUMN node_type TYPE workflow_node_type USING node_type::text::workflow_node_type\`;
+                      await sql\`DROP TYPE workflow_node_type_old\`;
+                      console.log('v4.0.0: workflow_node_type enum reduced to graph types only');
+                    }
+                    const colRows = await sql\`SELECT column_name FROM information_schema.columns WHERE table_name='workflows' AND column_name='execution_mode'\`;
+                    if (colRows.length > 0) {
+                      console.log('v4.0.0: dropping workflows.execution_mode column…');
+                      await sql\`ALTER TABLE workflows DROP COLUMN execution_mode\`;
+                    }
+                    const modeEnumRows = await sql\`SELECT typname FROM pg_type WHERE typname='workflow_execution_mode'\`;
+                    if (modeEnumRows.length > 0) {
+                      console.log('v4.0.0: dropping workflow_execution_mode enum…');
+                      await sql\`DROP TYPE IF EXISTS workflow_execution_mode\`;
+                    }
+                    const legacyWorkflows = await sql\`
+                      SELECT w.id
+                      FROM workflows w
+                      WHERE NOT EXISTS (SELECT 1 FROM workflow_nodes wn WHERE wn.workflow_id = w.id)
+                        AND EXISTS (SELECT 1 FROM workflow_steps ws WHERE ws.workflow_id = w.id)
+                    \`;
+                    let materializedNodeCount = 0;
+                    let materializedEdgeCount = 0;
+                    for (const workflowRow of legacyWorkflows) {
+                      const stepRows = await sql\`
+                        SELECT id, name, prompt_template, step_order, agent_id, model, reasoning_effort, worker_runtime, timeout_seconds
+                        FROM workflow_steps
+                        WHERE workflow_id = \${workflowRow.id}
+                        ORDER BY step_order, id
+                      \`;
+                      const nodeKeys = [];
+                      for (let index = 0; index < stepRows.length; index += 1) {
+                        const step = stepRows[index];
+                        const nodeKey = 'step_' + (index + 1);
+                        nodeKeys.push(nodeKey);
+                        const config = {
+                          stepId: step.id,
+                          stepOrder: index + 1,
+                          promptTemplate: step.prompt_template,
+                          agentId: step.agent_id,
+                          model: step.model,
+                          reasoningEffort: step.reasoning_effort,
+                          workerRuntime: step.worker_runtime,
+                          timeoutSeconds: step.timeout_seconds ?? 300,
+                        };
+                        const inserted = await sql\`
+                          INSERT INTO workflow_nodes (id, workflow_id, node_key, node_type, name, config, position_x, position_y, created_at, updated_at)
+                          VALUES (gen_random_uuid(), \${workflowRow.id}, \${nodeKey}, 'agent_step'::workflow_node_type, \${step.name || ('Step ' + (index + 1))}, \${sql.json(config)}::jsonb, \${320 + index * 240}, 170, now(), now())
+                          ON CONFLICT (workflow_id, node_key) DO NOTHING
+                        \`;
+                        materializedNodeCount += inserted.count;
+                      }
+                      for (let index = 0; index < nodeKeys.length - 1; index += 1) {
+                        const inserted = await sql\`
+                          INSERT INTO workflow_edges (id, workflow_id, from_node_key, to_node_key, branch_key, label, created_at)
+                          SELECT gen_random_uuid(), \${workflowRow.id}, \${nodeKeys[index]}, \${nodeKeys[index + 1]}, NULL, NULL, now()
+                          WHERE NOT EXISTS (
+                            SELECT 1 FROM workflow_edges
+                            WHERE workflow_id = \${workflowRow.id}
+                              AND from_node_key = \${nodeKeys[index]}
+                              AND to_node_key = \${nodeKeys[index + 1]}
+                          )
+                        \`;
+                        materializedEdgeCount += inserted.count;
+                      }
+                    }
+                    console.log('v4.0.1: materialized', materializedNodeCount, 'node(s) and', materializedEdgeCount, 'edge(s) from legacy step-only workflows');
+                    const danglingEntryKeys = await sql\`
+                      UPDATE triggers t
+                      SET entry_node_key = NULL
+                      WHERE t.entry_node_key IS NOT NULL
+                        AND NOT EXISTS (
+                          SELECT 1
+                          FROM workflow_nodes wn
+                          WHERE wn.workflow_id = t.workflow_id
+                            AND wn.node_key = t.entry_node_key
+                        )
+                    \`;
+                    console.log('v4.0.1: cleared', danglingEntryKeys.count, 'dangling trigger entry node key(s)');
+                  } catch (e) {
+                    console.error('v4.0.0 pre-migration failed:', e);
+                    process.exit(1);
+                  }
+                  await sql.end();
+                })().catch(e => { console.error(e); process.exit(1); });
+              "
               cd /app/packages/oao-api && npx drizzle-kit push --force
               echo "Running data migrations..."
               cd /app/packages/oao-api && node -e "

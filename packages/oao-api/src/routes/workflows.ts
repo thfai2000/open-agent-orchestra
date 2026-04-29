@@ -1,11 +1,10 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { eq, desc, and, or, sql, arrayContains, inArray } from 'drizzle-orm';
 import { db } from '../database/index.js';
-import { workflows, workflowSteps, triggers, workflowExecutions, users, agents, stepExecutions, agentInstances } from '../database/schema.js';
+import { workflows, workflowSteps, workflowNodes, workflowEdges, triggers, workflowExecutions, users, agents, stepExecutions, agentInstances } from '../database/schema.js';
 import { authMiddleware, uuidSchema } from '@oao/shared';
 import {
   platformCreateWorkflowBodySchema,
-  platformReplaceWorkflowStepsBodySchema,
   platformUpdateWorkflowBodySchema,
 } from '../contracts/platform-api.js';
 import { emitEvent, EVENT_NAMES } from '../services/system-events.js';
@@ -17,6 +16,7 @@ import {
   getWorkflowVersionView,
   listWorkflowVersionViews,
 } from '../services/versioning.js';
+import { buildGraphFromSequentialSteps } from '../services/workflow-graph-sync.js';
 
 const workflowsRouter = new OpenAPIHono();
 workflowsRouter.use('/*', authMiddleware);
@@ -135,6 +135,33 @@ workflowsRouter.get('/', async (c) => {
     lastExecMap[wf.id] = lastExec?.createdAt?.toISOString() ?? null;
   }
 
+  // Optional: fetch recent executions sparkline (?include=executionStats)
+  const include = (c.req.query('include') || '').split(',').map((s) => s.trim());
+  const includeStats = include.includes('executionStats');
+  const recentExecMap: Record<string, Array<{ status: string; durationMs: number | null; startedAt: string | null }>> = {};
+  if (includeStats) {
+    for (const wf of workflowList) {
+      const recent = await db.query.workflowExecutions.findMany({
+        where: eq(workflowExecutions.workflowId, wf.id),
+        orderBy: desc(workflowExecutions.createdAt),
+        limit: 10,
+        columns: { status: true, startedAt: true, completedAt: true, createdAt: true },
+      });
+      recentExecMap[wf.id] = recent
+        .map((ex) => {
+          const start = ex.startedAt ?? ex.createdAt;
+          const end = ex.completedAt;
+          const durationMs = start && end ? end.getTime() - start.getTime() : null;
+          return {
+            status: ex.status,
+            durationMs,
+            startedAt: start?.toISOString() ?? null,
+          };
+        })
+        .reverse(); // oldest → newest for left-to-right sparkline
+    }
+  }
+
   // Fetch owner names
   const ownerIds = [...new Set(workflowList.map((w) => w.userId))];
   const ownerMap: Record<string, string> = {};
@@ -150,6 +177,7 @@ workflowsRouter.get('/', async (c) => {
     ...w,
     lastExecutionAt: lastExecMap[w.id] ?? null,
     ownerName: ownerMap[w.userId] ?? 'Unknown',
+    ...(includeStats ? { recentExecutions: recentExecMap[w.id] ?? [] } : {}),
   }));
 
   return c.json({ workflows: enriched, total: countResult[0]?.count ?? 0, page, limit });
@@ -224,6 +252,32 @@ workflowsRouter.post('/', async (c) => {
       )
       .returning();
 
+    const graph = buildGraphFromSequentialSteps(steps);
+    if (graph.nodes.length > 0) {
+      await tx.insert(workflowNodes).values(
+        graph.nodes.map((node) => ({
+          workflowId: workflow.id,
+          nodeKey: node.nodeKey,
+          nodeType: node.nodeType,
+          name: node.name,
+          config: node.config ?? {},
+          positionX: node.positionX ?? 0,
+          positionY: node.positionY ?? 0,
+        })),
+      );
+    }
+    if (graph.edges.length > 0) {
+      await tx.insert(workflowEdges).values(
+        graph.edges.map((edge) => ({
+          workflowId: workflow.id,
+          fromNodeKey: edge.fromNodeKey,
+          toNodeKey: edge.toNodeKey,
+          branchKey: edge.branchKey ?? null,
+          label: edge.label ?? null,
+        })),
+      );
+    }
+
     return { workflow, steps };
   });
 
@@ -235,6 +289,9 @@ workflowsRouter.post('/', async (c) => {
         triggerType: triggerInput.triggerType,
         configuration: triggerInput.configuration,
         isActive: triggerInput.isActive,
+        entryNodeKey: triggerInput.entryNodeKey,
+        positionX: triggerInput.positionX,
+        positionY: triggerInput.positionY,
       });
       createdTriggers.push(createdTrigger);
     }
@@ -356,57 +413,6 @@ workflowsRouter.put('/:id', async (c) => {
   return c.json({ workflow: updated });
 });
 
-// PUT /:id/steps — replace all steps atomically (increments version)
-workflowsRouter.put('/:id/steps', async (c) => {
-  const user = c.get('user');
-  const id = uuidSchema.parse(c.req.param('id'));
-  const { steps } = platformReplaceWorkflowStepsBodySchema.parse(await c.req.json());
-
-  // Verify workflow exists and belongs to user's workspace
-  const existing = await db.query.workflows.findFirst({ where: eq(workflows.id, id) });
-  if (!existing) return c.json({ error: 'Workflow not found' }, 404);
-  if (existing.workspaceId !== user.workspaceId) return c.json({ error: 'Forbidden' }, 403);
-
-  // Scope-based authorization (same as PUT /:id)
-  if (existing.scope === 'workspace' && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
-    return c.json({ error: 'Only admins can modify workspace-level workflows' }, 403);
-  }
-  if (existing.scope === 'user' && existing.userId !== user.userId && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
-    return c.json({ error: 'Forbidden' }, 403);
-  }
-
-  await captureWorkflowHistoricalVersion(existing, user.userId);
-
-  const result = await db.transaction(async (tx) => {
-    await tx.delete(workflowSteps).where(eq(workflowSteps.workflowId, id));
-    const newSteps = await tx
-      .insert(workflowSteps)
-      .values(
-        steps.map((s) => ({
-          workflowId: id,
-          name: s.name,
-          promptTemplate: s.promptTemplate,
-          stepOrder: s.stepOrder,
-          agentId: s.agentId,
-          model: s.model,
-          reasoningEffort: s.reasoningEffort,
-          workerRuntime: s.workerRuntime,
-          timeoutSeconds: s.timeoutSeconds,
-        })),
-      )
-      .returning();
-
-    await tx
-      .update(workflows)
-      .set({ version: sql`${workflows.version} + 1`, updatedAt: new Date() })
-      .where(eq(workflows.id, id));
-
-    return newSteps;
-  });
-
-  return c.json({ steps: result });
-});
-
 // GET /:id/versions — list workflow version history
 workflowsRouter.openapi(listWorkflowVersionsRoute, async (c) => {
   const user = c.get('user');
@@ -514,80 +520,6 @@ workflowsRouter.delete('/:id', async (c) => {
   });
 
   return c.json({ success: true });
-});
-
-// POST /:id/run — manually run a workflow (requires a webhook trigger with parameters)
-const manualRunSchema = z.object({
-  inputs: z.record(z.unknown()).default({}),
-});
-
-workflowsRouter.post('/:id/run', async (c) => {
-  const id = uuidSchema.parse(c.req.param('id'));
-  const user = c.get('user');
-  const body = manualRunSchema.parse(await c.req.json().catch(() => ({})));
-
-  const workflow = await db.query.workflows.findFirst({ where: eq(workflows.id, id) });
-  if (!workflow) return c.json({ error: 'Workflow not found' }, 404);
-  if (workflow.workspaceId !== user.workspaceId) return c.json({ error: 'Forbidden' }, 403);
-
-  // Scope check: user-scoped workflows can only be run by owner or admins
-  if (workflow.scope === 'user' && workflow.userId !== user.userId && user.role !== 'workspace_admin' && user.role !== 'super_admin') {
-    return c.json({ error: 'Forbidden' }, 403);
-  }
-
-  if (!workflow.isActive) {
-    return c.json({ error: 'Workflow is not active' }, 400);
-  }
-
-  // Find the first active webhook trigger for parameter definitions
-  const webhookTrigger = await db.query.triggers.findFirst({
-    where: and(
-      eq(triggers.workflowId, id),
-      eq(triggers.triggerType, 'webhook'),
-      eq(triggers.isActive, true),
-    ),
-  });
-
-  if (!webhookTrigger) {
-    return c.json({ error: 'No active webhook trigger found. Add a webhook trigger to enable Manual Run.' }, 400);
-  }
-
-  // Validate inputs against webhook parameter definitions
-  const config = webhookTrigger.configuration as Record<string, unknown>;
-  const paramDefs = Array.isArray(config.parameters) ? config.parameters as Array<{ name: string; required?: boolean }> : [];
-  if (paramDefs.length > 0) {
-    const missing = paramDefs.filter(p => p.required && (body.inputs[p.name] === undefined || body.inputs[p.name] === null || body.inputs[p.name] === ''));
-    if (missing.length > 0) {
-      return c.json({ error: `Missing required inputs: ${missing.map(p => p.name).join(', ')}` }, 400);
-    }
-  }
-
-  // Build validated inputs
-  const inputs: Record<string, unknown> = {};
-  for (const p of paramDefs) {
-    if (body.inputs[p.name] !== undefined) inputs[p.name] = body.inputs[p.name];
-  }
-  // Also allow extra inputs when no parameters are defined
-  if (paramDefs.length === 0) {
-    Object.assign(inputs, body.inputs);
-  }
-
-  // Emit webhook.received event — Manual Run flows through the event system like all triggers
-  await emitEvent({
-    eventScope: 'workspace',
-    scopeId: workflow.workspaceId,
-    eventName: EVENT_NAMES.WEBHOOK_RECEIVED,
-    eventData: {
-      triggerId: webhookTrigger.id,
-      workflowId: workflow.id,
-      authMethod: 'manual_run',
-      inputs,
-      receivedAt: new Date().toISOString(),
-    },
-    actorId: user.userId,
-  });
-
-  return c.json({ status: 'accepted' }, 202);
 });
 
 export default workflowsRouter;

@@ -42,74 +42,93 @@
 
       <Tabs :value="activeTab" @update:value="activeTab = $event">
         <TabList>
-          <Tab value="steps">Steps <span v-if="snapshotSteps.length > 0" class="ml-1 inline-flex items-center justify-center w-5 h-5 rounded-full bg-surface-700 text-surface-300 text-[10px] leading-none align-middle">{{ snapshotSteps.length }}</span></Tab>
-          <Tab value="triggers">Triggers <span v-if="snapshotTriggers.length > 0" class="ml-1 inline-flex items-center justify-center w-5 h-5 rounded-full bg-surface-700 text-surface-300 text-[10px] leading-none align-middle">{{ snapshotTriggers.length }}</span></Tab>
-          <Tab value="overview">Overview</Tab>
+          <Tab value="general">General</Tab>
+          <Tab value="variables">Variables <span v-if="snapshotVariables.length > 0" class="ml-1 inline-flex items-center justify-center w-5 h-5 rounded-full bg-surface-700 text-surface-300 text-[10px] leading-none align-middle">{{ snapshotVariables.length }}</span></Tab>
+          <Tab value="flows">Flows <span v-if="snapshotNodes.length > 0" class="ml-1 inline-flex items-center justify-center w-5 h-5 rounded-full bg-surface-700 text-surface-300 text-[10px] leading-none align-middle">{{ snapshotNodes.length }}</span></Tab>
         </TabList>
         <TabPanels>
-          <TabPanel value="steps">
-            <div class="mt-4 flex flex-col gap-4">
-              <div v-for="(step, idx) in snapshotSteps" :key="step.id || `${idx}-${step.stepOrder}`" class="border border-surface-200 rounded-lg p-4">
-                <div class="flex items-center justify-between mb-2">
-                  <div class="flex items-center gap-3">
-                    <span class="w-8 h-8 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-sm font-bold">{{ idx + 1 }}</span>
-                    <span class="font-medium">{{ step.name || `Step ${step.stepOrder}` }}</span>
-                  </div>
-                  <div class="flex items-center gap-2 text-xs text-surface-400 flex-wrap">
-                    <Tag v-if="step.agentId" value="Agent override" severity="info" class="text-xs" />
-                    <Tag v-if="step.model" :value="step.model" severity="secondary" class="text-xs" />
-                    <Tag v-if="step.reasoningEffort" :value="step.reasoningEffort" severity="secondary" class="text-xs" />
-                    <Tag v-if="step.workerRuntime" :value="step.workerRuntime" severity="secondary" class="text-xs" />
-                    <span>{{ step.timeoutSeconds }}s timeout</span>
-                  </div>
+          <!-- General \u2014 read-only label/value list mirroring the edit page form -->
+          <TabPanel value="general">
+            <div class="mt-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="flex flex-col gap-1"><span class="text-xs font-medium text-surface-500">Name</span><span class="text-sm">{{ snapshotWorkflow.name }}</span></div>
+              <div class="flex flex-col gap-1"><span class="text-xs font-medium text-surface-500">Description</span><span class="text-sm">{{ snapshotWorkflow.description || '\u2014' }}</span></div>
+              <div class="flex flex-col gap-1"><span class="text-xs font-medium text-surface-500">Workflow Agent</span><span class="text-sm font-mono">{{ snapshotWorkflow.defaultAgentId || 'None' }}</span></div>
+              <div class="flex flex-col gap-1"><span class="text-xs font-medium text-surface-500">Default Model</span><span class="text-sm">{{ snapshotWorkflow.defaultModel || 'None' }}</span></div>
+              <div class="flex flex-col gap-1"><span class="text-xs font-medium text-surface-500">Reasoning Effort</span><span class="text-sm">{{ snapshotWorkflow.defaultReasoningEffort || 'None' }}</span></div>
+              <div class="flex flex-col gap-1"><span class="text-xs font-medium text-surface-500">Worker Runtime</span><span class="text-sm">{{ snapshotWorkflow.workerRuntime || 'static' }}</span></div>
+              <div class="flex flex-col gap-1"><span class="text-xs font-medium text-surface-500">Step Timeout</span><span class="text-sm">{{ snapshotWorkflow.stepAllocationTimeoutSeconds || '\u2014' }} seconds</span></div>
+              <div class="flex flex-col gap-1"><span class="text-xs font-medium text-surface-500">Labels</span>
+                <div class="flex flex-wrap gap-1">
+                  <Tag v-for="l in (snapshotWorkflow.labels || [])" :key="l" :value="l" severity="secondary" class="text-xs" />
+                  <span v-if="!(snapshotWorkflow.labels || []).length" class="text-sm text-surface-400">\u2014</span>
                 </div>
-                <pre class="bg-surface-50 p-3 rounded text-sm whitespace-pre-wrap max-h-40 overflow-y-auto mt-2">{{ step.promptTemplate }}</pre>
               </div>
-              <p v-if="snapshotSteps.length === 0" class="text-center text-surface-400 py-4">No steps were stored in this version snapshot.</p>
+              <div class="flex flex-col gap-1"><span class="text-xs font-medium text-surface-500">Created</span><span class="text-sm">{{ snapshotWorkflow.createdAt ? new Date(snapshotWorkflow.createdAt).toLocaleString() : '\u2014' }}</span></div>
+              <div class="flex flex-col gap-1"><span class="text-xs font-medium text-surface-500">Active at snapshot</span><Tag :value="snapshotWorkflow.isActive ? 'Yes' : 'No'" :severity="snapshotWorkflow.isActive ? 'success' : 'secondary'" class="self-start" /></div>
             </div>
           </TabPanel>
 
-          <TabPanel value="triggers">
-            <div class="mt-4">
-              <DataTable :value="snapshotTriggers" dataKey="id" stripedRows>
-                <template #empty><div class="text-center py-8 text-surface-400">No triggers were stored in this version snapshot.</div></template>
-                <Column header="Type" style="width: 140px">
-                  <template #body="{ data }"><Tag :value="formatTriggerType(data.triggerType)" /></template>
+          <!-- Variables \u2014 read-only list of workflow-scoped variables at this version -->
+          <TabPanel value="variables">
+            <div class="mt-2">
+              <DataTable :value="snapshotVariables" size="small" stripedRows>
+                <template #empty>
+                  <div class="py-6 text-center text-sm text-surface-400">
+                    No workflow-scoped variables were captured in this version snapshot.
+                  </div>
+                </template>
+                <Column header="Key" style="width: 240px">
+                  <template #body="{ data }"><code class="font-mono text-xs">{{ data.key }}</code></template>
                 </Column>
-                <Column header="Active" style="width: 100px">
-                  <template #body="{ data }"><Tag :value="data.isActive ? 'Yes' : 'No'" :severity="data.isActive ? 'success' : 'secondary'" /></template>
+                <Column header="Type" style="width: 120px">
+                  <template #body="{ data }"><Tag :value="data.type" severity="secondary" class="text-xs" /></template>
                 </Column>
-                <Column header="Configuration">
-                  <template #body="{ data }"><span class="text-sm font-mono break-all">{{ formatTriggerConfiguration(data) }}</span></template>
+                <Column header="Value">
+                  <template #body="{ data }">
+                    <span v-if="data.masked" class="text-xs text-surface-400">\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (credential)</span>
+                    <span v-else class="text-xs font-mono break-all">{{ formatVarValue(data.value) }}</span>
+                  </template>
                 </Column>
-                <Column header="Created" style="width: 180px">
-                  <template #body="{ data }"><span class="text-sm text-surface-500">{{ data.createdAt ? new Date(data.createdAt).toLocaleDateString() : '—' }}</span></template>
+                <Column header="Description">
+                  <template #body="{ data }"><span class="text-xs text-surface-500">{{ data.description || '\u2014' }}</span></template>
                 </Column>
               </DataTable>
             </div>
           </TabPanel>
 
-          <TabPanel value="overview">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-              <Card>
-                <template #content>
-                  <div class="flex flex-col gap-3">
-                    <div><span class="text-surface-500 text-sm">Workflow Agent</span><p class="font-medium">{{ snapshotWorkflow.defaultAgentId || 'None' }}</p></div>
-                    <div><span class="text-surface-500 text-sm">Default Model</span><p class="font-medium">{{ snapshotWorkflow.defaultModel || 'None' }}</p></div>
-                    <div><span class="text-surface-500 text-sm">Reasoning Effort</span><p class="font-medium">{{ snapshotWorkflow.defaultReasoningEffort || 'None' }}</p></div>
-                  </div>
+          <TabPanel value="flows">
+            <div class="mt-4 flex items-center justify-end mb-2">
+              <SelectButton
+                :modelValue="flowsSubTab"
+                :options="[
+                  { label: 'Visual', value: 'visual', icon: 'pi pi-sitemap' },
+                  { label: 'YAML', value: 'yaml', icon: 'pi pi-code' },
+                ]"
+                optionLabel="label"
+                optionValue="value"
+                size="small"
+                @update:modelValue="(val) => { if (val) flowsSubTab = val }"
+              >
+                <template #option="slotProps">
+                  <i :class="slotProps.option.icon" class="text-xs mr-1"></i>
+                  <span class="text-xs">{{ slotProps.option.label }}</span>
                 </template>
-              </Card>
-              <Card>
-                <template #content>
-                  <div class="flex flex-col gap-3">
-                    <div><span class="text-surface-500 text-sm">Worker Runtime</span><p class="font-medium">{{ snapshotWorkflow.workerRuntime || 'static' }}</p></div>
-                    <div><span class="text-surface-500 text-sm">Step Timeout</span><p class="font-medium">{{ snapshotWorkflow.stepAllocationTimeoutSeconds || '—' }} seconds</p></div>
-                    <div><span class="text-surface-500 text-sm">Created</span><p class="font-medium">{{ snapshotWorkflow.createdAt ? new Date(snapshotWorkflow.createdAt).toLocaleString() : '—' }}</p></div>
-                  </div>
-                </template>
-              </Card>
+              </SelectButton>
             </div>
+            <!-- Read-only visual + YAML views use the same components as the
+                 editor page so visual presentation is consistent. -->
+            <WorkflowVisualEditor
+              v-if="flowsSubTab === 'visual'"
+              :workflow-id="workflowId"
+              :readonly="true"
+              :version-data="versionGraphPayload"
+            />
+            <WorkflowYamlEditor
+              v-else
+              :workflow-id="workflowId"
+              :readonly="true"
+              :version-data="versionGraphPayload"
+            />
           </TabPanel>
         </TabPanels>
       </Tabs>
@@ -129,7 +148,14 @@ const router = useRouter();
 const ws = computed(() => (route.params.workspace as string) || 'default');
 const workflowId = computed(() => route.params.id as string);
 const versionNumber = computed(() => Number(route.params.version));
-const activeTab = ref('steps');
+const activeTab = ref('general');
+const flowsSubTab = ref<'visual' | 'yaml'>('visual');
+
+function formatVarValue(value: unknown): string {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
 
 const { data: versionData } = await useFetch<any>(computed(() => `/api/workflows/${workflowId.value}/versions/${versionNumber.value}`), { headers });
 const { data: versionsData } = await useFetch<any>(computed(() => `/api/workflows/${workflowId.value}/versions?limit=100`), { headers });
@@ -139,21 +165,23 @@ const versions = computed(() => (versionsData.value?.versions ?? []).slice().sor
 const snapshotWorkflow = computed(() => versionRecord.value?.snapshot?.workflow ?? null);
 const snapshotSteps = computed(() => versionRecord.value?.snapshot?.steps ?? []);
 const snapshotTriggers = computed(() => versionRecord.value?.snapshot?.triggers ?? []);
+const snapshotNodes = computed(() => versionRecord.value?.snapshot?.nodes ?? []);
+const snapshotVariables = computed(() => versionRecord.value?.snapshot?.variables ?? []);
+const snapshotEdges = computed(() => versionRecord.value?.snapshot?.edges ?? []);
+
+// GraphPayload-shaped snapshot fed into WorkflowYamlEditor in read-only mode so
+// the historical YAML view uses the same component as the editable page.
+const versionGraphPayload = computed(() => ({
+  nodes: snapshotNodes.value,
+  edges: snapshotEdges.value,
+  triggers: snapshotTriggers.value,
+}));
 const latestPath = computed(() => `/${ws.value}/workflows/${workflowId.value}`);
 
 const currentVersionIndex = computed(() => versions.value.findIndex((entry: any) => entry.version === versionNumber.value));
 const newerVersion = computed(() => currentVersionIndex.value > 0 ? versions.value[currentVersionIndex.value - 1] : null);
 const olderVersion = computed(() => currentVersionIndex.value >= 0 ? versions.value[currentVersionIndex.value + 1] ?? null : null);
 const isLatestVersion = computed(() => versions.value.some((entry: any) => entry.version === versionNumber.value && entry.isLatest));
-
-// If the user lands on a /v/<n> URL that is in fact the current latest version,
-// redirect them to the editable detail page so the Edit/Manual Run buttons are
-// available. Older snapshots stay read-only as before.
-watch(isLatestVersion, (latest) => {
-  if (latest) {
-    router.replace(latestPath.value);
-  }
-}, { immediate: true });
 
 const breadcrumbs = computed(() => [
   { label: 'Home', route: `/${ws.value}` },
@@ -164,12 +192,7 @@ const breadcrumbs = computed(() => [
 
 function navigateToVersion(version?: number) {
   if (!version) return;
-  const target = versions.value.find((entry: any) => entry.version === version);
-  if (target?.isLatest) {
-    router.push(latestPath.value);
-  } else {
-    router.push(`/${ws.value}/workflows/${workflowId.value}/v/${version}`);
-  }
+  router.push(`/${ws.value}/workflows/${workflowId.value}/v/${version}`);
 }
 
 function formatDateTime(value?: string | Date | null) {

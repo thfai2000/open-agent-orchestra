@@ -161,8 +161,7 @@ The default server exposes platform tools such as:
 | `oao_get_workflow` | Fetch a workflow with steps and triggers |
 | `oao_create_workflow` | Create a workflow with steps and optional triggers |
 | `oao_update_workflow` | Update workflow metadata |
-| `oao_replace_workflow_steps` | Replace all workflow steps atomically |
-| `oao_run_workflow` | Trigger a manual workflow run |
+| `oao_run_trigger` | Run a workflow through a specific manual-capable trigger |
 | `oao_list_variables` | List agent, user, or workspace variables |
 | `oao_get_variable` | Fetch variable metadata |
 | `oao_create_variable` | Create or upsert a variable |

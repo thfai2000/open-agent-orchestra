@@ -68,23 +68,51 @@
               <Button label="Add" icon="pi pi-user-plus" :disabled="!addUserId" @click="addMember" />
             </div>
 
-            <DataTable :value="members" stripedRows dataKey="id">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+              <span class="p-input-icon-left flex-1 max-w-sm">
+                <i class="pi pi-search" />
+                <InputText v-model="memberFilters.global.value" placeholder="Search members by name, email, role…" class="w-full pl-8" />
+              </span>
+              <Button
+                label="Remove selected"
+                icon="pi pi-trash"
+                severity="danger"
+                outlined
+                size="small"
+                :disabled="selectedMembers.length === 0"
+                @click="confirmRemoveSelected"
+              />
+            </div>
+
+            <DataTable
+              v-model:selection="selectedMembers"
+              :value="members"
+              stripedRows
+              dataKey="id"
+              paginator
+              :rows="10"
+              :rowsPerPageOptions="[10, 25, 50, 100]"
+              :globalFilterFields="['name', 'email', 'role', 'authProvider']"
+              v-model:filters="memberFilters"
+              :filterDisplay="undefined"
+            >
               <template #empty><div class="text-center py-8 text-surface-400">No members yet.</div></template>
-              <Column header="Name" style="min-width: 160px">
+              <Column selectionMode="multiple" headerStyle="width: 3rem" />
+              <Column header="Name" field="name" style="min-width: 160px">
                 <template #body="{ data }"><span class="font-medium">{{ data.name || data.email }}</span></template>
               </Column>
-              <Column header="Email" style="min-width: 200px">
+              <Column header="Email" field="email" style="min-width: 200px">
                 <template #body="{ data }"><span class="text-sm text-surface-500">{{ data.email }}</span></template>
               </Column>
-              <Column header="Role" style="width: 130px">
+              <Column header="Role" field="role" style="width: 130px">
                 <template #body="{ data }"><Tag :value="formatRole(data.role)" :severity="roleSeverity(data.role)" /></template>
               </Column>
-              <Column header="Provider" style="width: 130px">
+              <Column header="Provider" field="authProvider" style="width: 130px">
                 <template #body="{ data }"><Tag :value="data.authProvider === 'ldap' ? 'LDAP' : 'DB'" severity="secondary" /></template>
               </Column>
               <Column header="" style="width: 60px">
                 <template #body="{ data }">
-                  <Button icon="pi pi-times" text rounded size="small" @click="removeMember(data.id)" />
+                  <Button icon="pi pi-times" text rounded size="small" @click="confirmRemoveMember(data)" />
                 </template>
               </Column>
             </DataTable>
@@ -116,6 +144,10 @@ const groupForm = reactive<{ name: string; description: string; roleIds: string[
 });
 const availableRoles = ref<any[]>([]);
 const addUserId = ref<string | null>(null);
+const selectedMembers = ref<any[]>([]);
+const memberFilters = ref<Record<string, { value: string; matchMode: string }>>({
+  global: { value: '', matchMode: 'contains' },
+});
 
 const breadcrumbs = computed(() => [
   { label: 'Home', route: `/${ws.value}` },
@@ -223,6 +255,46 @@ async function removeMember(userId: string) {
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Failed to remove', detail: e?.data?.error || 'Error', life: 4000 });
   }
+}
+
+function confirmRemoveMember(member: any) {
+  confirm.require({
+    message: `Remove ${member.name || member.email} from this group?`,
+    header: 'Confirm Remove',
+    icon: 'pi pi-exclamation-triangle',
+    acceptProps: { label: 'Remove', severity: 'danger' },
+    rejectProps: { label: 'Cancel', severity: 'secondary' },
+    accept: () => removeMember(member.id),
+  });
+}
+
+function confirmRemoveSelected() {
+  const targets = [...selectedMembers.value];
+  if (targets.length === 0) return;
+  confirm.require({
+    message: `Remove ${targets.length} member${targets.length === 1 ? '' : 's'} from this group?`,
+    header: 'Confirm Batch Remove',
+    icon: 'pi pi-exclamation-triangle',
+    acceptProps: { label: 'Remove', severity: 'danger' },
+    rejectProps: { label: 'Cancel', severity: 'secondary' },
+    accept: async () => {
+      let failed = 0;
+      for (const m of targets) {
+        try {
+          await $fetch(`/api/user-groups/${groupId.value}/members/${m.id}`, { method: 'DELETE', headers });
+        } catch {
+          failed += 1;
+        }
+      }
+      selectedMembers.value = [];
+      await loadGroup();
+      if (failed > 0) {
+        toast.add({ severity: 'error', summary: `${failed} removal${failed === 1 ? '' : 's'} failed`, life: 4000 });
+      } else {
+        toast.add({ severity: 'success', summary: `Removed ${targets.length} member${targets.length === 1 ? '' : 's'}`, life: 2000 });
+      }
+    },
+  });
 }
 
 function confirmDelete() {

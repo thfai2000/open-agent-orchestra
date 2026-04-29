@@ -6,7 +6,7 @@ import {
   uniqueName,
 } from './helpers/cluster';
 import { ensureWorkspaceCopilotTokenVariable } from './helpers/copilot-token';
-import { loginViaUi, openTab } from './helpers/ui';
+import { loginViaUi } from './helpers/ui';
 
 const ADMIN_EMAIL = 'admin@oao.local';
 const ADMIN_PASSWORD = 'AdminPass123!';
@@ -287,11 +287,7 @@ test('workflow trigger cleanup keeps the detail page healthy and disables manual
 
   await page.goto(`/default/workflows/${workflow.id}`);
   await expect(page.getByRole('heading', { name: workflow.name, exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Manual Run/i })).toBeVisible();
-
-  let visibleTabPanel = await openTab(page, /Triggers/i);
-  await expect(visibleTabPanel).toContainText(workflow.webhookPath, { timeout: 10_000 });
-  await expect(visibleTabPanel).toContainText('Active', { timeout: 10_000 });
+  await expect(page.getByRole('button', { name: /Run — Webhook/i })).toBeVisible();
 
   const disableTriggerResponse = await request.put(`/api/triggers/${workflow.triggerId}`, {
     headers: {
@@ -308,7 +304,7 @@ test('workflow trigger cleanup keeps the detail page healthy and disables manual
   expect(disableTriggerBody.trigger?.isActive).toBe(false);
   expect(disableTriggerBody.trigger?.runtimeSummary?.status).toBe('inactive');
 
-  const manualRunResponse = await request.post(`/api/workflows/${workflow.id}/run`, {
+  const manualRunResponse = await request.post(`/api/triggers/${workflow.triggerId}/run`, {
     headers: {
       Authorization: `Bearer ${authToken}`,
     },
@@ -320,13 +316,12 @@ test('workflow trigger cleanup keeps the detail page healthy and disables manual
   });
   expect(manualRunResponse.status()).toBe(400);
   const manualRunBody = await manualRunResponse.json() as { error?: string };
-  expect(manualRunBody.error).toContain('No active webhook trigger found');
+  expect(manualRunBody.error).toContain('Trigger is not active');
 
   await page.reload();
   await expect(page.getByRole('heading', { name: workflow.name, exact: true })).toBeVisible();
-  visibleTabPanel = await openTab(page, /Triggers/i);
-  await expect(visibleTabPanel).toContainText(workflow.webhookPath, { timeout: 10_000 });
-  await expect(visibleTabPanel).toContainText('Inactive', { timeout: 10_000 });
+  await expect(page.getByRole('button', { name: /^Manual Run$/ })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /Run — Webhook/i })).toHaveCount(0);
 
   const deleteTriggerResponse = await request.delete(`/api/triggers/${workflow.triggerId}`, {
     headers: {
@@ -349,8 +344,8 @@ test('workflow trigger cleanup keeps the detail page healthy and disables manual
 
   await page.reload();
   await expect(page.getByRole('heading', { name: workflow.name, exact: true })).toBeVisible();
-  visibleTabPanel = await openTab(page, /Triggers/i);
-  await expect(visibleTabPanel).toContainText('No triggers configured yet.', { timeout: 10_000 });
+  await expect(page.getByRole('button', { name: /^Manual Run$/ })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /Run — Webhook/i })).toHaveCount(0);
 
   await deleteWorkflow(request, authToken, workflow.id);
   await deleteAgent(request, authToken, agent.id);

@@ -26,7 +26,7 @@ import {
 } from '../database/schema.js';
 import { serializeTriggers } from '../services/trigger-serialization.js';
 import { captureWorkflowHistoricalVersion } from '../services/versioning.js';
-import { buildGraphFromSequentialSteps, deriveWorkflowStepsFromGraph } from '../services/workflow-graph-sync.js';
+import { deriveWorkflowStepsFromGraph } from '../services/workflow-graph-sync.js';
 import {
   setWorkflowVariable,
   listWorkflowVariables,
@@ -70,7 +70,7 @@ function canModifyWorkflow(workflow: typeof workflows.$inferSelect, user: Authed
 
 const NodeInputSchema = z.object({
   nodeKey: z.string().regex(KEY_PATTERN),
-  nodeType: z.enum(['start', 'end', 'agent_step', 'http_request', 'script', 'conditional', 'parallel', 'join']),
+  nodeType: z.enum(['agent_step', 'http_request', 'script', 'conditional', 'parallel', 'join']),
   name: z.string().min(1).max(200),
   config: z.record(z.unknown()).optional(),
   positionX: z.number().int().optional(),
@@ -93,23 +93,17 @@ workflowGraphRouter.get('/:workflowId/graph', async (c) => {
   const user = c.get('user') as AuthedUser;
   const wf = await loadWorkflowOrThrow(c.req.param('workflowId'), user);
   if (!wf) return c.json({ error: 'Workflow not found' }, 404);
-  const [savedNodes, savedEdges, steps, workflowTriggers] = await Promise.all([
+  const [nodes, edges, steps, workflowTriggers] = await Promise.all([
     db.query.workflowNodes.findMany({ where: eq(workflowNodes.workflowId, wf.id) }),
     db.query.workflowEdges.findMany({ where: eq(workflowEdges.workflowId, wf.id) }),
     db.query.workflowSteps.findMany({ where: eq(workflowSteps.workflowId, wf.id), orderBy: workflowSteps.stepOrder }),
     db.query.triggers.findMany({ where: eq(triggers.workflowId, wf.id) }),
   ]);
-  const isSyntheticFromSteps = savedNodes.length === 0 && steps.length > 0;
-  const graph = isSyntheticFromSteps
-    ? buildGraphFromSequentialSteps(steps)
-    : { nodes: savedNodes, edges: savedEdges };
   return c.json({
-    executionMode: wf.executionMode,
-    nodes: graph.nodes,
-    edges: graph.edges,
+    nodes,
+    edges,
     steps,
     triggers: serializeTriggers(workflowTriggers),
-    isSyntheticFromSteps,
   });
 });
 
@@ -129,8 +123,8 @@ workflowGraphRouter.put('/:workflowId/graph', async (c) => {
       return c.json({ error: `Edge ${e.fromNodeKey}→${e.toNodeKey} references unknown node` }, 400);
     }
   }
-  const startCount = parsed.data.nodes.filter((n) => n.nodeType === 'start').length;
-  if (startCount !== 1) return c.json({ error: `Graph must contain exactly 1 'start' node (found ${startCount})` }, 400);
+  // Triggers point directly at any node via `triggers.entryNodeKey`. There is
+  // no canonical Start/End node — the graph is a free-form DAG.
 
   let replacementSteps;
   try {
@@ -186,14 +180,25 @@ workflowGraphRouter.put('/:workflowId/graph', async (c) => {
         })),
       );
     }
-    // Auto-flip executionMode → 'graph' on first save.
+    await tx.execute(sql`
+      UPDATE triggers t
+      SET entry_node_key = NULL
+      WHERE t.workflow_id = ${wf.id}
+        AND t.entry_node_key IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM workflow_nodes wn
+          WHERE wn.workflow_id = t.workflow_id
+            AND wn.node_key = t.entry_node_key
+        )
+    `);
     await tx
       .update(workflows)
-      .set({ executionMode: 'graph', version: sql`${workflows.version} + 1`, updatedAt: new Date() })
+      .set({ version: sql`${workflows.version} + 1`, updatedAt: new Date() })
       .where(eq(workflows.id, wf.id));
   });
   logger.info({ workflowId: wf.id, nodes: parsed.data.nodes.length, edges: parsed.data.edges.length, syncedSteps: replacementSteps.length }, 'Graph replaced');
-  return c.json({ ok: true, executionMode: 'graph', nodes: parsed.data.nodes.length, edges: parsed.data.edges.length, syncedSteps: replacementSteps.length });
+  return c.json({ ok: true, nodes: parsed.data.nodes.length, edges: parsed.data.edges.length, syncedSteps: replacementSteps.length });
 });
 
 // ─── Workflow-scoped variables ───────────────────────────────────────

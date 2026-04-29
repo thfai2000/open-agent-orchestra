@@ -9,6 +9,7 @@ import {
   workflowVersions,
   triggers,
 } from '../database/schema.js';
+import { listWorkflowVariables } from './workflow-scoped-variables.js';
 
 type AgentRecord = NonNullable<Awaited<ReturnType<typeof db.query.agents.findFirst>>>;
 type WorkflowRecord = NonNullable<Awaited<ReturnType<typeof db.query.workflows.findFirst>>>;
@@ -131,12 +132,14 @@ function normalizeWorkflowSnapshot(snapshot: unknown) {
     workflow?: Record<string, unknown>;
     steps?: Array<Record<string, unknown>>;
     triggers?: Array<Record<string, unknown>>;
+    variables?: Array<Record<string, unknown>>;
   };
 
   return {
     workflow: parsed.workflow ?? null,
     steps: Array.isArray(parsed.steps) ? parsed.steps : [],
     triggers: Array.isArray(parsed.triggers) ? parsed.triggers : [],
+    variables: Array.isArray(parsed.variables) ? parsed.variables : [],
   };
 }
 
@@ -417,7 +420,7 @@ export async function listAgentVersionViews(agent: AgentRecord) {
 }
 
 export async function buildWorkflowVersionSnapshot(workflow: WorkflowRecord) {
-  const [steps, workflowTriggers] = await Promise.all([
+  const [steps, workflowTriggers, workflowVars] = await Promise.all([
     db.query.workflowSteps.findMany({
       where: eq(workflowSteps.workflowId, workflow.id),
       orderBy: workflowSteps.stepOrder,
@@ -426,6 +429,7 @@ export async function buildWorkflowVersionSnapshot(workflow: WorkflowRecord) {
       where: eq(triggers.workflowId, workflow.id),
       orderBy: triggers.createdAt,
     }),
+    listWorkflowVariables(workflow.id).catch(() => []),
   ]);
 
   return {
@@ -452,6 +456,13 @@ export async function buildWorkflowVersionSnapshot(workflow: WorkflowRecord) {
       isActive: trigger.isActive,
       lastFiredAt: trigger.lastFiredAt,
       createdAt: trigger.createdAt,
+    })),
+    variables: workflowVars.map((v) => ({
+      key: v.key,
+      type: v.type,
+      value: v.value,
+      masked: v.masked,
+      description: v.description,
     })),
   };
 }

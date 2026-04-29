@@ -1,6 +1,6 @@
 {
   "name": "@oao/oao-api",
-  "version": "3.6.0",
+  "version": "4.0.6",
   "private": true,
   "type": "module",
   "scripts": {

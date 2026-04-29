@@ -3,31 +3,26 @@
     <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-surface-200 bg-white px-4 py-3">
       <div class="flex flex-wrap items-center gap-2">
         <Tag value="YAML View" severity="info" />
+        <Tag v-if="readonly" value="Read-only" severity="secondary" />
         <Tag :value="`${nodeCount} blocks`" severity="secondary" />
         <Tag :value="`${edgeCount} edges`" severity="secondary" />
         <Tag :value="`${triggerCount} triggers`" severity="secondary" />
-        <Tag v-if="dirty" value="Unsaved changes" severity="warn" />
+        <Tag v-if="dirty && !readonly" value="Unsaved changes" severity="warn" />
       </div>
       <div class="flex flex-wrap gap-2">
         <Button label="Reload" icon="pi pi-refresh" severity="secondary" outlined size="small" :disabled="saving" @click="loadYaml" />
-        <Button label="Format" icon="pi pi-align-left" severity="secondary" outlined size="small" :disabled="!yamlText" @click="formatYaml" />
-        <Button label="Save YAML" icon="pi pi-check" severity="primary" size="small" :loading="saving" :disabled="!dirty || !!parseError" @click="saveYaml" />
+        <Button v-if="!readonly" label="Format" icon="pi pi-align-left" severity="secondary" outlined size="small" :disabled="!yamlText" @click="formatYaml" />
+        <Button v-if="!readonly" label="Save YAML" icon="pi pi-check" severity="primary" size="small" :loading="saving" :disabled="!dirty || !!parseError" @click="saveYaml" />
       </div>
     </div>
     <Message v-if="errorMsg" severity="error" :closable="true" @close="errorMsg = null">{{ errorMsg }}</Message>
     <Message v-if="parseError" severity="warn" :closable="false">YAML parse error: {{ parseError }}</Message>
     <Message v-if="okMsg" severity="success" :closable="true" @close="okMsg = null">{{ okMsg }}</Message>
-    <div class="rounded-lg border border-surface-200 bg-white">
-      <Textarea
-        v-model="yamlText"
-        rows="32"
-        spellcheck="false"
-        class="font-mono text-xs w-full !border-0 !rounded-lg"
-        @update:modelValue="onChange"
-      />
-    </div>
+    <CodeEditor v-model="yamlText" language="yaml" :readonly="readonly" height="560px" @update:modelValue="onChange" />
     <p class="text-xs text-surface-400">
-      The YAML representation captures workflow blocks (nodes), edges, and triggers. Editing here saves back to the same graph as the Visual Editor.
+      The YAML representation captures workflow blocks (nodes), edges, and triggers.
+      <span v-if="!readonly">Editing here saves back to the same graph as the Visual Editor.</span>
+      <span v-else>Read-only snapshot of a historical workflow version.</span>
     </p>
   </div>
 </template>
@@ -35,8 +30,8 @@
 <script setup lang="ts">
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
-interface Props { workflowId: string }
-const props = defineProps<Props>();
+interface Props { workflowId: string; readonly?: boolean; versionData?: GraphPayload | null }
+const props = withDefaults(defineProps<Props>(), { readonly: false, versionData: null });
 const emit = defineEmits<{ saved: []; triggersChanged: [] }>();
 
 const { authHeaders } = useAuth();
@@ -78,7 +73,6 @@ function formatYaml() {
 }
 
 interface GraphPayload {
-  executionMode?: string;
   nodes: Array<Record<string, unknown>>;
   edges: Array<Record<string, unknown>>;
   triggers: Array<Record<string, unknown>>;
@@ -105,7 +99,6 @@ function toYaml(graph: GraphPayload): string {
     configuration: t.configuration || {},
   }));
   return yamlStringify({
-    executionMode: graph.executionMode || 'sequential',
     blocks,
     edges,
     triggers,
@@ -138,7 +131,12 @@ async function loadYaml() {
   errorMsg.value = null;
   okMsg.value = null;
   try {
-    const graph = await $fetch<GraphPayload>(`/api/workflow-graph/${props.workflowId}/graph`, { headers });
+    let graph: GraphPayload;
+    if (props.versionData) {
+      graph = props.versionData;
+    } else {
+      graph = await $fetch<GraphPayload>(`/api/workflow-graph/${props.workflowId}/graph`, { headers });
+    }
     const text = toYaml(graph);
     yamlText.value = text;
     lastLoaded.value = text;
@@ -149,6 +147,7 @@ async function loadYaml() {
 }
 
 async function saveYaml() {
+  if (props.readonly) return;
   if (!parsed.value) { errorMsg.value = 'Cannot save — YAML has parse errors.'; return; }
   saving.value = true;
   errorMsg.value = null;

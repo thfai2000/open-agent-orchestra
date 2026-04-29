@@ -8,12 +8,9 @@
  * scheduled as soon as a node completes, so independent branches run
  * concurrently.
  *
- * The engine is intentionally additive: it does NOT replace the legacy
- * sequential executor. Workflows opt in via `workflows.executionMode = 'graph'`.
- *
  * Live progress is published through the existing realtime bus using
- * `node.*` event types alongside the legacy `step.*` events, so the UI
- * can render either mode from a single subscription.
+ * `node.*` and `step.*` event types so node-level graph progress and
+ * agent-step output are available from a single subscription.
  */
 
 import { and, eq } from 'drizzle-orm';
@@ -54,6 +51,46 @@ type EdgeRow = typeof workflowEdges.$inferSelect;
 type StepRow = typeof workflowSteps.$inferSelect;
 type StepExecutionRow = typeof stepExecutions.$inferSelect;
 
+function orderedNodes(nodes: NodeRow[]): NodeRow[] {
+  return [...nodes].sort((left, right) => {
+    const y = (left.positionY ?? 0) - (right.positionY ?? 0);
+    if (y !== 0) return y;
+    const x = (left.positionX ?? 0) - (right.positionX ?? 0);
+    if (x !== 0) return x;
+    return left.nodeKey.localeCompare(right.nodeKey);
+  });
+}
+
+function orderedEdges(edges: EdgeRow[]): EdgeRow[] {
+  return [...edges].sort((left, right) => {
+    const from = left.fromNodeKey.localeCompare(right.fromNodeKey);
+    return from !== 0 ? from : left.toNodeKey.localeCompare(right.toNodeKey);
+  });
+}
+
+function orderedSteps(steps: StepRow[]): StepRow[] {
+  return [...steps].sort((left, right) => left.stepOrder - right.stepOrder);
+}
+
+function orderedEntryCandidates(nodes: NodeRow[], edges: EdgeRow[]): NodeRow[] {
+  const targetKeys = new Set(edges.map((edge) => edge.toNodeKey));
+  const roots = nodes.filter((node) => !targetKeys.has(node.nodeKey));
+  const nonRoots = nodes.filter((node) => targetKeys.has(node.nodeKey));
+  const byCanvas = (left: NodeRow, right: NodeRow) => {
+    const x = (left.positionX ?? 0) - (right.positionX ?? 0);
+    if (x !== 0) return x;
+    const y = (left.positionY ?? 0) - (right.positionY ?? 0);
+    if (y !== 0) return y;
+    return left.nodeKey.localeCompare(right.nodeKey);
+  };
+  return [...roots.sort(byCanvas), ...nonRoots.sort(byCanvas)];
+}
+
+function snapshotRows<T>(snapshot: Record<string, unknown>, key: string): T[] | null {
+  const rows = snapshot[key];
+  return Array.isArray(rows) ? rows as T[] : null;
+}
+
 export interface GraphExecutionResult {
   executionId: string;
   status: 'completed' | 'failed';
@@ -67,8 +104,26 @@ const MAX_NODE_FIRINGS = 500; // safety: prevent infinite cycles
 type NodeTerminalStatus = 'completed' | 'failed' | 'skipped';
 
 /**
- * Execute a graph-mode workflow. Called from the workflow worker when the
- * workflow's executionMode is 'graph'.
+ * Pure helper: choose the entry node for a graph execution. Resolution order:
+ *   1. The trigger's `_entryNodeKey` (if it exists in the graph).
+ *   2. The first node in the graph (positional fallback).
+ *   3. `null` if the graph is empty — the engine treats this as fatal.
+ * Exported for testing.
+ */
+export function pickEntryNode<T extends { nodeKey: string; nodeType: string }>(
+  nodes: T[],
+  overrideEntryKey: string | null | undefined,
+): T | null {
+  if (overrideEntryKey) {
+    const match = nodes.find((n) => n.nodeKey === overrideEntryKey);
+    if (match) return match;
+  }
+  return nodes[0] ?? null;
+}
+
+/**
+ * Execute a graph-mode workflow. Called from the workflow worker for every
+ * workflow (graph mode is the only execution mode as of v4.0.0).
  */
 export async function executeGraphWorkflow(executionId: string): Promise<GraphExecutionResult> {
   const execution = await db.query.workflowExecutions.findFirst({
@@ -94,20 +149,22 @@ export async function executeGraphWorkflow(executionId: string): Promise<GraphEx
     where: eq(workflows.id, execution.workflowId),
   });
   if (!workflow) throw new Error(`Workflow ${execution.workflowId} not found`);
-  if (workflow.executionMode !== 'graph') {
-    throw new Error(`Workflow ${workflow.id} is not in graph mode`);
-  }
 
-  const nodes = await db.query.workflowNodes.findMany({
+  const workflowSnapshot = asRecord(execution.workflowSnapshot);
+  const snapshotNodes = snapshotRows<NodeRow>(workflowSnapshot, 'nodes');
+  const snapshotEdges = snapshotRows<EdgeRow>(workflowSnapshot, 'edges');
+  const snapshotSteps = snapshotRows<StepRow>(workflowSnapshot, 'steps');
+
+  const nodes = orderedNodes(snapshotNodes ?? (await db.query.workflowNodes.findMany({
     where: eq(workflowNodes.workflowId, workflow.id),
-  });
-  const edges = await db.query.workflowEdges.findMany({
+  })));
+  const edges = orderedEdges(snapshotEdges ?? (await db.query.workflowEdges.findMany({
     where: eq(workflowEdges.workflowId, workflow.id),
-  });
-  const steps = await db.query.workflowSteps.findMany({
+  })));
+  const steps = orderedSteps(snapshotSteps ?? (await db.query.workflowSteps.findMany({
     where: eq(workflowSteps.workflowId, workflow.id),
     orderBy: workflowSteps.stepOrder,
-  });
+  })));
   const stepExecs = await db.query.stepExecutions.findMany({
     where: eq(stepExecutions.workflowExecutionId, executionId),
     orderBy: stepExecutions.stepOrder,
@@ -116,10 +173,19 @@ export async function executeGraphWorkflow(executionId: string): Promise<GraphEx
     await markExecutionFailed(executionId, 'Graph workflow has no nodes');
     return { executionId, status: 'failed', nodesExecuted: 0, finalOutputs: {}, error: 'no nodes' };
   }
-  const startNode = nodes.find((n) => n.nodeType === 'start');
-  if (!startNode) {
-    await markExecutionFailed(executionId, 'Graph workflow has no start node');
-    return { executionId, status: 'failed', nodesExecuted: 0, finalOutputs: {}, error: 'no start node' };
+
+  // Per-trigger entry override: enqueueWorkflowExecution stores the trigger's
+  // entryNodeKey on triggerMetadata._entryNodeKey so multiple triggers may
+  // point at different entry nodes inside the same graph. When no override
+  // is provided, fall back to the first root node by canvas position and key.
+  const triggerMetaForEntry = asRecord(execution.triggerMetadata);
+  const overrideEntryKey = typeof triggerMetaForEntry._entryNodeKey === 'string'
+    ? triggerMetaForEntry._entryNodeKey
+    : null;
+  const entryNode = pickEntryNode(orderedEntryCandidates(nodes, edges), overrideEntryKey);
+  if (!entryNode) {
+    await markExecutionFailed(executionId, 'Graph workflow has no entry node');
+    return { executionId, status: 'failed', nodesExecuted: 0, finalOutputs: {}, error: 'no entry node' };
   }
 
   const nodesByKey = new Map<string, NodeRow>();
@@ -169,13 +235,13 @@ export async function executeGraphWorkflow(executionId: string): Promise<GraphEx
   const nodeOutputs = new Map<string, unknown>();
   const nodeStatuses = new Map<string, NodeTerminalStatus>();
   let firings = 0;
-  const initialInput = buildStartNodeInput(execution);
+  const initialInput = buildEntryNodeInput(execution);
 
   // Schedule queue: each entry is { nodeKey, branchKeyFromPredecessor }
   // We walk breadth-first; concurrency comes from awaiting independent
   // branches in parallel via Promise.all.
   type Frontier = Array<{ nodeKey: string; predecessor?: string; branchKey?: string | null; inputOverride?: unknown }>;
-  let frontier: Frontier = [{ nodeKey: startNode.nodeKey, inputOverride: initialInput }];
+  let frontier: Frontier = [{ nodeKey: entryNode.nodeKey, inputOverride: initialInput }];
 
   while (frontier.length > 0) {
     if (firings >= MAX_NODE_FIRINGS) {
@@ -401,8 +467,6 @@ async function runNode(node: NodeRow, input: unknown, ctx: RunNodeContext): Prom
   try {
     let result: RunNodeResult;
     switch (node.nodeType) {
-      case 'start':
-      case 'end':
       case 'parallel':
       case 'join':
         // Pass-through: input becomes output.
@@ -687,7 +751,7 @@ function getTriggerTemplateMetadata(execution: typeof workflowExecutions.$inferS
   return trigger;
 }
 
-function buildStartNodeInput(execution: typeof workflowExecutions.$inferSelect): Record<string, unknown> {
+function buildEntryNodeInput(execution: typeof workflowExecutions.$inferSelect): Record<string, unknown> {
   const metadata = asRecord(execution.triggerMetadata);
   return {
     trigger: getTriggerTemplateMetadata(execution),

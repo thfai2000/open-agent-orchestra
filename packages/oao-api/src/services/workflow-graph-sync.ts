@@ -1,4 +1,4 @@
-type NodeType = 'start' | 'end' | 'agent_step' | 'http_request' | 'script' | 'conditional' | 'parallel' | 'join';
+type NodeType = 'agent_step' | 'http_request' | 'script' | 'conditional' | 'parallel' | 'join';
 type ReasoningEffort = 'high' | 'medium' | 'low';
 type WorkerRuntime = 'static' | 'ephemeral';
 
@@ -41,6 +41,10 @@ export interface DerivedWorkflowStep {
   timeoutSeconds: number;
 }
 
+// These helpers maintain the workflow_steps projection used by version history,
+// execution audit records, and agent-step output mapping. They do not represent
+// a separate sequential execution mode.
+
 const STEP_X = 320;
 const STEP_Y = 170;
 const STEP_GAP_X = 240;
@@ -54,9 +58,7 @@ export function buildGraphFromSequentialSteps(
   steps: SequentialWorkflowStepLike[],
 ): { nodes: WorkflowGraphNodeLike[]; edges: WorkflowGraphEdgeLike[] } {
   const orderedSteps = [...steps].sort((a, b) => a.stepOrder - b.stepOrder);
-  const nodes: WorkflowGraphNodeLike[] = [
-    { nodeKey: 'start', nodeType: 'start', name: 'Start', config: {}, positionX: 80, positionY: STEP_Y },
-  ];
+  const nodes: WorkflowGraphNodeLike[] = [];
 
   for (const [index, step] of orderedSteps.entries()) {
     nodes.push({
@@ -77,15 +79,6 @@ export function buildGraphFromSequentialSteps(
       positionY: STEP_Y,
     });
   }
-
-  nodes.push({
-    nodeKey: 'end',
-    nodeType: 'end',
-    name: 'End',
-    config: {},
-    positionX: STEP_X + orderedSteps.length * STEP_GAP_X,
-    positionY: STEP_Y,
-  });
 
   const edges: WorkflowGraphEdgeLike[] = [];
   for (let index = 0; index < nodes.length - 1; index++) {
@@ -124,8 +117,10 @@ export function graphOrderedAgentNodes(nodes: WorkflowGraphNodeLike[], edges: Wo
 
   const ordered: WorkflowGraphNodeLike[] = [];
   const visited = new Set<string>();
-  const start = nodes.find((node) => node.nodeType === 'start');
-  const queue = start ? [start.nodeKey] : [];
+  // Pick the first agent_step node by position as the BFS root.
+  const sortedAgentNodes = nodes.filter((n) => n.nodeType === 'agent_step').sort(positionSort);
+  const root = sortedAgentNodes[0];
+  const queue = root ? [root.nodeKey] : [];
 
   while (queue.length > 0) {
     const key = queue.shift()!;

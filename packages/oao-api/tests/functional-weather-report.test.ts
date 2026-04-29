@@ -52,6 +52,8 @@ function buildChainableMock() {
       agents: { findFirst: mockFindFirst, findMany: mockFindMany },
       workflows: { findFirst: mockFindFirst, findMany: mockFindMany },
       workflowSteps: { findFirst: mockFindFirst, findMany: mockFindMany },
+      workflowNodes: { findFirst: mockFindFirst, findMany: mockFindMany },
+      workflowEdges: { findMany: mockFindMany },
       triggers: { findFirst: mockFindFirst, findMany: mockFindMany },
       workflowExecutions: { findFirst: mockFindFirst, findMany: mockFindMany },
       stepExecutions: { findMany: mockFindMany },
@@ -684,14 +686,14 @@ describe('Weather Report — Phase 3: Workflow Creation', () => {
 // ======================================================================
 
 describe('Weather Report — Phase 4: Execution', () => {
-  it('manually runs the workflow via POST /:id/run', async () => {
+  it('manually runs the workflow via POST /api/triggers/:id/run', async () => {
     const token = await getToken();
-    // Mock: #1 workflow findFirst, #2 trigger findFirst
+    // verifyTriggerAccess: trigger, then workflow
     mockFindFirst
-      .mockResolvedValueOnce(WEATHER_WORKFLOW)
-      .mockResolvedValueOnce(WEATHER_TRIGGER); // active webhook trigger
+      .mockResolvedValueOnce(WEATHER_TRIGGER)
+      .mockResolvedValueOnce(WEATHER_WORKFLOW);
 
-    const res = await app.request(`/api/workflows/${WF_ID}/run`, {
+    const res = await app.request(`/api/triggers/${TRIGGER_ID}/run`, {
       method: 'POST',
       headers: authHeaders(token),
       body: JSON.stringify({
@@ -700,14 +702,17 @@ describe('Weather Report — Phase 4: Execution', () => {
     });
     expect(res.status).toBe(202);
     const json = await res.json();
-    expect(json.status).toBe('accepted');
+    expect(json.status).toBe('pending');
+    expect(json.executionId).toBe('exec-weather-001');
   });
 
   it('rejects manual run on inactive workflow', async () => {
     const token = await getToken();
-    mockFindFirst.mockResolvedValueOnce({ ...WEATHER_WORKFLOW, isActive: false });
+    mockFindFirst
+      .mockResolvedValueOnce(WEATHER_TRIGGER)
+      .mockResolvedValueOnce({ ...WEATHER_WORKFLOW, isActive: false });
 
-    const res = await app.request(`/api/workflows/${WF_ID}/run`, {
+    const res = await app.request(`/api/triggers/${TRIGGER_ID}/run`, {
       method: 'POST',
       headers: authHeaders(token),
       body: JSON.stringify({ inputs: {} }),
@@ -927,30 +932,29 @@ describe('Weather Report — Phase 5: Updates & Versioning', () => {
     expect(json.workflow.name).toBe('Hourly Weather Report');
   });
 
-  it('updates workflow steps (replace all)', async () => {
+  it('updates workflow graph blocks', async () => {
     const token = await getToken();
     mockFindFirst.mockResolvedValueOnce(WEATHER_WORKFLOW);
-    // deleteReturning for old steps, then insertReturning for new
-    mockInsertReturning.mockResolvedValueOnce([
-      { ...WEATHER_STEPS[0], name: 'Get Weather' },
-      WEATHER_STEPS[1],
-      { id: 'step-3', name: 'Email Summary', stepOrder: 3 },
-    ]);
 
-    const res = await app.request(`/api/workflows/${WF_ID}/steps`, {
+    const res = await app.request(`/api/workflow-graph/${WF_ID}/graph`, {
       method: 'PUT',
       headers: authHeaders(token),
       body: JSON.stringify({
-        steps: [
-          { name: 'Get Weather', promptTemplate: 'Fetch weather for {{city}}', stepOrder: 1, model: 'gpt-5 mini' },
-          { name: 'Format Report', promptTemplate: 'Format the weather data.', stepOrder: 2, model: 'gpt-5 mini' },
-          { name: 'Email Summary', promptTemplate: 'Send weather summary email.', stepOrder: 3, model: 'gpt-5 mini' },
+        nodes: [
+          { nodeKey: 'weather', nodeType: 'agent_step', name: 'Get Weather', config: { promptTemplate: 'Fetch weather for {{city}}', model: 'gpt-5 mini' }, positionX: 320, positionY: 170 },
+          { nodeKey: 'format', nodeType: 'agent_step', name: 'Format Report', config: { promptTemplate: 'Format the weather data.', model: 'gpt-5 mini' }, positionX: 560, positionY: 170 },
+          { nodeKey: 'email', nodeType: 'agent_step', name: 'Email Summary', config: { promptTemplate: 'Send weather summary email.', model: 'gpt-5 mini' }, positionX: 800, positionY: 170 },
+        ],
+        edges: [
+          { fromNodeKey: 'weather', toNodeKey: 'format' },
+          { fromNodeKey: 'format', toNodeKey: 'email' },
         ],
       }),
     });
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.steps).toHaveLength(3);
+    expect(json.nodes).toBe(3);
+    expect(json.syncedSteps).toBe(3);
   });
 
   it('deactivates the workflow', async () => {

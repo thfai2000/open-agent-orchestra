@@ -19,8 +19,7 @@ export const PLATFORM_MCP_SENTINEL_COMMAND = 'oao-platform-mcp';
 export const PLATFORM_MCP_WRITE_TOOLS = [
   'oao_create_workflow',
   'oao_update_workflow',
-  'oao_replace_workflow_steps',
-  'oao_run_workflow',
+  'oao_run_trigger',
   'oao_create_variable',
   'oao_update_variable',
   'oao_delete_variable',

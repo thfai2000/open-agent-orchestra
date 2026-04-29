@@ -24,6 +24,7 @@ import {
   forcePollSingleJiraTrigger,
   simulateJiraChangesNotificationFire,
 } from '../services/jira-integration.js';
+import { enqueueWorkflowExecution } from '../services/workflow-engine.js';
 
 const triggersRouter = new Hono();
 triggersRouter.use('/*', authMiddleware);
@@ -89,6 +90,9 @@ const createTriggerSchema = z.object({
   triggerType: creatableTriggerTypeSchema,
   configuration: z.record(z.unknown()).default({}),
   isActive: z.boolean().optional(),
+  entryNodeKey: z.string().min(1).max(100).nullable().optional(),
+  positionX: z.number().int().optional(),
+  positionY: z.number().int().optional(),
 });
 
 triggersRouter.post('/', async (c) => {
@@ -119,6 +123,9 @@ triggersRouter.post('/', async (c) => {
       triggerType: body.triggerType,
       configuration: body.configuration,
       isActive: body.isActive,
+      entryNodeKey: body.entryNodeKey ?? null,
+      positionX: body.positionX,
+      positionY: body.positionY,
     });
   } catch (error) {
     if (error instanceof TriggerServiceError) {
@@ -140,6 +147,9 @@ const updateTriggerSchema = z.object({
   triggerType: creatableTriggerTypeSchema.optional(),
   configuration: z.record(z.unknown()).optional(),
   isActive: z.boolean().optional(),
+  entryNodeKey: z.string().min(1).max(100).nullable().optional(),
+  positionX: z.number().int().optional(),
+  positionY: z.number().int().optional(),
 });
 
 triggersRouter.put('/:id', async (c) => {
@@ -155,7 +165,7 @@ triggersRouter.put('/:id', async (c) => {
 
   const body = updateTriggerSchema.parse(await c.req.json());
 
-  if (body.triggerType === undefined && body.configuration === undefined && body.isActive === undefined) {
+  if (body.triggerType === undefined && body.configuration === undefined && body.isActive === undefined && body.entryNodeKey === undefined && body.positionX === undefined && body.positionY === undefined) {
     return c.json({ trigger: serializeTrigger(access.trigger) });
   }
 
@@ -169,6 +179,9 @@ triggersRouter.put('/:id', async (c) => {
       triggerType: body.triggerType,
       configuration: body.configuration,
       isActive: body.isActive,
+      entryNodeKey: body.entryNodeKey,
+      positionX: body.positionX,
+      positionY: body.positionY,
     });
   } catch (error) {
     if (error instanceof TriggerServiceError) {
@@ -275,6 +288,70 @@ triggersRouter.post('/:id/fire', async (c) => {
     }
     throw error;
   }
+});
+
+// POST /:id/run — manually run an eligible trigger with optional inputs.
+// Eligible types are those with `supportsManualRun: true` in the trigger catalog
+// (webhook, time_schedule, exact_datetime, jira_polling). The trigger's configured
+// entryNodeKey is honoured by the graph engine so each trigger has its own
+// dedicated entry point.
+const manualRunTriggerSchema = z.object({
+  inputs: z.record(z.unknown()).default({}),
+});
+
+triggersRouter.post('/:id/run', async (c) => {
+  const user = c.get('user');
+  const id = uuidSchema.parse(c.req.param('id'));
+
+  const access = await verifyTriggerAccess(id, user.workspaceId, user.userId, user.role);
+  if (!access) return c.json({ error: 'Trigger not found' }, 404);
+
+  if (!access.workflow.isActive) {
+    return c.json({ error: 'Workflow is not active' }, 400);
+  }
+
+  if (!access.trigger.isActive) {
+    return c.json({ error: 'Trigger is not active' }, 400);
+  }
+
+  const catalogEntry = getTriggerCatalog().find((entry) => entry.type === access.trigger.triggerType);
+  if (!catalogEntry?.supportsManualRun) {
+    return c.json({ error: `Trigger type ${access.trigger.triggerType} does not support manual run` }, 400);
+  }
+
+  const body = manualRunTriggerSchema.parse(await c.req.json().catch(() => ({})));
+
+  // Validate inputs for webhooks (parameter definitions). Other eligible types
+  // (schedule, exact_datetime, jira_polling) accept arbitrary or empty inputs.
+  let inputs: Record<string, unknown> = {};
+  if (access.trigger.triggerType === 'webhook') {
+    const config = access.trigger.configuration as Record<string, unknown>;
+    const paramDefs = Array.isArray(config.parameters)
+      ? (config.parameters as Array<{ name: string; required?: boolean }>)
+      : [];
+    if (paramDefs.length > 0) {
+      const missing = paramDefs.filter((p) => p.required && (body.inputs[p.name] === undefined || body.inputs[p.name] === null || body.inputs[p.name] === ''));
+      if (missing.length > 0) {
+        return c.json({ error: `Missing required inputs: ${missing.map((p) => p.name).join(', ')}` }, 400);
+      }
+      for (const p of paramDefs) {
+        if (body.inputs[p.name] !== undefined) inputs[p.name] = body.inputs[p.name];
+      }
+    } else {
+      inputs = { ...body.inputs };
+    }
+  } else {
+    inputs = { ...body.inputs };
+  }
+
+  const execution = await enqueueWorkflowExecution(access.workflow.id, access.trigger.id, {
+    source: 'manual_run',
+    triggerType: access.trigger.triggerType,
+    initiatedBy: user.userId,
+    inputs,
+  });
+
+  return c.json({ executionId: execution.id, status: execution.status }, 202);
 });
 
 // DELETE /:id (workspace-scoped)

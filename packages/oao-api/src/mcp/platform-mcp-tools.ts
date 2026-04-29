@@ -9,8 +9,7 @@ import {
   platformListAgentsInputSchema,
   platformListVariablesInputSchema,
   platformListWorkflowsInputSchema,
-  platformReplaceWorkflowStepsInputSchema,
-  platformRunWorkflowInputSchema,
+  platformRunTriggerInputSchema,
   platformUpdateVariableInputSchema,
   platformUpdateWorkflowInputSchema,
 } from '../contracts/platform-api.js';
@@ -112,24 +111,12 @@ export const platformMcpToolDefinitions: ReadonlyArray<PlatformMcpToolDefinition
     },
   },
   {
-    name: 'oao_replace_workflow_steps',
-    description: 'Atomically replace every step in a workflow.',
-    inputSchema: platformReplaceWorkflowStepsInputSchema,
+    name: 'oao_run_trigger',
+    description: 'Run a workflow through one of its manual-capable triggers with optional inputs.',
+    inputSchema: platformRunTriggerInputSchema,
     requiresPermission: true,
-    execute: async ({ id, steps }, { callApi }) => {
-      return callApi(`/api/workflows/${String(id)}/steps`, {
-        method: 'PUT',
-        body: JSON.stringify({ steps }),
-      });
-    },
-  },
-  {
-    name: 'oao_run_workflow',
-    description: 'Trigger a manual workflow run with optional inputs.',
-    inputSchema: platformRunWorkflowInputSchema,
-    requiresPermission: true,
-    execute: async ({ id, inputs = {} }, { callApi }) => {
-      return callApi(`/api/workflows/${String(id)}/run`, {
+    execute: async ({ triggerId, inputs = {} }, { callApi }) => {
+      return callApi(`/api/triggers/${String(triggerId)}/run`, {
         method: 'POST',
         body: JSON.stringify({ inputs }),
       });

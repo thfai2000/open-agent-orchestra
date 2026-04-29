@@ -1,6 +1,6 @@
 # Workflow Engine & Controller
 
-The **Workflow Engine** orchestrates multi-step workflow executions by dispatching steps to agent workers. The **Controller** is the dedicated service that polls for due triggers and hosts the BullMQ worker. Together, they form the automation backbone of OAO — following a **Jenkins Controller + Agent pattern** for dynamic workload isolation.
+The **Workflow Engine** orchestrates graph workflow executions by running procedural nodes and dispatching `agent_step` nodes to Copilot sessions. The **Controller** is the dedicated service that polls for due triggers and hosts the BullMQ worker. Together, they form the automation backbone of OAO.
 
 For scaling strategy and agent instance types (static vs ephemeral), see [Architecture Overview](/architecture/overview).
 
@@ -10,7 +10,7 @@ For scaling strategy and agent instance types (static vs ephemeral), see [Archit
 graph TB
     subgraph "OAO-API"
         WHEP["POST /api/webhooks/:path"]
-        RUNEP["POST /api/workflows/:id/run"]
+        RUNEP["POST /api/triggers/:id/run"]
         EVAPI["Other API mutations"]
     end
 
@@ -39,7 +39,7 @@ graph TB
     end
 
     WHEP -->|"insert webhook.received"| EVENTS
-    RUNEP -->|"insert webhook.received"| EVENTS
+    RUNEP -->|"enqueue execution"| QUEUE
     EVAPI -->|"insert system events"| EVENTS
 
     POLL -->|"reads due triggers"| TRIGGERS
@@ -71,7 +71,7 @@ Both the **trigger poller** and the **BullMQ worker** run inside the same proces
 
 | Component | Runs In | Purpose |
 |---|---|---|
-| **OAO-API** | API Deployment | HTTP endpoints, webhook ingestion, manual run, event emission |
+| **OAO-API** | API Deployment | HTTP endpoints, webhook ingestion, manual trigger runs, event emission |
 | **Trigger Poller** | Controller Deployment | Polls DB for due triggers + new system events every N seconds |
 | **BullMQ Worker** | Controller Deployment | Dequeues jobs and dispatches steps to agent workers |
 
@@ -168,30 +168,24 @@ sequenceDiagram
 
 ### Manual Run Flow (Event-Based)
 
-Manual Run from the UI goes through the event system — the API inserts a `webhook.received` event, and the Controller picks it up in the next poll cycle:
+Manual Run from the UI calls a specific trigger and enqueues execution immediately:
 
 ```mermaid
 sequenceDiagram
     participant User as Browser
     participant API as OAO-API
-    participant DB as system_events
-    participant Ctrl as Controller (Leader)
     participant Q as BullMQ
     participant W as Worker
     participant AP as Agent Instance
 
-    User->>API: POST /api/workflows/:id/run {inputs}
-    API->>API: Validate inputs against webhook params
-    API->>DB: Insert webhook.received event
-    API-->>User: 202 Accepted
-
-    Note over Ctrl: Next poll cycle (≤30s)
-    Ctrl->>DB: Query new system_events
-    Ctrl->>Ctrl: Match webhook.received → extract trigger/workflow
-    Ctrl->>Q: Enqueue workflow execution
+    User->>API: POST /api/triggers/:id/run {inputs}
+    API->>API: Validate trigger, permissions, and inputs
+    API->>Q: Enqueue graph execution
+    API-->>User: 202 Accepted {executionId,status}
     Q->>W: Dequeue job
-    W->>AP: Dispatch step to agent worker
-    AP->>DB: Execute step + write results
+    W->>W: Execute graph nodes
+    W->>AP: Dispatch agent_step nodes
+    AP->>W: Return agent output
 ```
 
 The UI polls `GET /api/executions/active` to:
@@ -203,36 +197,34 @@ The UI polls `GET /api/executions/active` to:
 A single run of a workflow:
 
 - **Status flow** — `pending` → `running` → `completed` | `failed` | `cancelled`
-- **Workflow Snapshot** — Complete snapshot of workflow + steps at trigger time (immutable)
-- **Step Executions** — Ordered list of step execution records with output and reasoning trace
+- **Workflow Snapshot** — Complete snapshot of workflow, graph nodes, edges, triggers, and agent-step projection at trigger time (immutable)
+- **Step Executions** — Ordered projection records for `agent_step` nodes with output and reasoning trace
 
-Graph-mode executions also record one `node_executions` row per fired or skipped graph node. The Start node outputs the trigger envelope (`inputs`, `trigger`, `payload`, `eventData`) so procedural blocks and agent prompts can consume manual-run inputs and webhook payloads as first-class workflow data. Agent-step graph nodes are linked back to their synced `step_executions` rows, which keeps reasoning traces, live output, and `ask_questions` user approvals available from the execution graph view.
+Executions record one `node_executions` row per fired or skipped graph node. The entry node receives the trigger envelope (`inputs`, `trigger`, `payload`, `eventData`) so procedural blocks and agent prompts can consume manual-run inputs and webhook payloads as first-class workflow data. Agent-step graph nodes are linked back to their synced `step_executions` rows, which keeps reasoning traces, live output, and `ask_questions` user approvals available from the execution graph view.
 
 ### Execution Pipeline
 
-When the BullMQ worker picks up a job, it orchestrates the workflow by **dispatching each step according to its resolved runtime**:
+When the BullMQ worker picks up a job, it runs the saved graph snapshot and executes ready nodes until no successors remain:
 
 ```mermaid
 graph TB
     START[Worker picks up job] --> MARK[Mark execution as running]
-    MARK --> LOOP{Next step?}
-    LOOP -->|yes| QUOTA{Enough LLM credit?}
-    QUOTA -->|yes| DISPATCH[Resolve step runtime<br/>static queue or ephemeral pod]
-    QUOTA -->|no| HOLD[Record quota_wait<br/>keep step pending<br/>delay resume job]
-    HOLD --> LOOP
-    DISPATCH --> ALLOCATE[Wait for allocation<br/>step stays pending]
-    ALLOCATE -->|allocated| WAIT[Wait for execution<br/>poll status every 3s]
-    WAIT -->|succeeded| LOOP
-    WAIT -->|failed| FAIL[Mark step + execution failed<br/>skip remaining steps]
-    ALLOCATE -->|allocation timeout| FAIL
-    WAIT -->|execution timeout| FAIL
-    LOOP -->|no more steps| DONE[Mark execution completed]
+    MARK --> ENTRY[Pick trigger entry node<br/>or first root block]
+    ENTRY --> NODE{Next ready node?}
+    NODE -->|procedural| PROC[Run HTTP/script/conditional/parallel/join]
+    NODE -->|agent_step| QUOTA{Enough LLM credit?}
+    QUOTA -->|yes| DISPATCH[Run Copilot session]
+    QUOTA -->|no| FAIL[Mark node and execution failed]
+    PROC --> SUCCESS[Record node output]
+    DISPATCH --> SUCCESS
+    DISPATCH -->|error| FAIL
+    SUCCESS --> NEXT[Schedule satisfied successors]
+    NEXT --> NODE
+    NODE -->|none| DONE[Mark execution completed]
 
     style START fill:#FF9800,color:#fff
     style QUOTA fill:#FFC107,color:#111
-    style HOLD fill:#795548,color:#fff
     style DISPATCH fill:#9C27B0,color:#fff
-    style ALLOCATE fill:#607D8B,color:#fff
     style DONE fill:#4CAF50,color:#fff
     style FAIL fill:#e53935,color:#fff
 ```
@@ -258,25 +250,18 @@ Each agent can only have **one active Copilot session at a time**. This prevents
 
 When a step reaches an agent that is already busy, the worker waits for the session lock to clear for a short grace window before failing. The step execution timeout budget includes this lock-wait window plus a small completion grace period so retries are less likely to race the previous session's cleanup. The lock is released in a shared cleanup path even if workspace preparation or Git clone fails before the Copilot session is created.
 
-### Allocation Semantics
+### Agent Session Semantics
 
-After quota checks pass, a step stays `pending` while the controller tries to allocate runtime capacity. Capacity problems are treated as allocation waits, not immediate step failures.
+When an `agent_step` node fires, the graph engine links it to its synced `step_executions` row, renders the prompt with the trigger envelope and node input, checks the selected model's `creditCost` against user and workspace limits, and runs a Copilot session under the agent session lock.
 
-Static runtime steps are enqueued on the `agent-step-execution` queue and remain pending until a static agent worker picks up the job. If all workers are busy, stopped, or unavailable, the step waits until `stepAllocationTimeoutSeconds` and then fails with an allocation timeout. A late worker that later receives the orphaned job skips it because the parent execution is already terminal.
-
-Ephemeral runtime steps first wait for dynamic agent capacity under `MAX_CONCURRENT_AGENTS`, then retry Kubernetes pod creation until the same allocation timeout expires. This covers transient capacity limits and non-Kubernetes or temporarily unavailable Kubernetes environments where pod provisioning cannot start immediately. In both cases, the step remains pending and records an `allocation_wait` process-log event until it starts or times out.
-
-The allocation retry cadence is controlled by `AGENT_ALLOCATION_RETRY_MS` (default: 3000ms). The default allocation timeout fallback is `DEFAULT_STEP_ALLOCATION_TIMEOUT_SECONDS` (default: 300s), but workflow snapshots preserve the workflow's own `stepAllocationTimeoutSeconds` for each execution.
-
-- **Quota wait**: before allocation, the engine checks the selected model's `creditCost` against user and workspace daily, weekly, and monthly limits. If quota is exhausted, the step remains `pending`, a `quota_wait` live event is written, and a delayed workflow job resumes from the same step. Configure the recheck cadence with `QUOTA_WAIT_RECHECK_SECONDS` (default: 60 seconds).
-- **Static runtime**: the step is queued on `agent-step-execution` and remains `pending` until a static worker transitions it to `running`.
-- **Ephemeral runtime**: the controller creates a dedicated pod immediately and the step remains `pending` until that pod is ready enough to start the step.
-- **Allocation timeout**: after quota is available and a step has been dispatched, if it does not leave `pending` before `stepAllocationTimeoutSeconds`, the engine marks the step and workflow execution as failed.
-- **Execution timeout**: once the step is `running`, the normal step timeout applies.
+- **Quota exhausted**: the node and workflow execution fail immediately with the quota message. Retrying later creates a fresh graph execution.
+- **Session lock busy**: the worker waits for `AGENT_SESSION_LOCK_WAIT_SECONDS`; if the lock does not clear, the node fails.
+- **Timeout**: the Copilot session uses the node or step `timeoutSeconds` budget.
+- **Runtime field**: `workerRuntime` is still captured on agent-step config and snapshots for audit/UX, but v4 graph execution runs through the graph worker path.
 
 ### Runtime Selection
 
-The dispatcher resolves the runtime in this order:
+The graph engine resolves the stored runtime/audit value in this order:
 
 1. `workflow_execution.workflowSnapshot.steps[].workerRuntime` — immutable step override at trigger time
 2. `workflow_execution.workflowSnapshot.workflow.workerRuntime` — immutable workflow default at trigger time

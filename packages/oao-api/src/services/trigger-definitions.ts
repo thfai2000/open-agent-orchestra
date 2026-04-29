@@ -221,7 +221,7 @@ const triggerCatalog: TriggerCatalogEntry[] = [
     shortLabel: 'Schedule',
     category: 'Built-in',
     description: 'Run the workflow on a recurring cron schedule.',
-    supportsManualRun: false,
+    supportsManualRun: true,
     defaultConfiguration: { cron: '' },
   },
   {
@@ -230,7 +230,7 @@ const triggerCatalog: TriggerCatalogEntry[] = [
     shortLabel: 'Exact Time',
     category: 'Built-in',
     description: 'Run the workflow once at a specific date and time.',
-    supportsManualRun: false,
+    supportsManualRun: true,
     defaultConfiguration: { datetime: '' },
   },
   {
@@ -280,7 +280,7 @@ const triggerCatalog: TriggerCatalogEntry[] = [
     category: 'Jira',
     description: 'Poll Jira search results with a controlled overlap window so recent issue changes are captured without duplicates.',
     notes: 'Supports either Jira API tokens or OAuth 2.0. The polling engine tracks recent issue updates to absorb eventual consistency and controller restarts.',
-    supportsManualRun: false,
+    supportsManualRun: true,
     defaultConfiguration: {
       jiraSiteUrl: '',
       authMode: 'api_token',

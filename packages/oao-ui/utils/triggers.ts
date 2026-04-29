@@ -15,6 +15,9 @@ export interface WorkflowTriggerLike {
   configuration: Record<string, any>;
   isActive?: boolean;
   runtimeSummary?: Record<string, any>;
+  entryNodeKey?: string | null;
+  positionX?: number;
+  positionY?: number;
 }
 
 const triggerLabels: Record<string, string> = {

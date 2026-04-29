@@ -560,9 +560,19 @@ describe('Workflow routes — authenticated', () => {
     expect(res.status).toBe(404);
   });
 
-  it('POST /api/workflows/:id/run enqueues execution with inputs', async () => {
+  it('POST /api/triggers/:id/run enqueues execution with inputs', async () => {
     const token = await getToken();
-    // findFirst returns the workflow
+    const triggerId = '550e8400-e29b-41d4-a716-446655440021';
+
+    // findFirst returns the trigger
+    mockFindFirst.mockResolvedValueOnce({
+      id: triggerId,
+      workflowId: TEST_WORKFLOW_ID,
+      triggerType: 'webhook',
+      isActive: true,
+      configuration: { path: '/test-hook', parameters: [{ name: 'symbol', required: true }] },
+    });
+    // findFirst returns the owning workflow
     mockFindFirst.mockResolvedValueOnce({
       id: TEST_WORKFLOW_ID,
       name: 'Test WF',
@@ -571,22 +581,16 @@ describe('Workflow routes — authenticated', () => {
       userId: TEST_UUID,
       scope: 'user',
     });
-    // findFirst returns webhook trigger (second call)
-    mockFindFirst.mockResolvedValueOnce({
-      id: 'trigger-001',
-      triggerType: 'webhook',
-      isActive: true,
-      configuration: { path: '/test-hook', parameters: [{ name: 'symbol', required: true }] },
-    });
 
-    const res = await app.request(`/api/workflows/${TEST_WORKFLOW_ID}/run`, {
+    const res = await app.request(`/api/triggers/${triggerId}/run`, {
       method: 'POST',
       headers: authHeaders(token),
       body: JSON.stringify({ inputs: { symbol: 'AAPL' } }),
     });
     expect(res.status).toBe(202);
     const body = await res.json();
-    expect(body.status).toBe('accepted');
+    expect(body.status).toBe('pending');
+    expect(body.executionId).toBe('exec-new-001');
   });
 });
 

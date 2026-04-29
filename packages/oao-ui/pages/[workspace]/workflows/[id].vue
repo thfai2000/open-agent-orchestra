@@ -40,25 +40,55 @@
           </div>
         </div>
         <div class="flex gap-2">
-          <Button label="Manual Run" icon="pi pi-play" size="small" severity="success" @click="showRunDialog = true" />
+          <!-- Run from a specific trigger (eligible types only) -->
+          <SplitButton
+            v-if="eligibleManualRunTriggers.length > 0"
+            :label="primaryRunLabel"
+            icon="pi pi-play"
+            size="small"
+            severity="success"
+            :model="manualRunMenuItems"
+            @click="openRunDialog(eligibleManualRunTriggers[0])"
+          />
+          <Button
+            v-else
+            label="Manual Run"
+            icon="pi pi-play"
+            size="small"
+            severity="success"
+            :disabled="true"
+            title="Add a webhook, schedule, exact-time or jira-polling trigger to enable manual run."
+          />
           <Button :label="workflow.isActive ? 'Deactivate' : 'Activate'" severity="secondary" size="small" @click="toggleActive" />
-          <Button label="Edit" icon="pi pi-pencil" severity="secondary" size="small" @click="startEdit" v-if="!editingWorkflow" />
           <Button label="Delete" icon="pi pi-trash" severity="danger" size="small" @click="confirmDeleteWorkflow" />
         </div>
       </div>
 
-      <!-- Manual Run Dialog -->
-      <Dialog v-model:visible="showRunDialog" header="Manual Run" :style="{ width: '500px' }" modal>
-        <div v-if="webhookParams.length > 0" class="flex flex-col gap-3">
-          <div v-for="param in webhookParams" :key="param.name" class="flex flex-col gap-2">
-            <label class="text-sm font-medium">{{ param.name }} <span v-if="param.required" class="text-red-500">*</span></label>
-            <InputText v-model="runInputs[param.name]" :placeholder="param.description || param.name" />
+      <!-- Manual Run Dialog (per-trigger) -->
+      <Dialog v-model:visible="showRunDialog" :header="runDialogHeader" :style="{ width: '520px' }" modal>
+        <div v-if="runDialogTrigger" class="flex flex-col gap-3">
+          <div class="flex flex-wrap items-center gap-2 text-xs">
+            <Tag :value="formatTriggerTypeLabel(runDialogTrigger.triggerType)" severity="info" />
+            <Tag :value="runDialogTrigger.entryNodeKey ? `Entry: ${runDialogTrigger.entryNodeKey}` : 'Entry: first block'" severity="secondary" />
+          </div>
+          <p v-if="runDialogHelp" class="text-surface-500 text-xs">{{ runDialogHelp }}</p>
+          <div v-if="webhookParamsForDialog.length > 0" class="flex flex-col gap-3">
+            <div v-for="param in webhookParamsForDialog" :key="param.name" class="flex flex-col gap-1">
+              <label class="text-sm font-medium">{{ param.name }} <span v-if="param.required" class="text-red-500">*</span></label>
+              <InputText v-model="runInputs[param.name]" :placeholder="param.description || param.name" />
+              <small v-if="param.description" class="text-[11px] text-surface-400">{{ param.description }}</small>
+            </div>
+          </div>
+          <div v-else class="flex flex-col gap-1">
+            <label class="text-sm font-medium">Inputs (JSON, optional)</label>
+            <Textarea v-model="runInputsJsonText" rows="5" class="font-mono text-xs w-full" placeholder="{}" />
+            <small v-if="runInputsJsonError" class="text-red-500 text-[11px]">{{ runInputsJsonError }}</small>
+            <small v-else class="text-[11px] text-surface-400">Free-form JSON object delivered to the workflow as <code>inputs</code>. Leave empty for none.</small>
           </div>
         </div>
-        <p v-else class="text-surface-400">No parameters. The workflow will run with empty inputs.</p>
         <template #footer>
           <Button label="Cancel" severity="secondary" @click="showRunDialog = false" />
-          <Button label="Start Run" icon="pi pi-play" severity="success" :loading="triggering" @click="handleManualRun" />
+          <Button label="Start Run" icon="pi pi-play" severity="success" :loading="triggering" :disabled="!!runInputsJsonError" @click="handleManualRun" />
         </template>
       </Dialog>
 
@@ -68,75 +98,90 @@
         <NuxtLink v-if="triggerResult.executionId" :to="`/${ws}/executions/${triggerResult.executionId}`" class="text-primary hover:underline ml-2">View Execution &rarr;</NuxtLink>
       </Message>
 
-      <!-- Edit Form -->
-      <Card v-if="editingWorkflow" class="mb-6">
-        <template #title>Edit Workflow</template>
-        <template #content>
-          <Message v-if="editError" severity="error" :closable="false" class="mb-4">{{ editError }}</Message>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Name *</label><InputText v-model="editForm.name" /></div>
-            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Description</label><InputText v-model="editForm.description" /></div>
-            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Workflow Agent</label>
-              <Select v-model="editForm.defaultAgentId" :options="agentOptions" optionLabel="name" optionValue="id" placeholder="None" showClear />
-              <small class="text-surface-400">The agent that will run this workflow's steps (each step can override).</small>
-            </div>
-            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Default Model</label>
-              <Select v-model="editForm.defaultModel" :options="modelOptions" optionLabel="name" optionValue="name" placeholder="None" showClear />
-            </div>
-            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Default Reasoning Effort</label>
-              <Select v-model="editForm.defaultReasoningEffort" :options="reasoningOptions" optionLabel="label" optionValue="value" showClear placeholder="None" />
-            </div>
-            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Worker Runtime</label>
-              <Select v-model="editForm.workerRuntime" :options="[{ label: 'Static', value: 'static' }, { label: 'Ephemeral', value: 'ephemeral' }]" optionLabel="label" optionValue="value" />
-            </div>
-            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Step Timeout (seconds)</label>
-              <InputNumber v-model="editForm.stepAllocationTimeoutSeconds" :min="10" :max="3600" />
-            </div>
-            <div class="flex flex-col gap-2"><label class="text-sm font-medium">Labels</label>
-              <InputText v-model="editLabelsInput" placeholder="Comma-separated" />
-            </div>
-          </div>
-          <div class="flex justify-end gap-2 mt-4">
-            <Button label="Cancel" severity="secondary" @click="editingWorkflow = false" />
-            <Button label="Save" icon="pi pi-check" :loading="savingEdit" @click="handleSaveEdit" />
-          </div>
-        </template>
-      </Card>
-
       <!-- Tabs -->
       <Tabs :value="activeTab" @update:value="activeTab = $event">
         <TabList>
+          <Tab value="general">General</Tab>
+          <Tab value="variables">Variables <span v-if="wfVariables.length > 0" class="ml-1 inline-flex items-center justify-center w-5 h-5 rounded-full bg-surface-700 text-surface-300 text-[10px] leading-none align-middle">{{ wfVariables.length }}</span></Tab>
           <Tab value="visual">Flows</Tab>
-          <Tab value="executions">Executions</Tab>
-          <Tab value="variables">Variables</Tab>
+          <Tab value="executions">Executions <span v-if="wfExecutions.length > 0" class="ml-1 inline-flex items-center justify-center w-5 h-5 rounded-full bg-surface-700 text-surface-300 text-[10px] leading-none align-middle">{{ wfExecutions.length }}</span></Tab>
         </TabList>
         <TabPanels>
+          <!-- General Tab — in-place form, no modal -->
+          <TabPanel value="general">
+            <div class="mt-2">
+              <Message v-if="editError" severity="error" :closable="true" class="mb-4" @close="editError = ''">{{ editError }}</Message>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Name *</label><InputText v-model="editForm.name" /></div>
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Description</label><InputText v-model="editForm.description" /></div>
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Workflow Agent</label>
+                  <Select v-model="editForm.defaultAgentId" :options="agentOptions" optionLabel="name" optionValue="id" placeholder="None" showClear />
+                  <small class="text-surface-400">The agent that will run this workflow's steps (each step can override).</small>
+                </div>
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Default Model</label>
+                  <Select v-model="editForm.defaultModel" :options="modelOptions" optionLabel="name" optionValue="name" placeholder="None" showClear />
+                </div>
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Default Reasoning Effort</label>
+                  <Select v-model="editForm.defaultReasoningEffort" :options="reasoningOptions" optionLabel="label" optionValue="value" showClear placeholder="None" />
+                </div>
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Worker Runtime</label>
+                  <Select v-model="editForm.workerRuntime" :options="[{ label: 'Static', value: 'static' }, { label: 'Ephemeral', value: 'ephemeral' }]" optionLabel="label" optionValue="value" />
+                </div>
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Step Timeout (seconds)</label>
+                  <InputNumber v-model="editForm.stepAllocationTimeoutSeconds" :min="10" :max="3600" />
+                </div>
+                <div class="flex flex-col gap-2"><label class="text-sm font-medium">Labels</label>
+                  <InputText v-model="editLabelsInput" placeholder="Comma-separated" />
+                </div>
+              </div>
+              <div class="flex items-center justify-between mt-6 pt-4 border-t border-surface-200">
+                <div class="text-xs text-surface-400">
+                  <span v-if="workflow.createdAt">Created {{ new Date(workflow.createdAt).toLocaleDateString() }}</span>
+                  <span v-if="workflow.updatedAt"> &middot; Updated {{ new Date(workflow.updatedAt).toLocaleDateString() }}</span>
+                </div>
+                <Button label="Save changes" icon="pi pi-check" :loading="savingEdit" :disabled="!generalDirty" @click="handleSaveEdit" />
+              </div>
+            </div>
+          </TabPanel>
+
           <TabPanel value="visual">
-            <Tabs :value="flowsSubTab" @update:value="flowsSubTab = $event" class="mt-2">
-              <TabList>
-                <Tab value="visual">Visual Editor</Tab>
-                <Tab value="yaml">YAML Editor</Tab>
-              </TabList>
-              <TabPanels>
-                <TabPanel value="visual">
-                  <WorkflowVisualEditor
-                    :workflow-id="wfId"
-                    class="mt-4"
-                    @saved="handleVisualEditorSaved"
-                    @triggers-changed="handleVisualEditorTriggersChanged"
-                  />
-                </TabPanel>
-                <TabPanel value="yaml">
-                  <WorkflowYamlEditor
-                    v-if="flowsSubTab === 'yaml'"
-                    :workflow-id="wfId"
-                    class="mt-4"
-                    @saved="handleVisualEditorSaved"
-                    @triggers-changed="handleVisualEditorTriggersChanged"
-                  />
-                </TabPanel>
-              </TabPanels>
-            </Tabs>
+            <div class="mt-2 flex items-center justify-end mb-2">
+              <SelectButton
+                :modelValue="flowsSubTab"
+                :options="[
+                  { label: 'Visual', value: 'visual', icon: 'pi pi-sitemap' },
+                  { label: 'YAML', value: 'yaml', icon: 'pi pi-code' },
+                ]"
+                optionLabel="label"
+                optionValue="value"
+                size="small"
+                @update:modelValue="(val) => { if (val) flowsSubTab = val }"
+              >
+                <template #option="slotProps">
+                  <i :class="slotProps.option.icon" class="text-xs mr-1"></i>
+                  <span class="text-xs">{{ slotProps.option.label }}</span>
+                </template>
+              </SelectButton>
+            </div>
+            <ProgressBar v-if="flowsSubTabLoading" mode="indeterminate" style="height: 4px" class="mb-2" />
+            <div v-if="flowsSubTabLoading" class="flex flex-col items-center justify-center gap-3 rounded-lg border border-surface-200 bg-white py-12 text-sm text-surface-400">
+              <ProgressSpinner style="width:36px;height:36px" stroke-width="4" />
+              <span>Loading {{ flowsSubTab === 'yaml' ? 'YAML editor' : 'visual editor' }}\u2026</span>
+            </div>
+            <template v-else>
+              <WorkflowVisualEditor
+                v-if="flowsSubTab === 'visual'"
+                :workflow-id="wfId"
+                @saved="handleVisualEditorSaved"
+                @triggers-changed="handleVisualEditorTriggersChanged"
+              />
+              <WorkflowYamlEditor
+                v-else
+                :workflow-id="wfId"
+                @saved="handleVisualEditorSaved"
+                @triggers-changed="handleVisualEditorTriggersChanged"
+              />
+            </template>
           </TabPanel>
 
           <!-- Executions Tab -->
@@ -291,9 +336,8 @@ const isNestedRoute = computed(() => {
   return parts.length > 3;
 });
 
-const activeTab = ref(['executions', 'variables'].includes(route.query.tab as string) ? route.query.tab as string : 'visual');
+const activeTab = ref(['general', 'executions', 'variables', 'visual'].includes(route.query.tab as string) ? route.query.tab as string : 'general');
 const flowsSubTab = ref<'visual' | 'yaml'>(route.query.flow === 'yaml' ? 'yaml' : 'visual');
-const editingWorkflow = ref(false);
 const editError = ref('');
 const savingEdit = ref(false);
 const editLabelsInput = ref('');
@@ -340,13 +384,85 @@ const modelOptions = computed(() => (modelsData.value as any)?.models ?? []);
 const webhookTrigger = computed(() => triggers.value.find((t: any) => t.triggerType === 'webhook'));
 const webhookParams = computed(() => webhookTrigger.value?.configuration?.parameters ?? []);
 
+// --- Manual Run (per-trigger) ---------------------------------------------------
+const MANUAL_RUN_ELIGIBLE_TYPES = ['webhook', 'time_schedule', 'exact_datetime', 'jira_polling'] as const;
+const eligibleManualRunTriggers = computed(() => (triggers.value as any[]).filter((t) => MANUAL_RUN_ELIGIBLE_TYPES.includes(t.triggerType) && t.isActive !== false));
+const runDialogTriggerId = ref<string | null>(null);
+const runDialogTrigger = computed(() => (triggers.value as any[]).find((t) => t.id === runDialogTriggerId.value) || null);
+const webhookParamsForDialog = computed(() => {
+  const t = runDialogTrigger.value;
+  if (!t || t.triggerType !== 'webhook') return [];
+  return Array.isArray(t.configuration?.parameters) ? t.configuration.parameters : [];
+});
+const runInputsJsonText = ref('');
+const runInputsJsonError = ref<string | null>(null);
+watch(runInputsJsonText, (v) => {
+  if (!v.trim()) { runInputsJsonError.value = null; return; }
+  try { JSON.parse(v); runInputsJsonError.value = null; } catch (e: any) { runInputsJsonError.value = e?.message || 'Invalid JSON'; }
+});
+function formatTriggerTypeLabel(type?: string) {
+  const map: Record<string, string> = { time_schedule: 'Schedule', exact_datetime: 'Exact Time', webhook: 'Webhook', event: 'System Event', jira_changes_notification: 'Jira Notify', jira_polling: 'Jira Poll', manual: 'Manual' };
+  return map[type || ''] || (type || 'Unknown');
+}
+function triggerShortLabel(t: any) {
+  if (!t) return '';
+  if (t.triggerType === 'webhook') {
+    const p = (t.configuration?.path || '').toString();
+    if (!p) return 'webhook';
+    return p.startsWith('/') ? p : `/${p}`;
+  }
+  if (t.triggerType === 'time_schedule') return t.configuration?.cron || 'schedule';
+  if (t.triggerType === 'exact_datetime') return t.configuration?.datetime || 'one-time';
+  if (t.triggerType === 'jira_polling') return t.configuration?.jql || 'jira poll';
+  return formatTriggerTypeLabel(t.triggerType);
+}
+const manualRunMenuItems = computed(() => eligibleManualRunTriggers.value.map((t: any) => ({
+  label: `${formatTriggerTypeLabel(t.triggerType)} — ${triggerShortLabel(t)}`,
+  icon: 'pi pi-play',
+  command: () => openRunDialog(t),
+})));
+const primaryRunLabel = computed(() => {
+  const t = eligibleManualRunTriggers.value[0];
+  if (!t) return 'Manual Run';
+  return `Run — ${formatTriggerTypeLabel(t.triggerType)}`;
+});
+const runDialogHeader = computed(() => runDialogTrigger.value
+  ? `Run via ${formatTriggerTypeLabel(runDialogTrigger.value.triggerType)}`
+  : 'Manual Run');
+const runDialogHelp = computed(() => {
+  const t = runDialogTrigger.value;
+  if (!t) return '';
+  if (t.triggerType === 'webhook') return 'Provide values for the webhook’s declared parameters. They become available as {{ inputs.* }} in the workflow.';
+  if (t.triggerType === 'time_schedule') return 'Bypasses the cron schedule and runs the workflow immediately as if the schedule had fired.';
+  if (t.triggerType === 'exact_datetime') return 'Runs the workflow now using this trigger’s entry node.';
+  if (t.triggerType === 'jira_polling') return 'Manually invoke the workflow as if a Jira poll had detected new issues. The optional inputs JSON is forwarded as the trigger envelope.';
+  return '';
+});
+
+function openRunDialog(trigger: any) {
+  if (!trigger) return;
+  runDialogTriggerId.value = trigger.id;
+  triggerResult.value = null;
+  // Reset inputs
+  for (const k of Object.keys(runInputs)) delete runInputs[k];
+  runInputsJsonText.value = '';
+  runInputsJsonError.value = null;
+  showRunDialog.value = true;
+}
+
 watch(activeTab, (tab) => {
   router.replace({ query: { ...route.query, tab } });
 });
 
 watch(flowsSubTab, (flow) => {
   router.replace({ query: { ...route.query, flow } });
+  // Brief loading splash so the user has visual feedback while the chosen
+  // editor remounts and (re)fetches its graph payload from the API.
+  flowsSubTabLoading.value = true;
+  setTimeout(() => { flowsSubTabLoading.value = false; }, 350);
 });
+
+const flowsSubTabLoading = ref(false);
 
 async function handleVisualEditorSaved() {
   await Promise.all([refreshWf(), refreshWorkflowVersions()]);
@@ -376,7 +492,19 @@ watch(workflow, (w) => {
   }
 }, { immediate: true });
 
-function startEdit() { editingWorkflow.value = true; }
+const generalDirty = computed(() => {
+  const w = workflow.value;
+  if (!w) return false;
+  if ((editForm.name || '') !== (w.name || '')) return true;
+  if ((editForm.description || '') !== (w.description || '')) return true;
+  if ((editForm.defaultAgentId ?? null) !== (w.defaultAgentId ?? null)) return true;
+  if ((editForm.defaultModel ?? null) !== (w.defaultModel ?? null)) return true;
+  if ((editForm.defaultReasoningEffort ?? null) !== (w.defaultReasoningEffort ?? null)) return true;
+  if ((editForm.workerRuntime || 'static') !== (w.workerRuntime || 'static')) return true;
+  if ((editForm.stepAllocationTimeoutSeconds || 300) !== (w.stepAllocationTimeoutSeconds || 300)) return true;
+  if (editLabelsInput.value !== (w.labels || []).join(', ')) return true;
+  return false;
+});
 
 async function handleSaveEdit() {
   editError.value = '';
@@ -385,7 +513,6 @@ async function handleSaveEdit() {
     const labels = editLabelsInput.value.split(',').map(s => s.trim()).filter(Boolean);
     await $fetch(`/api/workflows/${wfId.value}`, { method: 'PUT', headers, body: { ...editForm, labels } });
     toast.add({ severity: 'success', summary: 'Saved', detail: 'Workflow updated', life: 3000 });
-    editingWorkflow.value = false;
     await Promise.all([refreshWf(), refreshWorkflowVersions()]);
   } catch (e: any) {
     editError.value = e?.data?.error || 'Failed to save.';
@@ -414,12 +541,22 @@ function confirmDeleteWorkflow() {
 
 // Manual run
 async function handleManualRun() {
+  const trigger = runDialogTrigger.value;
+  if (!trigger) return;
   triggering.value = true;
   try {
-    const res = await $fetch<any>(`/api/workflows/${wfId.value}/run`, { method: 'POST', headers, body: { inputs: { ...runInputs } } });
+    let body: { inputs: Record<string, unknown> };
+    if (trigger.triggerType === 'webhook') {
+      body = { inputs: { ...runInputs } };
+    } else if (runInputsJsonText.value.trim()) {
+      body = { inputs: JSON.parse(runInputsJsonText.value) };
+    } else {
+      body = { inputs: {} };
+    }
+    const res = await $fetch<any>(`/api/triggers/${trigger.id}/run`, { method: 'POST', headers, body });
     triggerResult.value = res;
     showRunDialog.value = false;
-    toast.add({ severity: 'success', summary: 'Run started', life: 3000 });
+    toast.add({ severity: 'success', summary: 'Run started', detail: `Trigger: ${formatTriggerTypeLabel(trigger.triggerType)}`, life: 3000 });
     setTimeout(() => refreshExecs(), 2000);
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e?.data?.error || 'Failed', life: 5000 });

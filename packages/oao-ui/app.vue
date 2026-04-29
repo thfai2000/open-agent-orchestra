@@ -15,6 +15,10 @@
           <span class="text-xl font-bold text-primary">OAO</span>
           <span class="text-xs text-surface-400 hidden sm:inline">Open Agent Orchestra</span>
         </NuxtLink>
+        <span
+          class="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wide bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-sm ring-1 ring-indigo-400/40"
+          :title="`OAO version ${appVersion}`"
+        >v{{ appVersion }}</span>
       </div>
       <div class="flex items-center gap-3">
         <template v-if="isAuthenticated">
@@ -83,7 +87,6 @@
         </nav>
         <div class="border-t border-surface-200 px-4 py-3 text-xs text-surface-400">
           <div class="font-medium text-surface-500">Open Agent Orchestra</div>
-          <div>v{{ appVersion }}</div>
         </div>
       </aside>
 
@@ -105,7 +108,9 @@ const router = useRouter();
 const sidebarOpen = ref(false);
 const userMenu = ref();
 
-const ws = computed(() => user.value?.workspaceSlug || (route.params.workspace as string) || 'default');
+// Navigation/menu links must reflect the workspace currently being browsed (route param),
+// not the user's home workspace. Falling back to the user's slug only when no route param is present.
+const ws = computed(() => (route.params.workspace as string) || user.value?.workspaceSlug || 'default');
 const isAdmin = computed(() => user.value?.role === 'workspace_admin' || user.value?.role === 'super_admin');
 const appVersion = computed(() => runtimeConfig.public.appVersion || '0.0.0');
 

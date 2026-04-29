@@ -2,39 +2,34 @@
 
 A **workflow** is an automation graph made of trigger blocks, agent-step blocks, and optional procedural blocks. Agent steps execute as separate Copilot sessions and can pass output to downstream blocks.
 
-The workflow detail page uses three tabs: **Flows** for authoring (with Visual Editor and YAML Editor sub-tabs), **Executions** for run history, and **Variables**. The legacy block-step list has been replaced by the Visual Editor; existing sequential steps are shown as connected `agent_step` blocks so prompts and step overrides remain editable without switching modes.
+The workflow detail page uses three tabs: **Flows** for authoring (with Visual Editor and YAML Editor sub-tabs), **Executions** for run history, and **Variables**. Linear workflows are represented as connected `agent_step` blocks, so prompts and step overrides remain editable in the same graph surface as branching and procedural blocks.
 
 ## Flow Editing
 
 Inside the **Flows** tab there are two complementary views over the same underlying graph:
 
 - **Visual Editor** — drag-and-drop SVG canvas. Mouse-wheel zoom is anchored at the cursor (so the element under the pointer stays put). The toolbar also exposes a **Center** button next to **Reset** to fit and centre all blocks within the viewport.
-- **YAML Editor** — the same workflow rendered as YAML (`blocks`, `edges`, `triggers`, `executionMode`). Edits are validated and saved back through the same `/api/workflow-graph/:id/graph` endpoint, so the two views are always in sync.
+- **YAML Editor** — the same workflow rendered as YAML (`blocks`, `edges`, `triggers`). Edits are validated and saved back through the same `/api/workflow-graph/:id/graph` endpoint, so the two views are always in sync.
 
 Example YAML:
 
 ```yaml
-executionMode: graph
 blocks:
-  - key: start
-    type: start
-    name: Start
-    position: { x: 40, y: 200 }
   - key: a
     type: agent_step
     name: A
     position: { x: 320, y: 200 }
     config: { promptTemplate: "Process {{ inputs.payload }}" }
-edges:
-  - { from: start, to: a }
+edges: []
 triggers:
   - id: 7e3d…
     type: manual
     active: true
+    entryNodeKey: a
     configuration: {}
 ```
 
-Fan-out (one block → multiple downstream blocks) executes children in parallel; fan-in (multiple parents → one child) waits for **all** upstream blocks to complete before running, when `executionMode` is `graph`.
+Fan-out (one block → multiple downstream blocks) executes children in parallel; fan-in (multiple parents → one child) waits for **all** upstream blocks to complete before running.
 
 ## Workflow Structure
 
@@ -78,11 +73,11 @@ Trigger create, update, and delete operations also increment the workflow versio
 
 ## Visual Editor
 
-The **Visual Editor** tab is the primary workflow authoring surface. It represents every existing sequential workflow step as an `agent_step` block and lets users add, delete, position, and connect blocks directly on the canvas.
+The **Visual Editor** tab is the primary workflow authoring surface. It represents every `agent_step` projection as a graph block and lets users add, delete, position, and connect blocks directly on the canvas.
 
 Clicking an agent-step block expands the inspector and exposes the same controls that used to live in the block-step editor: **Prompt Template**, agent override, model override, reasoning effort, worker runtime, timeout, and position. Clicking empty canvas space collapses the inspector. Drag empty canvas space to pan around large workflows.
 
-Saved workflow triggers appear on the canvas as trigger elements connected to the first agent step, making the execution entry path visible. Trigger creation, editing, deletion, and connectivity tests now live inside the Visual Editor inspector rather than in a separate trigger tab.
+Workflow triggers appear on the canvas as first-class trigger blocks. One trigger equals one visible block, and each block can point at its own entry node. Dragging from the trigger palette places a new trigger block on the canvas; selecting that block opens only that trigger's settings in the Inspector. The Visual Editor does not use a grouped trigger tab or combined trigger list for canvas triggers.
 
 Saving a graph switches the workflow to graph mode and synchronizes all `agent_step` blocks back into `workflow_steps` for version history and classic step-list compatibility. Procedural blocks such as HTTP requests, scripts, conditionals, parallel markers, and joins are stored only in the graph tables.
 
@@ -228,7 +223,7 @@ Triggers define **when** a workflow executes. Workflows can also be run manually
 | **Jira Changes Notification** | Register an Atlassian dynamic webhook filtered by JQL | Jira site URL + OAuth 2.0 credential references + JQL + Jira event list |
 | **Jira Polling** | Poll Jira search results on an interval with overlap-window dedupe | Jira site URL + API token or OAuth 2.0 credential references + JQL + interval |
 
-The workflow create and detail pages now use a **trigger catalog** plus an inline editor, so new trigger types can be added without changing the page layout. On the workflow detail page, the catalog opens from the right edge of the trigger tab, while editing an existing trigger converts that specific trigger card into the edit form instead of opening a second detached form.
+The workflow create page uses a **trigger catalog** plus an inline editor, so new trigger types can be added without changing the page layout. On the workflow detail page, trigger authoring happens in the Visual Editor: drag a trigger type onto the canvas, select that one trigger block, and configure its settings in the Inspector.
 
 Existing trigger cards also surface sanitized runtime summaries such as Jira registration state, webhook expiration, last sync time, or the last successful polling time.
 
@@ -240,11 +235,30 @@ Triggers can be **edited in place**. Use `PUT /api/triggers/:id` (or the inline 
 
 ### Manual Run
 
-The **Manual Run** button in the UI allows authenticated users to trigger a workflow directly. It is available when the workflow has at least one active **webhook trigger**.
+Manual Run is **per-trigger** in OAO. The workflow detail page shows a split
+button listing every eligible trigger; admins and creators can run any of them
+on demand. Each trigger uses its own `entryNodeKey`, so the same workflow can
+be entered from different points depending on which trigger fired.
 
-When clicked, the UI shows input fields based on the webhook trigger's **parameter definitions**. Required parameters must be filled in before the run starts. The inputs are available in prompt templates as <span v-pre>`{{ inputs.PARAM_NAME }}`</span>.
+Eligible trigger types (`supportsManualRun: true` in the trigger catalog):
 
-Manual Run calls `POST /api/workflows/:id/run`, which inserts a `webhook.received` event into the event system. The Controller picks it up in the next poll cycle and enqueues the execution.
+- **`webhook`** — UI prompts for the trigger's declared parameters; required
+  parameters must be filled in. Inputs are exposed as
+  <span v-pre>`{{ inputs.PARAM_NAME }}`</span> in prompt templates.
+- **`time_schedule`** — Bypasses the cron schedule and runs immediately.
+- **`exact_datetime`** — Runs the one-time trigger now without waiting for the
+  configured datetime.
+- **`jira_polling`** — Manually invoke the workflow as if a Jira poll had
+  detected new issues. An optional free-form JSON `inputs` object is passed
+  through as the trigger envelope.
+
+Other trigger types (`event`, `jira_changes_notification`, `manual`) are not
+manually runnable — they are activated only by their underlying signal source.
+
+Manual Run calls `POST /api/triggers/:id/run`, which validates the inputs
+(when applicable) and enqueues a workflow execution attributed to the chosen
+trigger. There is no workflow-level run endpoint in v4; callers must select the
+trigger they intend to fire.
 
 Deleting a workflow removes its live trigger configuration and execution records while preserving trigger metadata already snapshotted onto execution rows. Trigger deletion clears execution `triggerId` references transactionally so recently accepted manual or webhook runs do not block cleanup.
 

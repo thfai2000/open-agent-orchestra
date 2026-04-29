@@ -156,8 +156,8 @@ async function updateWorkflow(request: APIRequestContext, authToken: string, wor
   expect(response.status()).toBe(200);
 }
 
-async function triggerManualRun(request: APIRequestContext, authToken: string, workflowId: string, ticketId: string) {
-  const response = await request.post(`/api/workflows/${workflowId}/run`, {
+async function triggerManualRun(request: APIRequestContext, authToken: string, triggerId: string, ticketId: string) {
+  const response = await request.post(`/api/triggers/${triggerId}/run`, {
     headers: {
       Authorization: `Bearer ${authToken}`,
     },
@@ -232,7 +232,7 @@ test('execution history and version pages show persisted snapshots and linked hi
     defaultAgentId: agent.id,
   });
 
-  await triggerManualRun(request, authToken, workflow.id, 'INC-4242');
+  await triggerManualRun(request, authToken, workflow.triggerId, 'INC-4242');
   const executionId = await waitForExecution(request, authToken, workflow.id);
 
   await page.goto('/default/executions');
@@ -252,17 +252,15 @@ test('execution history and version pages show persisted snapshots and linked hi
   await page.goto(`/default/workflows/${workflow.id}/v/2`);
   await expect(page).toHaveURL(new RegExp(`/default/workflows/${workflow.id}/v/2$`));
   await expect(page.getByRole('heading', { name: updatedWorkflowName, exact: true })).toBeVisible();
-  await expect(page.getByText(updatedWorkflowDescription, { exact: true })).toBeVisible();
+  await expect(page.locator('p').filter({ hasText: updatedWorkflowDescription }).first()).toBeVisible();
   await expect(page.getByText(/Historical workflow versions are read-only/i)).toBeVisible();
-
-  let visiblePanel = await openTab(page, /Triggers/i);
-  await expect(visiblePanel).toContainText(workflow.webhookPath);
-  await expect(visiblePanel).toContainText('Yes');
+  await expect(page.getByText('Active at snapshot')).toBeVisible();
+  await expect(page.getByText('Yes', { exact: true })).toBeVisible();
 
   await page.getByLabel(/Previous version/i).click();
   await expect(page).toHaveURL(new RegExp(`/default/workflows/${workflow.id}/v/1$`));
   await expect(page.getByRole('heading', { name: workflow.name, exact: true })).toBeVisible();
-  await expect(page.getByText('Playwright workflow for execution history coverage', { exact: true })).toBeVisible();
+  await expect(page.locator('p').filter({ hasText: 'Playwright workflow for execution history coverage' }).first()).toBeVisible();
   await page.getByRole('button', { name: /Latest/i }).click();
   await expect(page).toHaveURL(new RegExp(`/default/workflows/${workflow.id}$`));
 
@@ -271,7 +269,7 @@ test('execution history and version pages show persisted snapshots and linked hi
   await expect(page.getByText(updatedAgentDescription, { exact: true })).toBeVisible();
   await expect(page.getByText(/Historical agent versions are read-only/i)).toBeVisible();
 
-  visiblePanel = await openTab(page, /Files/i);
+  let visiblePanel = await openTab(page, /Files/i);
   await expect(visiblePanel).toContainText('agent.md');
 
   await page.getByLabel(/Previous version/i).click();

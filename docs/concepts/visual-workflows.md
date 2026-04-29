@@ -1,13 +1,8 @@
-# Visual Workflows (Graph Mode)
+# Visual Workflows
 
-OAO supports two complementary workflow execution modes:
+OAO workflows are graph workflows. The Visual Editor is the primary authoring surface for both simple linear agent pipelines and richer automations with branching, procedural blocks, and multiple trigger entry points.
 
-| Mode | Best for | Defined as |
-|---|---|---|
-| **Sequential** (default) | Linear, agent-only pipelines | Ordered list of `workflow_steps` |
-| **Graph** (opt-in) | Parallel, conditional, mixed agent + procedural | Nodes + edges in a DAG, with agent-step nodes synced back to `workflow_steps` |
-
-Graph mode is **additive** at the runtime layer. Existing sequential workflows continue to execute unchanged until a graph is saved, and the Visual Editor loads their existing `workflow_steps` as connected `agent_step` blocks. In the UI, the Visual Editor is now the single authoring surface for workflow steps and graph blocks.
+The `workflow_steps` table still exists as the ordered projection of `agent_step` nodes for snapshots, version history, and execution details; it is not a separate runtime mode.
 
 ---
 
@@ -28,8 +23,6 @@ Graph workflows give you all of this in one place.
 
 | Type | Purpose | Required `config` keys |
 |---|---|---|
-| `start` | Entry point. Exactly one per graph. | – |
-| `end` | Terminal node. | – |
 | `agent_step` | Run an AI agent step (Copilot session, MCP tools, prompt template). | `promptTemplate`, optional `agentId`, `model`, `reasoningEffort` |
 | `http_request` | Call an external HTTP API. | `url`, optional `method`, `headers`, `body`, `query`, `jsonPath`, `timeoutMs` |
 | `script` | Run a sandboxed JavaScript snippet (Node `vm` — no `process`/`require`). | `source`, optional `timeoutMs` (max 30s) |
@@ -37,7 +30,23 @@ Graph workflows give you all of this in one place.
 | `parallel` | Pass-through fan-out marker. | – |
 | `join` | Wait for multiple parents (strategy: `all` by default). | optional `strategy` |
 
-The **Start** node emits the runtime trigger envelope. Downstream nodes receive an object with `inputs`, `trigger`, `payload`, and `eventData`, so manual-run inputs and webhook payloads are available immediately to the first connected block.
+The entry node receives the runtime trigger envelope. Downstream nodes receive an object with `inputs`, `trigger`, `payload`, and `eventData`, so manual-run inputs and webhook payloads are available immediately to the first connected block.
+
+### Per-Trigger Entry Points
+
+Each trigger now has its own **block on the canvas** and points at a single **entry node**. This lets multiple triggers fan into different parts of the same workflow:
+
+```
+[Trigger T1] ──► [Step A] ──► [Step B] ──► [Step C]
+                                   ▲
+[Trigger T2] ──────────────────────┘
+```
+
+- Drag a trigger from the left palette onto the canvas to place a new trigger block at that position. Configure that selected block in the Inspector, then choose **Save This Trigger** to create only that trigger record. Multiple trigger blocks can be placed and configured independently; saving one draft removes only that selected draft, and the other unsaved trigger drafts stay on the canvas until they are saved or cancelled.
+- Selecting a trigger block opens that trigger's settings directly in the Inspector. The Inspector must not group triggers into a combined trigger tab, list, or collection editor.
+- Drag from a trigger's right-edge port to any node to set that node as the trigger's entry point. The connection is rendered as a dashed orange arrow.
+- A trigger with no explicit entry node falls back to the first root block by canvas position and node key.
+- Trigger position (`positionX`, `positionY`) and `entryNodeKey` are persisted on the `triggers` table, not in `workflow_edges`.
 
 ### Edges
 
@@ -64,6 +73,20 @@ Each edge has `fromNodeKey`, `toNodeKey`, and an optional `branchKey` + `label`.
 ```
 
 The output of `http_request` is `{ status, ok, headers, body }` (or just the extracted value when `jsonPath` is set).
+
+In the Visual Editor Inspector, `headers` and `body` are edited as YAML. Headers should be a YAML object with one HTTP header per line:
+
+```yaml
+Authorization: Bearer {{ credentials.API_TOKEN }}
+Content-Type: application/json
+```
+
+The body can be a YAML object, array, or plain string. Objects and arrays are sent as JSON after templates are rendered:
+
+```yaml
+ticketId: {{ inputs.ticketId }}
+message: Hello from OAO
+```
 
 The configuration is rendered with **Jinja2** before execution, so workflow-scoped credentials and properties are available as <span v-pre>`{{ credentials.X }}`</span> / <span v-pre>`{{ properties.X }}`</span>. Credentials are decrypted only inside the executor — they never leave the controller pod.
 
@@ -123,19 +146,20 @@ Open a workflow detail page and use the **Visual Editor** tab. The workflow page
 
 The editor offers:
 
-- **SVG canvas** — drag nodes to position them. Drag empty canvas space to pan around large workflows. Existing sequential steps are loaded as `agent_step` blocks in order: `Start -> Step 1 -> Step 2 -> End`.
+- **SVG canvas** — drag nodes to position them. Drag empty canvas space to pan around large workflows. Workflows are persisted as graph blocks; the `workflow_steps` table is maintained as the ordered `agent_step` projection for history and execution details.
 - **Auto expanding inspector** — click a block or trigger to expand the inspector; click empty canvas space to collapse it. The inspector can also be expanded or collapsed from the toolbar.
-- **Agent-step inspector** — click an agent-step block to edit the same attributes that used to be available in the block-step editor: name, prompt template, agent override, model override, reasoning effort, worker runtime, timeout, and position.
-- **Procedural-node inspector** — click HTTP/script/conditional/join blocks to edit their JSON config. Hints are shown for each node type.
-- **Trigger elements** — saved workflow triggers render as visual trigger blocks connected to the first agent step. Trigger creation, editing, deletion, and connectivity tests live inside the Visual Editor inspector.
+- **Block summaries** — every block shows its most important setting on the canvas, such as prompt/model for agent steps, method + URL for HTTP requests, expression for conditionals, branch count for parallel blocks, and strategy for joins.
+- **Agent-step inspector** — click an agent-step block to edit the same attributes that used to be available in the block-step editor: name, prompt template, agent override, model override, reasoning effort, worker runtime, timeout, and position. Prompt templates use compact monospace text so long prompts remain readable in the Inspector.
+- **Procedural-node inspector** — click HTTP/script/conditional/join blocks to edit their config. HTTP headers and body use focused YAML textareas; parallel blocks have no config and show their outgoing branch count; join blocks support the `all` and `any` strategies.
+- **Trigger blocks** — saved triggers and new trigger drafts render as visual trigger blocks with their key setting on the block, such as schedule cron, exact date/time, webhook path, event name, or Jira JQL/interval. A trigger can optionally name an `entryNodeKey`; otherwise execution starts from the first root block by canvas position and key. Creation, editing, deletion, and connectivity tests are contextual to the selected trigger block in the Inspector, and unsaved draft trigger blocks are preserved until they are saved or cancelled.
 - **Edge list** — quickly add or remove edges and assign `branchKey` for conditional routing.
 - **Workflow variables** — add property / credential / short_memory entries that the running workflow can use.
 
-Saving the graph **automatically flips the workflow's `executionMode` to `graph`**. Every saved `agent_step` node is also synchronized back into `workflow_steps`, preserving the prompt template and step-level overrides for version history, snapshots, and the classic step list. Procedural nodes and edges remain graph-only.
+Saving the graph persists the new node + edge layout. Every saved `agent_step` node is also synchronized back into `workflow_steps`, preserving the prompt template and step-level overrides for version history, snapshots, and the classic step list. Procedural nodes and edges remain graph-only.
 
 At runtime, each `agent_step` node is linked to its synced `workflow_steps` / `step_executions` row. That keeps prompt resolution, reasoning traces, live tool output, and `ask_questions` approvals available from the execution graph detail panel.
 
-If a graph already exists but you want to realign it with the classic ordered steps, use **Rebuild From Steps** in the Visual Editor. This replaces the canvas with the current `workflow_steps` chain before you save.
+If you want to realign the canvas with the ordered `workflow_steps` projection, use **Rebuild From Steps** in the Visual Editor. This replaces the canvas with the current agent-step chain before you save.
 
 ---
 
@@ -143,8 +167,8 @@ If a graph already exists but you want to realign it with the classic ordered st
 
 | Method & Path | Purpose |
 |---|---|
-| `GET  /api/workflow-graph/:workflowId/graph` | Fetch nodes + edges + executionMode, plus current `steps` and serialized `triggers`. When no saved graph exists, returns a synthetic graph built from existing sequential steps. |
-| `PUT  /api/workflow-graph/:workflowId/graph` | Replace nodes + edges atomically, flip to graph mode, and sync `agent_step` nodes back to `workflow_steps`. Validates exactly 1 start node, edge endpoints, and prompt templates on agent-step nodes. |
+| `GET  /api/workflow-graph/:workflowId/graph` | Fetch persisted nodes + edges, plus current `steps` projection and serialized `triggers`. |
+| `PUT  /api/workflow-graph/:workflowId/graph` | Replace nodes + edges atomically and sync `agent_step` nodes back to `workflow_steps`. Validates node types, edge endpoints, and prompt templates on agent-step nodes. |
 | `GET  /api/workflow-graph/:workflowId/variables` | List workflow-scoped variables (credential values redacted) |
 | `PUT  /api/workflow-graph/:workflowId/variables` | Upsert a variable (`{ key, value, type, description? }`) |
 | `DELETE /api/workflow-graph/:workflowId/variables/:key` | Delete a variable |

@@ -1,10 +1,6 @@
 import { Worker } from 'bullmq';
-import { eq } from 'drizzle-orm';
 import { createLogger } from '@oao/shared';
-import { executeWorkflow } from '../services/workflow-engine.js';
 import { executeGraphWorkflow } from '../services/workflow-graph-engine.js';
-import { db } from '../database/index.js';
-import { workflowExecutions, workflows } from '../database/schema.js';
 import { getRedisConnectionOpts } from '../services/redis.js';
 
 const logger = createLogger('workflow-worker');
@@ -22,33 +18,14 @@ export function startWorker(): Worker {
   worker = new Worker(
     'workflow-execution',
     async (job) => {
-      const { executionId, workflowId, agentId, startFromStep } = job.data;
-      const stepIndex = typeof startFromStep === 'number' && Number.isInteger(startFromStep) && startFromStep >= 0
-        ? startFromStep
-        : 0;
+      const { executionId, workflowId, agentId } = job.data;
       logger.info(
-        { executionId, workflowId, agentId, startFromStep: stepIndex, jobId: job.id },
+        { executionId, workflowId, agentId, jobId: job.id },
         'Processing workflow execution',
       );
 
-      // Resolve execution mode (sequential vs graph) by reading the
-      // workflow row referenced by this execution. Graph workflows ignore
-      // startFromStep; partial resume is sequential-only for now.
-      const execution = workflowId
-        ? null
-        : await db.query.workflowExecutions.findFirst({ where: eq(workflowExecutions.id, executionId) });
-      const wfId = workflowId ?? execution?.workflowId;
-      let mode: 'sequential' | 'graph' = 'sequential';
-      if (wfId) {
-        const wf = await db.query.workflows.findFirst({ where: eq(workflows.id, wfId) });
-        if (wf?.executionMode === 'graph') mode = 'graph';
-      }
-
-      if (mode === 'graph') {
-        await executeGraphWorkflow(executionId);
-      } else {
-        await executeWorkflow(executionId, stepIndex);
-      }
+      // Graph mode is the only execution mode as of v4.0.0.
+      await executeGraphWorkflow(executionId);
     },
     {
       connection: getRedisConnectionOpts(),

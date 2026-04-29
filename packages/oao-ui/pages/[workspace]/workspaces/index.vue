@@ -98,7 +98,12 @@ const { data: wsData, refresh } = await useFetch('/api/workspaces', { headers })
 const workspaces = computed(() => (wsData.value as any)?.workspaces ?? []);
 
 function navigateToWorkspace(slug: string) {
-  router.push(`/${slug}`);
+  // Open the selected workspace in a new browser tab so the current management view stays open.
+  if (typeof window !== 'undefined') {
+    window.open(`/${slug}`, '_blank', 'noopener');
+  } else {
+    router.push(`/${slug}`);
+  }
 }
 
 async function handleCreate() {

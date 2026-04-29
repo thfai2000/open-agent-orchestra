@@ -44,6 +44,9 @@ export const platformWorkflowTriggerSchema = z.object({
   triggerType: z.enum(creatableTriggerTypes),
   configuration: z.record(z.string(), z.unknown()).default({}),
   isActive: z.boolean().optional(),
+  entryNodeKey: z.string().min(1).max(100).nullable().optional(),
+  positionX: z.number().int().optional(),
+  positionY: z.number().int().optional(),
 });
 
 export const platformCreateWorkflowBodySchema = z.object({
@@ -72,20 +75,12 @@ export const platformUpdateWorkflowBodySchema = z.object({
   stepAllocationTimeoutSeconds: z.number().int().min(15).max(3600).optional(),
 });
 
-export const platformReplaceWorkflowStepsBodySchema = z.object({
-  steps: z.array(platformWorkflowStepSchema).min(1).max(20),
-});
-
 export const platformUpdateWorkflowInputSchema = platformUpdateWorkflowBodySchema.extend({
   id: z.string().uuid(),
 });
 
-export const platformReplaceWorkflowStepsInputSchema = platformReplaceWorkflowStepsBodySchema.extend({
-  id: z.string().uuid(),
-});
-
-export const platformRunWorkflowInputSchema = z.object({
-  id: z.string().uuid(),
+export const platformRunTriggerInputSchema = z.object({
+  triggerId: z.string().uuid(),
   inputs: z.record(z.string(), z.unknown()).default({}),
 });
 

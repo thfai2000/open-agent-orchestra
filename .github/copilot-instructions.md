@@ -119,6 +119,7 @@ build-and-deploy-doc.sh  # Build & deploy VitePress docs to GitHub Pages
 - **Compact metadata** — Avoid using Card components for simple metadata display. Use inline `flex-wrap` layout with `text-surface-400` labels instead (e.g. "Started: ...", "Duration: ...").
 - **Status indicator balls** — Use colored circles to indicate entity status: blinking green (`animate-pulse bg-green-500`) for running, blinking yellow for pending, solid red for failed, solid green for completed, solid gray for cancelled.
 - **Version control** — Both agents and workflows have auto-incrementing `version` columns. Show version as `Tag` badge (e.g. "v3"). Executions snapshot both workflow (on trigger) and agent (on step execution) for immutable audit trail.
+- **Visual workflow trigger blocks** — In the Visual Editor, each trigger is a first-class canvas block. One trigger record or draft equals one visible draggable block. Do not group triggers into a combined Inspector tab/list; selecting a trigger block opens that trigger's settings directly in the Inspector.
 
 ## Copilot SDK (`@github/copilot-sdk`)
 - **Package**: `npm install @github/copilot-sdk`

@@ -54,7 +54,7 @@ test('admin can create/edit an agent, use it in a conversation, create/edit/dele
   }
 
   await expect(page).toHaveURL(/\/default\/agents$/);
-  const createdAgentLink = page.getByRole('link', { name: agentName, exact: true });
+  const createdAgentLink = page.locator(`a[href="/default/agents/${createdAgentId}"]`).first();
   await expect(createdAgentLink).toBeVisible();
   await createdAgentLink.click();
   await expect(page).toHaveURL(new RegExp(`/default/agents/${createdAgentId}$`));
@@ -143,17 +143,16 @@ test('admin can create/edit an agent, use it in a conversation, create/edit/dele
   expect(createdWorkflowId).toBeTruthy();
 
   await expect(page).toHaveURL(/\/default\/workflows$/);
-  const createdWorkflowLink = page.getByRole('link', { name: workflowName, exact: true });
+  const createdWorkflowLink = page.locator(`a[href="/default/workflows/${createdWorkflowId}"]`).first();
   await expect(createdWorkflowLink).toBeVisible();
   await createdWorkflowLink.click();
   await expect(page).toHaveURL(new RegExp(`/default/workflows/${createdWorkflowId}$`));
 
-  await page.getByRole('button', { name: /^Edit$/ }).click();
   await fillField(page, 'Name', updatedWorkflowName);
-  await page.getByRole('button', { name: /^Save$/ }).click();
+  await page.getByRole('button', { name: /Save changes/i }).click();
   await expect(page.getByRole('heading', { name: updatedWorkflowName, exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: /Manual Run/i }).click();
+  await page.getByRole('button', { name: /Run — Webhook/i }).click();
   await page.getByRole('button', { name: /Start Run/i }).click();
   await expect(page.getByText(/Workflow run accepted!/i)).toBeVisible();
   await dismissVisibleToasts(page);
@@ -166,7 +165,7 @@ test('admin can create/edit an agent, use it in a conversation, create/edit/dele
   await page.goto('/default/agents');
   await expect(page).toHaveURL(/\/default\/agents$/);
   await expect(page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible();
-  const updatedAgentLink = page.getByRole('link', { name: updatedAgentName, exact: true });
+  const updatedAgentLink = page.locator(`a[href="/default/agents/${createdAgentId}"]`).first();
   await expect(updatedAgentLink).toBeVisible();
   await updatedAgentLink.click();
   await expect(page).toHaveURL(new RegExp(`/default/agents/${createdAgentId}$`));

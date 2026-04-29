@@ -3,9 +3,10 @@
  *
  * Mocks the database layer and Copilot SDK so the topology / dispatch
  * logic runs in isolation. Tests cover:
- *   - sequential graph (start → http → script → end)
- *   - parallel fan-out + join (start → A & B → join → end)
- *   - conditional branching (start → cond → A or B → end)
+ *   - linear graph execution
+ *   - parallel fan-out + join
+ *   - conditional branching
+ *   - trigger entry overrides and workflow snapshots
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -53,7 +54,6 @@ const hoisted = vi.hoisted(() => {
       id: string;
       workspaceId: string;
       userId: string;
-      executionMode: string;
       defaultAgentId: string | null;
       defaultModel: string | null;
       defaultReasoningEffort: string | null;
@@ -69,6 +69,7 @@ const hoisted = vi.hoisted(() => {
       totalSteps: number | null;
       currentStep: number;
       error: string | null;
+      workflowSnapshot?: Record<string, unknown> | null;
     };
     nodes: FakeNode[];
     edges: FakeEdge[];
@@ -81,7 +82,6 @@ const hoisted = vi.hoisted(() => {
       id: 'wf-1',
       workspaceId: 'ws-1',
       userId: 'user-1',
-      executionMode: 'graph',
       defaultAgentId: null,
       defaultModel: null,
       defaultReasoningEffort: null,
@@ -97,6 +97,7 @@ const hoisted = vi.hoisted(() => {
       totalSteps: null,
       currentStep: 0,
       error: null,
+      workflowSnapshot: null,
     },
     nodes: [],
     edges: [],
@@ -141,7 +142,7 @@ const hoisted = vi.hoisted(() => {
   };
   return { state, mockDb };
 });
-const { state } = hoisted;
+const { state, mockDb } = hoisted;
 
 // ─── Mock realtime bus ──────────────────────────────────────────────
 vi.mock('../src/services/realtime-bus.js', () => ({
@@ -216,6 +217,7 @@ beforeEach(() => {
     totalSteps: null,
     currentStep: 0,
     error: null,
+    workflowSnapshot: null,
   };
   state.nodeExecutions = [];
   state.nodes = [];
@@ -228,9 +230,8 @@ beforeEach(() => {
 });
 
 describe('executeGraphWorkflow', () => {
-  it('runs a simple sequential graph: start → http_request → script → end', async () => {
+  it('runs a simple linear graph: http_request → script', async () => {
     state.nodes = [
-      { workflowId: 'wf-1', nodeKey: 'start', nodeType: 'start', name: 'Start', config: {}, positionX: 0, positionY: 0 },
       {
         workflowId: 'wf-1',
         nodeKey: 'fetch',
@@ -249,24 +250,20 @@ describe('executeGraphWorkflow', () => {
         positionX: 200,
         positionY: 0,
       },
-      { workflowId: 'wf-1', nodeKey: 'end', nodeType: 'end', name: 'End', config: {}, positionX: 300, positionY: 0 },
     ];
     state.edges = [
-      { workflowId: 'wf-1', fromNodeKey: 'start', toNodeKey: 'fetch', branchKey: null, label: null },
       { workflowId: 'wf-1', fromNodeKey: 'fetch', toNodeKey: 'transform', branchKey: null, label: null },
-      { workflowId: 'wf-1', fromNodeKey: 'transform', toNodeKey: 'end', branchKey: null, label: null },
     ];
 
     const result = await executeGraphWorkflow('exec-1');
     expect(result.status).toBe('completed');
-    expect(result.nodesExecuted).toBe(4);
+    expect(result.nodesExecuted).toBe(2);
     expect(result.finalOutputs.transform).toEqual({ doubled: 200 });
     expect(state.execution.status).toBe('completed');
   });
 
   it('runs parallel fan-out + join correctly', async () => {
     state.nodes = [
-      { workflowId: 'wf-1', nodeKey: 'start', nodeType: 'start', name: 'Start', config: {}, positionX: 0, positionY: 0 },
       { workflowId: 'wf-1', nodeKey: 'split', nodeType: 'parallel', name: 'Fan out', config: {}, positionX: 100, positionY: 0 },
       {
         workflowId: 'wf-1',
@@ -287,15 +284,12 @@ describe('executeGraphWorkflow', () => {
         positionY: 50,
       },
       { workflowId: 'wf-1', nodeKey: 'join', nodeType: 'join', name: 'Merge', config: { strategy: 'all' }, positionX: 300, positionY: 0 },
-      { workflowId: 'wf-1', nodeKey: 'end', nodeType: 'end', name: 'End', config: {}, positionX: 400, positionY: 0 },
     ];
     state.edges = [
-      { workflowId: 'wf-1', fromNodeKey: 'start', toNodeKey: 'split', branchKey: null, label: null },
       { workflowId: 'wf-1', fromNodeKey: 'split', toNodeKey: 'a', branchKey: null, label: null },
       { workflowId: 'wf-1', fromNodeKey: 'split', toNodeKey: 'b', branchKey: null, label: null },
       { workflowId: 'wf-1', fromNodeKey: 'a', toNodeKey: 'join', branchKey: null, label: null },
       { workflowId: 'wf-1', fromNodeKey: 'b', toNodeKey: 'join', branchKey: null, label: null },
-      { workflowId: 'wf-1', fromNodeKey: 'join', toNodeKey: 'end', branchKey: null, label: null },
     ];
 
     const result = await executeGraphWorkflow('exec-1');
@@ -309,7 +303,6 @@ describe('executeGraphWorkflow', () => {
 
   it('routes by conditional branchKey', async () => {
     state.nodes = [
-      { workflowId: 'wf-1', nodeKey: 'start', nodeType: 'start', name: 'Start', config: {}, positionX: 0, positionY: 0 },
       {
         workflowId: 'wf-1',
         nodeKey: 'pick',
@@ -337,14 +330,10 @@ describe('executeGraphWorkflow', () => {
         positionX: 200,
         positionY: 50,
       },
-      { workflowId: 'wf-1', nodeKey: 'end', nodeType: 'end', name: 'End', config: {}, positionX: 300, positionY: 0 },
     ];
     state.edges = [
-      { workflowId: 'wf-1', fromNodeKey: 'start', toNodeKey: 'pick', branchKey: null, label: null },
       { workflowId: 'wf-1', fromNodeKey: 'pick', toNodeKey: 'a', branchKey: 'alpha', label: 'alpha branch' },
       { workflowId: 'wf-1', fromNodeKey: 'pick', toNodeKey: 'b', branchKey: 'beta', label: 'beta branch' },
-      { workflowId: 'wf-1', fromNodeKey: 'a', toNodeKey: 'end', branchKey: null, label: null },
-      { workflowId: 'wf-1', fromNodeKey: 'b', toNodeKey: 'end', branchKey: null, label: null },
     ];
 
     const result = await executeGraphWorkflow('exec-1');
@@ -353,14 +342,13 @@ describe('executeGraphWorkflow', () => {
     expect(result.finalOutputs.b).toBeUndefined(); // b branch should NOT have run
   });
 
-  it('uses trigger metadata as the start node output', async () => {
+  it('uses trigger metadata as the entry node input', async () => {
     state.execution.triggerMetadata = {
       type: 'manual',
       inputs: { ticket: 'OAO-123' },
       payload: { raw: true },
     };
     state.nodes = [
-      { workflowId: 'wf-1', nodeKey: 'start', nodeType: 'start', name: 'Start', config: {}, positionX: 0, positionY: 0 },
       {
         workflowId: 'wf-1',
         nodeKey: 'read_input',
@@ -370,11 +358,8 @@ describe('executeGraphWorkflow', () => {
         positionX: 100,
         positionY: 0,
       },
-      { workflowId: 'wf-1', nodeKey: 'end', nodeType: 'end', name: 'End', config: {}, positionX: 200, positionY: 0 },
     ];
     state.edges = [
-      { workflowId: 'wf-1', fromNodeKey: 'start', toNodeKey: 'read_input', branchKey: null, label: null },
-      { workflowId: 'wf-1', fromNodeKey: 'read_input', toNodeKey: 'end', branchKey: null, label: null },
     ];
 
     const result = await executeGraphWorkflow('exec-1');
@@ -384,25 +369,21 @@ describe('executeGraphWorkflow', () => {
 
   it('skips unchosen conditional branches so downstream joins can complete', async () => {
     state.nodes = [
-      { workflowId: 'wf-1', nodeKey: 'start', nodeType: 'start', name: 'Start', config: {}, positionX: 0, positionY: 0 },
       { workflowId: 'wf-1', nodeKey: 'pick', nodeType: 'conditional', name: 'Pick', config: { expression: '"go"' }, positionX: 100, positionY: 0 },
       { workflowId: 'wf-1', nodeKey: 'a', nodeType: 'script', name: 'A', config: { source: 'return "a-result"' }, positionX: 200, positionY: -50 },
       { workflowId: 'wf-1', nodeKey: 'b', nodeType: 'script', name: 'B', config: { source: 'return "b-result"' }, positionX: 200, positionY: 50 },
       { workflowId: 'wf-1', nodeKey: 'join', nodeType: 'join', name: 'Merge', config: { strategy: 'all' }, positionX: 300, positionY: 0 },
-      { workflowId: 'wf-1', nodeKey: 'end', nodeType: 'end', name: 'End', config: {}, positionX: 400, positionY: 0 },
     ];
     state.edges = [
-      { workflowId: 'wf-1', fromNodeKey: 'start', toNodeKey: 'pick', branchKey: null, label: null },
       { workflowId: 'wf-1', fromNodeKey: 'pick', toNodeKey: 'a', branchKey: 'go', label: null },
       { workflowId: 'wf-1', fromNodeKey: 'pick', toNodeKey: 'b', branchKey: 'stop', label: null },
       { workflowId: 'wf-1', fromNodeKey: 'a', toNodeKey: 'join', branchKey: null, label: null },
       { workflowId: 'wf-1', fromNodeKey: 'b', toNodeKey: 'join', branchKey: null, label: null },
-      { workflowId: 'wf-1', fromNodeKey: 'join', toNodeKey: 'end', branchKey: null, label: null },
     ];
 
     const result = await executeGraphWorkflow('exec-1');
     expect(result.status).toBe('completed');
-    expect(result.nodesExecuted).toBe(5);
+    expect(result.nodesExecuted).toBe(3);
     expect(result.finalOutputs.join).toEqual({ a: 'a-result' });
     expect(state.nodeExecutions.some((row) => row.nodeKey === 'b' && row.status === 'skipped')).toBe(true);
   });
@@ -447,7 +428,6 @@ describe('executeGraphWorkflow', () => {
     ];
     state.execution.triggerMetadata = { inputs: { ticket: 'OAO-456' } };
     state.nodes = [
-      { workflowId: 'wf-1', nodeKey: 'start', nodeType: 'start', name: 'Start', config: {}, positionX: 0, positionY: 0 },
       {
         workflowId: 'wf-1',
         nodeKey: 'agent_node',
@@ -457,18 +437,15 @@ describe('executeGraphWorkflow', () => {
         positionX: 100,
         positionY: 0,
       },
-      { workflowId: 'wf-1', nodeKey: 'end', nodeType: 'end', name: 'End', config: {}, positionX: 200, positionY: 0 },
     ];
     state.edges = [
-      { workflowId: 'wf-1', fromNodeKey: 'start', toNodeKey: 'agent_node', branchKey: null, label: null },
-      { workflowId: 'wf-1', fromNodeKey: 'agent_node', toNodeKey: 'end', branchKey: null, label: null },
     ];
 
     const result = await executeGraphWorkflow('exec-1');
     expect(result.status).toBe('completed');
     expect(executeCopilotSession).toHaveBeenCalledWith(expect.objectContaining({
       stepExecutionId: 'step-exec-1',
-      nodeExecutionId: 'ne-2',
+      nodeExecutionId: 'ne-1',
       nodeKey: 'agent_node',
       inputs: { ticket: 'OAO-456' },
       templateExtra: expect.objectContaining({
@@ -480,7 +457,6 @@ describe('executeGraphWorkflow', () => {
 
   it('fails the execution when a node throws', async () => {
     state.nodes = [
-      { workflowId: 'wf-1', nodeKey: 'start', nodeType: 'start', name: 'Start', config: {}, positionX: 0, positionY: 0 },
       {
         workflowId: 'wf-1',
         nodeKey: 'boom',
@@ -490,11 +466,8 @@ describe('executeGraphWorkflow', () => {
         positionX: 100,
         positionY: 0,
       },
-      { workflowId: 'wf-1', nodeKey: 'end', nodeType: 'end', name: 'End', config: {}, positionX: 200, positionY: 0 },
     ];
     state.edges = [
-      { workflowId: 'wf-1', fromNodeKey: 'start', toNodeKey: 'boom', branchKey: null, label: null },
-      { workflowId: 'wf-1', fromNodeKey: 'boom', toNodeKey: 'end', branchKey: null, label: null },
     ];
 
     const result = await executeGraphWorkflow('exec-1');
@@ -503,13 +476,52 @@ describe('executeGraphWorkflow', () => {
     expect(state.execution.status).toBe('failed');
   });
 
-  it('rejects a graph with no start node', async () => {
+  it('runs a graph by falling back to the first root block by position', async () => {
     state.nodes = [
-      { workflowId: 'wf-1', nodeKey: 'a', nodeType: 'script', name: 'A', config: { source: 'return 1' }, positionX: 0, positionY: 0 },
+      { workflowId: 'wf-1', nodeKey: 'a', nodeType: 'script', name: 'A', config: { source: 'return { ok: true }' }, positionX: 0, positionY: 0 },
     ];
     state.edges = [];
     const result = await executeGraphWorkflow('exec-1');
+    expect(result.status).toBe('completed');
+  });
+
+  it('uses a trigger entry-node override when one is provided', async () => {
+    state.execution.triggerMetadata = { _entryNodeKey: 'second', inputs: { selected: true } };
+    state.nodes = [
+      { workflowId: 'wf-1', nodeKey: 'first', nodeType: 'script', name: 'First', config: { source: 'return "first"' }, positionX: 0, positionY: 0 },
+      { workflowId: 'wf-1', nodeKey: 'second', nodeType: 'script', name: 'Second', config: { source: 'return { selected: input.inputs.selected }' }, positionX: 200, positionY: 0 },
+    ];
+    state.edges = [];
+
+    const result = await executeGraphWorkflow('exec-1');
+    expect(result.status).toBe('completed');
+    expect(result.nodesExecuted).toBe(1);
+    expect(result.finalOutputs.second).toEqual({ selected: true });
+    expect(result.finalOutputs.first).toBeUndefined();
+  });
+
+  it('uses nodes and edges from the execution workflow snapshot', async () => {
+    state.nodes = [];
+    state.execution.workflowSnapshot = {
+      nodes: [
+        { workflowId: 'wf-1', nodeKey: 'snap', nodeType: 'script', name: 'Snapshot node', config: { source: 'return "from-snapshot"' }, positionX: 0, positionY: 0 },
+      ],
+      edges: [],
+      steps: [],
+    };
+    vi.mocked(mockDb.query.workflowNodes.findMany).mockClear();
+
+    const result = await executeGraphWorkflow('exec-1');
+    expect(result.status).toBe('completed');
+    expect(result.finalOutputs.snap).toBe('from-snapshot');
+    expect(mockDb.query.workflowNodes.findMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects a graph with no nodes at all', async () => {
+    state.nodes = [];
+    state.edges = [];
+    const result = await executeGraphWorkflow('exec-1');
     expect(result.status).toBe('failed');
-    expect(result.error).toMatch(/start node/);
+    expect(result.error).toMatch(/no nodes/);
   });
 });

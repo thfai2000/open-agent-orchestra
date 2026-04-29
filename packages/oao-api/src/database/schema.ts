@@ -52,10 +52,7 @@ export const reasoningEffortEnum = pgEnum('reasoning_effort', ['high', 'medium',
 export const workerRuntimeEnum = pgEnum('worker_runtime', ['static', 'ephemeral']);
 export const variableTypeEnum = pgEnum('variable_type', ['property', 'credential', 'short_memory']);
 export const variableScopeEnum = pgEnum('variable_scope', ['agent', 'user', 'workspace']);
-export const workflowExecutionModeEnum = pgEnum('workflow_execution_mode', ['sequential', 'graph']);
 export const workflowNodeTypeEnum = pgEnum('workflow_node_type', [
-  'start',
-  'end',
   'agent_step',
   'http_request',
   'script',
@@ -220,7 +217,6 @@ export const workflows = pgTable('workflows', {
   defaultReasoningEffort: reasoningEffortEnum('default_reasoning_effort'), // workflow-level default
   workerRuntime: workerRuntimeEnum('worker_runtime').notNull().default('static'), // workflow-level worker assignment
   stepAllocationTimeoutSeconds: integer('step_allocation_timeout_seconds').notNull().default(300), // timeout for assigning a step to a runtime
-  executionMode: workflowExecutionModeEnum('execution_mode').notNull().default('sequential'), // 'sequential' = legacy ordered steps; 'graph' = DAG of nodes
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -280,6 +276,14 @@ export const triggers = pgTable('triggers', {
   configuration: jsonb('configuration').notNull().default({}),
   runtimeState: jsonb('runtime_state').notNull().default({}),
   isActive: boolean('is_active').notNull().default(true),
+  /**
+    * Optional entry node for this trigger. If set, graph execution starts here.
+    * Otherwise execution uses the first root node by canvas position and key.
+   */
+    entryNodeKey: varchar('entry_node_key', { length: 100 }),
+  /** Visual editor coordinates for the trigger block on the canvas. */
+  positionX: integer('position_x').notNull().default(40),
+  positionY: integer('position_y').notNull().default(40),
   lastFiredAt: timestamp('last_fired_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -966,11 +970,10 @@ export const passwordResetTokens = pgTable('password_reset_tokens', {
 
 // ─── Workflow Graph (Visual Workflow v3) ─────────────────────────────
 //
-// Graph workflows are DAGs of typed nodes connected by edges. They support
-// parallel branches, conditional routing, mixed agent + procedural steps,
-// and per-node configuration. A workflow opts into graph mode by setting
-// `workflows.executionMode = 'graph'`. Sequential workflows continue to
-// use `workflow_steps` and the legacy executor.
+// Workflows are DAGs of typed nodes connected by edges. They support parallel
+// branches, conditional routing, mixed agent + procedural steps, and per-node
+// configuration. `workflow_steps` is maintained only as the agent-step
+// projection/history table for graph workflows.
 
 export const workflowNodes = pgTable(
   'workflow_nodes',

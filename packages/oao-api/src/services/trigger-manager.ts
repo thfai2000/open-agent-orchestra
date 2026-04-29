@@ -2,7 +2,7 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import crypto from 'node:crypto';
 import { createLogger } from '@oao/shared';
 import { db } from '../database/index.js';
-import { triggers, webhookRegistrations, workflowExecutions, workflowSteps } from '../database/schema.js';
+import { triggers, webhookRegistrations, workflowExecutions, workflowNodes, workflowSteps } from '../database/schema.js';
 import {
   type CreatableTriggerType,
   getWebhookPathFromConfiguration,
@@ -25,6 +25,19 @@ function cloneJson<T>(value: T) {
 
 function configsEqual(left: unknown, right: unknown) {
   return JSON.stringify(left ?? {}) === JSON.stringify(right ?? {});
+}
+
+async function assertEntryNodeExists(workflowId: string, entryNodeKey?: string | null) {
+  if (!entryNodeKey) return;
+  const node = await db.query.workflowNodes.findFirst({
+    where: and(
+      eq(workflowNodes.workflowId, workflowId),
+      eq(workflowNodes.nodeKey, entryNodeKey),
+    ),
+  });
+  if (!node) {
+    throw new TriggerServiceError(`Entry node "${entryNodeKey}" does not exist in this workflow graph`, 400);
+  }
 }
 
 export function normalizeTriggerConfiguration(triggerType: CreatableTriggerType, configuration: unknown) {
@@ -123,6 +136,9 @@ export async function createWorkflowTrigger(params: {
   triggerType: CreatableTriggerType;
   configuration: unknown;
   isActive?: boolean;
+  entryNodeKey?: string | null;
+  positionX?: number;
+  positionY?: number;
 }) {
   const normalizedConfiguration = normalizeTriggerConfiguration(params.triggerType, params.configuration);
   const isActive = params.isActive ?? true;
@@ -130,6 +146,7 @@ export async function createWorkflowTrigger(params: {
   if (webhookPath) {
     await ensureWebhookPathIsUnique(webhookPath);
   }
+  await assertEntryNodeExists(params.workflow.id, params.entryNodeKey);
 
   const [createdTrigger] = await db.insert(triggers).values({
     workflowId: params.workflow.id,
@@ -137,6 +154,9 @@ export async function createWorkflowTrigger(params: {
     configuration: normalizedConfiguration,
     runtimeState: {},
     isActive,
+    entryNodeKey: params.entryNodeKey ?? null,
+    positionX: params.positionX ?? 40,
+    positionY: params.positionY ?? 40,
     updatedAt: new Date(),
   }).returning();
 
@@ -185,6 +205,9 @@ export async function updateWorkflowTrigger(params: {
   triggerType?: CreatableTriggerType;
   configuration?: unknown;
   isActive?: boolean;
+  entryNodeKey?: string | null;
+  positionX?: number;
+  positionY?: number;
 }) {
   const nextTriggerType = params.triggerType ?? params.trigger.triggerType as CreatableTriggerType;
   const nextConfiguration = normalizeTriggerConfiguration(
@@ -196,6 +219,10 @@ export async function updateWorkflowTrigger(params: {
   if (webhookPath) {
     await ensureWebhookPathIsUnique(webhookPath, params.trigger.id);
   }
+  await assertEntryNodeExists(
+    params.workflow.id,
+    params.entryNodeKey !== undefined ? params.entryNodeKey : params.trigger.entryNodeKey,
+  );
 
   const wasJiraNotification = params.trigger.triggerType === 'jira_changes_notification';
   const willBeJiraNotification = nextTriggerType === 'jira_changes_notification';
@@ -242,6 +269,9 @@ export async function updateWorkflowTrigger(params: {
       configuration: nextConfiguration,
       runtimeState: nextRuntimeState,
       isActive: nextIsActive,
+      ...(params.entryNodeKey !== undefined ? { entryNodeKey: params.entryNodeKey } : {}),
+      ...(params.positionX !== undefined ? { positionX: params.positionX } : {}),
+      ...(params.positionY !== undefined ? { positionY: params.positionY } : {}),
       updatedAt: new Date(),
     })
     .where(eq(triggers.id, params.trigger.id))

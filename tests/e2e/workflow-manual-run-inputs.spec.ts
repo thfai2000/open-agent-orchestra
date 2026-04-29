@@ -1,6 +1,6 @@
 import { expect, test } from './helpers/fixtures';
 import { resetSuperAdminPassword, uniqueName } from './helpers/cluster';
-import { fillField, loginViaUi, openTab } from './helpers/ui';
+import { fillField, loginViaUi } from './helpers/ui';
 
 const ADMIN_EMAIL = 'admin@oao.local';
 const ADMIN_PASSWORD = 'AdminPass123!';
@@ -87,22 +87,26 @@ test('manual run rejects missing required webhook inputs and accepts a valid pay
   });
   expect(createWorkflowResult.status).toBe(201);
   const createdWorkflowId = createWorkflowResult.body?.workflow?.id as string | undefined;
+  const createdTriggerId = createWorkflowResult.body?.triggers?.[0]?.id as string | undefined;
   expect(createdWorkflowId).toBeTruthy();
+  expect(createdTriggerId).toBeTruthy();
 
   await page.locator('aside a[href="/default/workflows"]').first().click();
   await expect(page).toHaveURL(/\/default\/workflows$/);
-  const workflowDetailLink = page.getByRole('link', { name: workflowName, exact: true });
+  const workflowDetailLink = page.locator(`a[href="/default/workflows/${createdWorkflowId}"]`).first();
   await expect(workflowDetailLink).toBeVisible();
   await workflowDetailLink.click();
   await expect(page).toHaveURL(new RegExp(`/default/workflows/${createdWorkflowId}$`));
 
-  await expect(page.getByRole('button', { name: /Manual Run/i })).toBeVisible();
-  const visibleTabPanel = await openTab(page, /Triggers \(1\)/i);
-  await expect(visibleTabPanel).toContainText(webhookPath, { timeout: 10_000 });
-  await expect(visibleTabPanel).toContainText('2 parameters', { timeout: 10_000 });
+  await page.getByRole('button', { name: /Run — Webhook/i }).click();
+  const runDialog = page.getByRole('dialog', { name: /Run via Webhook/i });
+  await expect(runDialog).toBeVisible();
+  await expect(runDialog.getByText(/ticketId/)).toBeVisible();
+  await expect(runDialog.getByText(/comment/)).toBeVisible();
+  await runDialog.getByRole('button', { name: /^Cancel$/ }).click();
 
-  const invalidManualRun = await page.evaluate(async ({ workflowId, token }) => {
-    const response = await fetch(`/api/workflows/${workflowId}/run`, {
+  const invalidManualRun = await page.evaluate(async ({ triggerId, token }) => {
+    const response = await fetch(`/api/triggers/${triggerId}/run`, {
       method: 'POST',
       credentials: 'include',
       headers: {
@@ -116,12 +120,12 @@ test('manual run rejects missing required webhook inputs and accepts a valid pay
       status: response.status,
       body: await response.json(),
     };
-  }, { workflowId: createdWorkflowId, token: authToken });
+  }, { triggerId: createdTriggerId, token: authToken });
   expect(invalidManualRun.status).toBe(400);
   expect(invalidManualRun.body?.error).toContain('Missing required inputs: ticketId');
 
-  const validManualRun = await page.evaluate(async ({ workflowId, token }) => {
-    const response = await fetch(`/api/workflows/${workflowId}/run`, {
+  const validManualRun = await page.evaluate(async ({ triggerId, token }) => {
+    const response = await fetch(`/api/triggers/${triggerId}/run`, {
       method: 'POST',
       credentials: 'include',
       headers: {
@@ -140,9 +144,10 @@ test('manual run rejects missing required webhook inputs and accepts a valid pay
       status: response.status,
       body: await response.json(),
     };
-  }, { workflowId: createdWorkflowId, token: authToken });
+  }, { triggerId: createdTriggerId, token: authToken });
   expect(validManualRun.status).toBe(202);
-  expect(validManualRun.body?.status).toBe('accepted');
+  expect(validManualRun.body?.status).toBe('pending');
+  expect(validManualRun.body?.executionId).toBeTruthy();
 
   const workflowDeleteStatus = await page.evaluate(async ({ workflowId, token }) => {
     const response = await fetch(`/api/workflows/${workflowId}`, {
